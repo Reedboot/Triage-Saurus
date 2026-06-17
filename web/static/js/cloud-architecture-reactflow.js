@@ -479,26 +479,7 @@ function renderModalContent(data) {
     }
   }
   
-  // Logging Section
-  if (data.logging) {
-    const log = data.logging;
-    const loggingFields = [];
-    
-    if (log.diagnostic_logging_enabled !== undefined) {
-      const logBadge = log.diagnostic_logging_enabled
-        ? '<span class="cloud-arch-modal-badge cloud-arch-modal-badge--success">📊 Enabled</span>'
-        : '<span class="cloud-arch-modal-badge cloud-arch-modal-badge--danger">⚠️ Disabled</span>';
-      loggingFields.push({ label: "Diagnostic Logging", value: logBadge, isHtml: true });
-    }
-    
-    if (log.log_categories && log.log_categories.length > 0) {
-      loggingFields.push({ label: "Log Categories", value: log.log_categories.join(", ") });
-    }
-    
-    if (loggingFields.length > 0) {
-      sections.push({ title: "Logging", icon: "📊", fields: loggingFields });
-    }
-  }
+  // Logging Section - Removed per user request
   
   // Key Vault Section
   if (data.keyvault && data.keyvault.references && data.keyvault.references.length > 0) {
@@ -627,126 +608,62 @@ function App() {
     openModal(edge.id, edgeData);
   }, [nodes]);
   
-  // Toggle node expansion - fetch children and add them to the graph
-  const toggleNodeExpansion = useCallback(async (nodeId) => {
+  // Toggle node expansion - show/hide existing child nodes
+  const toggleNodeExpansion = useCallback((nodeId) => {
     const isCurrentlyExpanded = expandedNodes.has(nodeId);
     
     if (isCurrentlyExpanded) {
-      // Collapse: remove child nodes and edges
-      setNodes(prevNodes => prevNodes.filter(n => !n.data?.parentNodeId || n.data.parentNodeId !== nodeId));
-      setEdges(prevEdges => prevEdges.filter(e => !e.data?.parentNodeId || e.data.parentNodeId !== nodeId));
+      // Collapse: hide child nodes and edges
+      setNodes(prevNodes => prevNodes.map(n => {
+        if (n.data?.parentNodeId === nodeId || (n.parent === nodeId && n.data?.isChildNode)) {
+          return { ...n, hidden: true };
+        }
+        if (n.id === nodeId) {
+          return { ...n, data: { ...n.data, expanded: false } };
+        }
+        return n;
+      }));
+      
+      setEdges(prevEdges => prevEdges.map(e => {
+        // Hide edges connected to child nodes
+        const sourceNode = nodes.find(n => n.id === e.source);
+        const targetNode = nodes.find(n => n.id === e.target);
+        if ((sourceNode?.data?.parentNodeId === nodeId) || (targetNode?.data?.parentNodeId === nodeId) ||
+            (e.source === nodeId && targetNode?.data?.isChildNode) || (e.target === nodeId && sourceNode?.data?.isChildNode)) {
+          return { ...e, hidden: true };
+        }
+        return e;
+      }));
+      
       setExpandedNodes(prev => {
         const next = new Set(prev);
         next.delete(nodeId);
         return next;
       });
-      
-      // Update parent node data to show collapsed state
-      setNodes(prevNodes => prevNodes.map(n => 
-        n.id === nodeId ? { ...n, data: { ...n.data, expanded: false } } : n
-      ));
     } else {
-      // Expand: fetch children from API
-      try {
-        // Find the node to determine if it's a group node
-        const parentNode = nodes.find(n => n.id === nodeId);
-        if (!parentNode) return;
-        
-        const isGroupNode = parentNode.data.isGroupNode || false;
-        const apiUrl = isGroupNode 
-          ? `/api/cloud/group-members?group_id=${encodeURIComponent(nodeId)}`
-          : `/api/cloud/resource-children?resource_id=${encodeURIComponent(nodeId)}`;
-        
-        const response = await fetch(apiUrl);
-        if (!response.ok) {
-          console.error("Failed to fetch children:", response.statusText);
-          return;
+      // Expand: show child nodes and edges
+      setNodes(prevNodes => prevNodes.map(n => {
+        if (n.data?.parentNodeId === nodeId || (n.parent === nodeId && n.data?.isChildNode)) {
+          return { ...n, hidden: false };
         }
-        
-        const data = await response.json();
-        const children = isGroupNode ? data.members : data.children;
-        
-        if (children && children.length > 0) {
-          const parentX = parentNode.position.x;
-          const parentY = parentNode.position.y;
-          
-          // Limit number of displayed children for performance
-          const displayChildren = children.slice(0, 50);
-          const hasMore = children.length > 50;
-          
-          // Create child nodes
-          const childNodes = displayChildren.map((child, idx) => ({
-            id: child.id,
-            type: "cloudNode",
-            position: {
-              x: parentX + 380,  // Position to the right of parent
-              y: parentY + (idx * 90) - ((displayChildren.length - 1) * 45)  // Center vertically around parent
-            },
-            data: {
-              label: child.name,
-              providerKey: "azure",
-              providerLabel: "Azure",
-              typeLabel: child.type,
-              repoName: parentNode.data.repoName,
-              sourceFile: child.details ? Object.entries(child.details).map(([k, v]) => `${k}: ${v}`).join(", ") : "",
-              public: false,
-              tier: "child",
-              iconPath: null,
-              synthetic: false,
-              resourceType: child.type,
-              hasManagedIdentity: false,
-              loggingEnabled: false,
-              isChildNode: true,
-              parentNodeId: nodeId,
-              childIcon: child.icon || "📄",
-            },
-            style: { width: 300, minHeight: 90 },
-          }));
-          
-          // Create edges from parent to children
-          const childEdges = data.children.map(child => ({
-            id: `edge-child-${nodeId}-${child.id}`,
-            source: nodeId,
-            target: child.id,
-            type: "smoothstep",
-            label: "contains",
-            style: {
-              stroke: "#6b7280",
-              strokeWidth: 2,
-              strokeDasharray: "5,5",
-            },
-            labelStyle: {
-              fill: "#9ca3af",
-              fontSize: 10,
-              fontWeight: 500,
-            },
-            labelBgStyle: {
-              fill: "rgba(15, 23, 42, 0.9)",
-              padding: "4px 6px",
-              borderRadius: "3px",
-            },
-            markerEnd: {
-              type: MarkerType.ArrowClosed,
-              color: "#6b7280",
-            },
-            data: {
-              parentNodeId: nodeId,
-              connection_type: "contains",
-            },
-          }));
-          
-          setNodes(prevNodes => [...prevNodes, ...childNodes]);
-          setEdges(prevEdges => [...prevEdges, ...childEdges]);
-          setExpandedNodes(prev => new Set(prev).add(nodeId));
-          
-          // Update parent node data to show expanded state
-          setNodes(prevNodes => prevNodes.map(n => 
-            n.id === nodeId ? { ...n, data: { ...n.data, expanded: true } } : n
-          ));
+        if (n.id === nodeId) {
+          return { ...n, data: { ...n.data, expanded: true } };
         }
-      } catch (error) {
-        console.error("Error fetching children:", error);
-      }
+        return n;
+      }));
+      
+      setEdges(prevEdges => prevEdges.map(e => {
+        // Show edges connected to child nodes
+        const sourceNode = nodes.find(n => n.id === e.source);
+        const targetNode = nodes.find(n => n.id === e.target);
+        if ((sourceNode?.data?.parentNodeId === nodeId) || (targetNode?.data?.parentNodeId === nodeId) ||
+            (e.source === nodeId && targetNode?.data?.isChildNode) || (e.target === nodeId && sourceNode?.data?.isChildNode)) {
+          return { ...e, hidden: false };
+        }
+        return e;
+      }));
+      
+      setExpandedNodes(prev => new Set(prev).add(nodeId));
     }
   }, [expandedNodes, nodes]);
   
@@ -800,6 +717,31 @@ function App() {
     const connectionLegendEl = document.getElementById("cloud-arch-connection-legend");
     if (connectionLegendEl && connectionCount > 0) {
       connectionLegendEl.style.display = "block";
+      connectionLegendEl.innerHTML = `
+        <div style="font-weight: 700; margin-bottom: 8px; color: var(--text);">Connection Legend</div>
+        <div style="display: flex; flex-direction: column; gap: 6px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <svg width="32" height="3" style="flex-shrink: 0;"><line x1="0" y1="1.5" x2="32" y2="1.5" stroke="#f97316" stroke-width="3" /></svg>
+            <span style="color: var(--text-muted);">WAF-protected ingress (Prevention mode)</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <svg width="32" height="3" style="flex-shrink: 0;"><line x1="0" y1="1.5" x2="32" y2="1.5" stroke="#f59e0b" stroke-width="2" /></svg>
+            <span style="color: var(--text-muted);">WAF Detection mode or IP-restricted access</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <svg width="32" height="3" style="flex-shrink: 0;"><line x1="0" y1="1.5" x2="32" y2="1.5" stroke="#ef4444" stroke-width="3" /></svg>
+            <span style="color: var(--text-muted);">Directly public — no WAF or network restriction</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <svg width="32" height="3" style="flex-shrink: 0;"><line x1="0" y1="1.5" x2="32" y2="1.5" stroke="#dc2626" stroke-width="2" /></svg>
+            <span style="color: var(--text-muted);">Firewall-protected ingress</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <svg width="32" height="3" style="flex-shrink: 0;"><line x1="0" y1="1.5" x2="32" y2="1.5" stroke="#94a3b8" stroke-width="1" /></svg>
+            <span style="color: var(--text-muted);">Internal data flows (backend → data stores)</span>
+          </div>
+        </div>
+      `;
     }
   }, []);
 
@@ -835,6 +777,7 @@ function App() {
         position: node.position || { x: (index % 4) * 420, y: Math.floor(index / 4) * 180 },
         data: {
           ...node.data,
+          nodeId: node.id,  // Add node ID to data for expand button
           index,
           color: themeFor(node.data?.providerKey).border,
         },
@@ -849,44 +792,66 @@ function App() {
         const sourceNode = nodeMap.get(String(edge.source));
         const targetNode = nodeMap.get(String(edge.target));
         
-        // Security-based color coding for edges
+        // Use backend-provided style if available, otherwise fallback to computed style
         let edgeColor;
         let strokeWidth = 2;
         let strokeOpacity = 1.0;
         
-        const connType = edge.data?.connection_type || "";
-        const isFromInternet = String(edge.source) === "Internet";
-        const wafProtected = edge.data?.waf_protected === true;
+        // Check if backend provided style
+        if (edge.style) {
+          edgeColor = edge.style.stroke || edge.style.strokeColor || "#94a3b8";
+          strokeWidth = edge.style.strokeWidth || 2;
+          strokeOpacity = edge.style.strokeOpacity || 1.0;
+        } else {
+          // Fallback: Security-based color coding for edges
+          const connType = edge.data?.connection_type || "";
+          const isFromInternet = String(edge.source) === "Internet";
+          const wafProtected = edge.data?.waf_protected === true;
+          
+          if (isFromInternet) {
+            // Public Internet → Resource connections
+            if (wafProtected) {
+              edgeColor = "#f59e0b"; // Orange - WAF protected entry
+              strokeWidth = 3;
+            } else {
+              edgeColor = "#ef4444"; // Red - Direct public exposure (HIGH RISK)
+              strokeWidth = 3;
+              strokeOpacity = 0.9;
+            }
+          } else if (connType === "public") {
+            edgeColor = "#f97316"; // Orange - Cross-resource public connection
+            strokeWidth = 2.5;
+          } else if (connType === "internal" || connType === "private") {
+            edgeColor = "#10b981"; // Green - Secure internal connection
+            strokeWidth = 2;
+            strokeOpacity = 0.7;
+          } else if (connType === "waf_protection") {
+            edgeColor = "#f97316"; // Orange for WAF protection
+            strokeWidth = 3;
+          } else if (connType === "firewall_ingress" || connType === "firewall") {
+            edgeColor = "#dc2626"; // Red for firewall
+            strokeWidth = 2;
+          } else if (connType === "routing" || connType === "backend") {
+            edgeColor = "#f59e0b"; // Amber for routing/backend
+            strokeWidth = 2;
+          } else if (connType === "data_access" || connType === "telemetry") {
+            edgeColor = "#94a3b8"; // Grey for data access
+            strokeWidth = 1;
+          } else {
+            // Default: use provider theme color for cross-tier connections
+            edgeColor = themeFor(sourceNode?.data?.providerKey || targetNode?.data?.providerKey).border;
+            strokeWidth = 2;
+            strokeOpacity = 0.8;
+          }
+        }
         
         let labelColor = "#e2e8f0"; // Default light text for dark backgrounds
-        
-        if (isFromInternet) {
-          // Public Internet → Resource connections
-          if (wafProtected) {
-            edgeColor = "#f59e0b"; // Orange - WAF protected entry
-            labelColor = "#fef3c7"; // Light yellow for high contrast on orange
-            strokeWidth = 3;
-          } else {
-            edgeColor = "#ef4444"; // Red - Direct public exposure (HIGH RISK)
-            labelColor = "#ffffff"; // White for maximum contrast on red
-            strokeWidth = 3;
-            strokeOpacity = 0.9;
-          }
-        } else if (connType === "public") {
-          edgeColor = "#f97316"; // Orange - Cross-resource public connection
-          labelColor = "#fef3c7"; // Light yellow for orange edges
-          strokeWidth = 2.5;
-        } else if (connType === "internal" || connType === "private") {
-          edgeColor = "#10b981"; // Green - Secure internal connection
+        if (edgeColor === "#f97316" || edgeColor === "#f59e0b") {
+          labelColor = "#fef3c7"; // Light yellow for orange/amber edges
+        } else if (edgeColor === "#ef4444" || edgeColor === "#dc2626") {
+          labelColor = "#ffffff"; // White for red edges
+        } else if (edgeColor === "#10b981") {
           labelColor = "#d1fae5"; // Light green for green edges
-          strokeWidth = 2;
-          strokeOpacity = 0.7;
-        } else {
-          // Default: use provider theme color for cross-tier connections
-          edgeColor = themeFor(sourceNode?.data?.providerKey || targetNode?.data?.providerKey).border;
-          labelColor = "#e2e8f0"; // Light gray for default edges
-          strokeWidth = 2;
-          strokeOpacity = 0.8;
         }
         
         return {
