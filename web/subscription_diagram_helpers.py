@@ -567,150 +567,7 @@ def build_subscription_overlay_views(
         "public_assets": len(public_assets),
     }
 
-    def make_scope_nodes(selected_assets: list[dict], *, badges: bool, include_fqdn: bool) -> tuple[list[dict], dict]:
-        nodes: list[dict] = [{"id": "Internet", "label": "Internet", "class_name": "internet"}]
-        node_map: dict = {}
-        seen = {"Internet"}
-        for asset in selected_assets:
-            node_id = subscription_node_id(asset, sanitise_node_id)
-            if node_id in seen:
-                continue
-            seen.add(node_id)
-            nodes.append(
-                {
-                    "id": node_id,
-                    "label": subscription_asset_label(asset, include_badges=badges, include_fqdn=include_fqdn),
-                    "arm_type": asset.get("arm_type"),
-                    "class_name": subscription_node_class(asset),
-                }
-            )
-            subscription_register_node(node_map, asset, sanitise_node_id)
-        return nodes, node_map
-
-    exposure_entries = entries[:4]
-    exposure_apis = apis[:2]
-    exposure_public_backends = [a for a in backends if a.get("public")][:4]
-    exposure_internal_backends = [a for a in backends if not a.get("public")][:3] if (entries or apis) else []
-    exposure_backends = exposure_public_backends + exposure_internal_backends
-    exposure_public_data = [a for a in data if a.get("public")][:3]
-    exposure_internal_data = [a for a in data if not a.get("public")][:3] if (entries or apis or exposure_public_backends) else []
-    exposure_data = exposure_public_data + exposure_internal_data
-
-    exposure_assets: list[dict] = []
-    exposure_assets.extend(exposure_entries)
-    exposure_assets.extend(exposure_apis)
-    exposure_assets.extend(exposure_backends)
-    exposure_assets.extend(exposure_data)
-    exp_nodes, exp_node_map = make_scope_nodes(exposure_assets, badges=False, include_fqdn=True)
-    exp_edges: list[dict] = []
-    seen_edges: set[tuple[str, str, str]] = set()
-
-    def add_exp_edge(src: str, dst: str, label: str, color: str, width: str = "2px") -> None:
-        key = (src, dst, label)
-        if key in seen_edges:
-            return
-        seen_edges.add(key)
-        exp_edges.append({"src": src, "dst": dst, "label": label, "color": color, "width": width})
-
-    def _entry_edge_style(entry: dict) -> tuple[str, str]:
-        protected = bool(entry.get("has_waf") or entry.get("waf_mode"))
-        restricted = bool(entry.get("is_restricted"))
-        waf_mode = (entry.get("waf_mode") or "").strip().lower()
-        if protected and restricted:
-            return "WAF + IP allowlist", "#f97316"
-        if protected:
-            if "prevention" in waf_mode:
-                return "WAF (Prev)", "#f97316"
-            if "detection" in waf_mode:
-                return "WAF (Det)", "#f59e0b"
-            return "WAF", "#f97316"
-        if restricted:
-            return subscription_allowlist_label(entry), "#f59e0b"
-        return subscription_primary_fqdn(entry) or "Public edge", "#ef4444"
-
-    for entry in exposure_entries:
-        label, arrow_color = _entry_edge_style(entry)
-        add_exp_edge("Internet", subscription_node_id(entry, sanitise_node_id), label, arrow_color, "3px")
-    for api in [a for a in exposure_apis if a.get("public")]:
-        add_exp_edge("Internet", subscription_node_id(api, sanitise_node_id), subscription_primary_fqdn(api) or "Public API", "#ef4444", "3px")
-    for api in [a for a in exposure_apis if a.get("is_restricted") and not a.get("public")]:
-        add_exp_edge("Internet", subscription_node_id(api, sanitise_node_id), subscription_allowlist_label(api), "#f59e0b", "2px")
-    for backend in [a for a in exposure_backends if a.get("public")]:
-        add_exp_edge("Internet", subscription_node_id(backend, sanitise_node_id), subscription_primary_fqdn(backend) or "Direct workload", "#ef4444", "3px")
-    for backend in [a for a in exposure_backends if a.get("is_restricted") and not a.get("public") and subscription_is_allowlist_target(a)]:
-        add_exp_edge("Internet", subscription_node_id(backend, sanitise_node_id), subscription_allowlist_label(backend), "#f59e0b", "2px")
-    for store in [a for a in exposure_data if a.get("public")]:
-        add_exp_edge("Internet", subscription_node_id(store, sanitise_node_id), subscription_primary_fqdn(store) or "Direct data plane", "#ef4444", "3px")
-    for store in [a for a in exposure_data if a.get("is_restricted") and not a.get("public") and subscription_is_allowlist_target(a)]:
-        add_exp_edge("Internet", subscription_node_id(store, sanitise_node_id), subscription_allowlist_label(store), "#f59e0b", "2px")
-    if exposure_entries and exposure_apis:
-        for entry in exposure_entries[:2]:
-            for api in exposure_apis[:2]:
-                add_exp_edge(subscription_node_id(entry, sanitise_node_id), subscription_node_id(api, sanitise_node_id), "routing", "#f97316")
-    elif exposure_entries and exposure_backends:
-        for entry in exposure_entries[:2]:
-            for backend in exposure_backends[:3]:
-                add_exp_edge(subscription_node_id(entry, sanitise_node_id), subscription_node_id(backend, sanitise_node_id), "backend reach", "#f97316")
-    if exposure_apis and exposure_backends:
-        for api in exposure_apis[:2]:
-            for backend in exposure_backends[:3]:
-                add_exp_edge(subscription_node_id(api, sanitise_node_id), subscription_node_id(backend, sanitise_node_id), "backend reach", "#f59e0b")
-    if exposure_backends and exposure_data:
-        # In exposure mode, connect every visible backend to every visible data hop.
-        # This keeps internal hops attached even when plan hierarchies collapse the
-        # hosted sites into their parent plan.
-        # Label each edge with the backend's short name so the reader can tell
-        # which service accesses each data store, rather than a generic "reachable next hop".
-        for backend in exposure_backends:
-            accessor_label = backend.get("short_name") or backend.get("name") or "backend"
-            for store in exposure_data:
-                add_exp_edge(subscription_node_id(backend, sanitise_node_id), subscription_node_id(store, sanitise_node_id), accessor_label, "#94a3b8")
-
-    if plan_links:
-        plan_assets = {
-            ((asset.get("name") or "").lower(), (asset.get("rg") or "").lower()): asset
-            for asset in assets
-            if "serverfarms" in (asset.get("arm_type") or "").lower()
-        }
-        site_assets = {
-            ((asset.get("name") or "").lower(), (asset.get("rg") or "").lower()): asset
-            for asset in assets
-            if "sites" in (asset.get("arm_type") or "").lower()
-        }
-        emitted_plan_edges: set[tuple[str, str]] = set()
-        for site_rg, site_name, plan_rg, plan_name in plan_links:
-            site_asset = site_assets.get(((site_name or "").lower(), (site_rg or "").lower()))
-            plan_asset = plan_assets.get(((plan_name or "").lower(), (plan_rg or "").lower()))
-            if not site_asset or not plan_asset:
-                continue
-            edge = (
-                subscription_node_id(site_asset, sanitise_node_id),
-                subscription_node_id(plan_asset, sanitise_node_id),
-            )
-            if edge in emitted_plan_edges:
-                continue
-            emitted_plan_edges.add(edge)
-            add_exp_edge(edge[0], edge[1], "hosted on", "#ffffff")
-
-    exposure_view = render_subscription_view(
-        nodes=exp_nodes,
-        edges=exp_edges,
-        get_icon_path=get_icon_path,
-        node_map=exp_node_map,
-        title="Exposure view",
-        description="Shows internet-reachable entry points, directly public assets, and the next internal hops they can reach.",
-        legend=[
-            "Orange edges: WAF-protected entry point (Prevention mode)",
-            "Amber edges: WAF in Detection mode or IP-allowlisted access",
-            "Red edges: directly public — no WAF or network restriction",
-            "Grey edges: likely next hop once the public edge is crossed",
-        ],
-        attack_paths=attack_paths,
-        asset_summary=asset_summary,
-    )
-
     return {
-        "exposure": exposure_view,
         "attack_paths_summary": attack_paths,
         "asset_summary": asset_summary,
     }
@@ -745,7 +602,7 @@ def build_subscription_diagrams_by_rg(
             "public_assets": sum(1 for asset in rg_assets if asset.get("public")),
         }
 
-    def build_rg_view(rg: str, rg_assets: list[dict], mode: str) -> tuple[dict, int]:
+    def build_rg_view(rg: str, rg_assets: list[dict]) -> tuple[dict, int]:
         rg_assets = subscription_apply_plan_hierarchy(rg_assets, plan_links)
         entries = [a for a in rg_assets if a.get("tier") == "entry"]
         apis = [a for a in rg_assets if a.get("tier") == "api"]
@@ -777,7 +634,7 @@ def build_subscription_diagrams_by_rg(
         # For cluster-only RGs add a synthetic context node so the user knows
         # the cluster is reachable via the subscription-level APIM, not truly orphaned.
         _sub_ctx_node_id: str | None = None
-        if _is_cluster_only_rg and mode == "connectivity":
+        if _is_cluster_only_rg:
             _sub_ctx_node_id = "sub_level_apim_context"
             nodes.append({
                 "id": _sub_ctx_node_id,
@@ -812,18 +669,7 @@ def build_subscription_diagrams_by_rg(
         exposure_data = exposure_public_data + exposure_internal_data
 
         for asset in rg_assets:
-            include = mode == "connectivity"
-            if mode == "exposure":
-                include = (
-                    asset.get("public")
-                    or asset.get("is_restricted")
-                    or asset in exposure_entries
-                    or asset in exposure_apis
-                    or asset in exposure_backends
-                    or asset in exposure_data
-                )
-            if include:
-                add_asset_node(asset, badges=False, include_fqdn=mode == "exposure")
+            add_asset_node(asset, badges=False, include_fqdn=False)
 
         edges: list[dict] = []
         edge_keys: set[tuple[str, str, str]] = set()
@@ -907,18 +753,17 @@ def build_subscription_diagrams_by_rg(
                         subscription_node_id(api, sanitise_node_id),
                         subscription_node_id(backend, sanitise_node_id),
                         "backend reach",
-                        "#f59e0b" if mode == "exposure" else "#ffffff",
+                        "#ffffff",
                     )
 
         if exposure_backends and exposure_data:
             for backend in exposure_backends:
-                accessor_label = backend.get("short_name") or backend.get("name") or "backend"
                 for store in exposure_data:
                     add_edge(
                         subscription_node_id(backend, sanitise_node_id),
                         subscription_node_id(store, sanitise_node_id),
-                        accessor_label if mode == "exposure" else "data flow",
-                        "#94a3b8" if mode == "exposure" else "#ffffff",
+                        "data flow",
+                        "#ffffff",
                     )
 
         if plan_links:
@@ -940,7 +785,6 @@ def build_subscription_diagrams_by_rg(
 
         descriptions = {
             "connectivity": "Shows inferred application, API, data, and hosting relationships inside this resource group.",
-            "exposure": "Shows public and IP-restricted assets in this resource group and the next internal hops they appear to expose.",
         }
         if _is_cluster_only_rg:
             descriptions["connectivity"] = (
@@ -953,12 +797,6 @@ def build_subscription_diagrams_by_rg(
                 "Red edges: directly public — no WAF or network restriction",
                 "Amber edges: WAF in Detection mode or IP-allowlisted access",
                 "White edges: inferred internal application or hosting flow",
-            ],
-            "exposure": [
-                "Red edges: direct public surface — no WAF or restriction",
-                "Orange edges: WAF (Prevention) protected entry",
-                "Amber edges: WAF (Detection) or IP allowlist",
-                "Grey edges: next likely internal hop",
             ],
         }
         if _is_cluster_only_rg:
@@ -973,9 +811,9 @@ def build_subscription_diagrams_by_rg(
                 get_icon_path=get_icon_path,
                 node_map=node_map,
                 direction="TD",
-                title=f"{rg} - {mode.replace('_', ' ').title()}",
-                description=descriptions.get(mode, ""),
-                legend=legends.get(mode, []),
+                title=f"{rg} - Connectivity",
+                description=descriptions["connectivity"],
+                legend=legends["connectivity"],
                 attack_paths=attack_paths,
                 asset_summary=summary,
             ),
@@ -984,8 +822,7 @@ def build_subscription_diagrams_by_rg(
 
     for rg in sorted(groups.keys()):
         rg_assets = groups[rg]
-        connectivity_view, relationship_count = build_rg_view(rg, rg_assets, "connectivity")
-        exposure_view, _ = build_rg_view(rg, rg_assets, "exposure")
+        connectivity_view, relationship_count = build_rg_view(rg, rg_assets)
         diagrams.append(
             {
                 "rg": rg,
@@ -1001,7 +838,6 @@ def build_subscription_diagrams_by_rg(
                 "default_view": "connectivity",
                 "views": {
                     "connectivity": connectivity_view,
-                    "exposure": exposure_view,
                 },
             }
         )

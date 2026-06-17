@@ -123,6 +123,11 @@ export function getDiagramSource(diagramView) {
 export function refreshDiagram() {
   const activeDiagram = getActiveDiagramView();
   if (!activeDiagram) { showToast('No active diagram'); return; }
+  if (state.currentDiagramMode === 'react_flow') {
+    renderDiagrams(state.storedDiagrams);
+    showToast('Diagram refreshed');
+    return;
+  }
   const source = getDiagramSource(activeDiagram);
   if (!source) { showToast('No diagram source found'); return; }
 

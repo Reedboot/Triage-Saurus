@@ -1181,31 +1181,12 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
     if (!diagram) return null;
     const views = diagram.views || {};
     const connectivity = views.connectivity || null;
-    const exposure = views.exposure || null;
-    // Prefer connectivity (rich DNS-gated routing diagram) over the simpler exposure overlay.
-    const base = connectivity || exposure || diagram;
+    const base = connectivity || diagram;
     if (!base) return null;
-
-    const mergedLegend = Array.from(
-      new Set([
-        ...(connectivity?.legend || []),
-        ...(exposure?.legend || []),
-        ...(base.legend || []),
-      ].map(normalizeLegendItem).filter(Boolean))
-    );
-
-    const mergedDescription = [
-      base.description,
-      exposure && connectivity
-        ? 'Merged overview includes both connectivity context and exposure signaling.'
-        : '',
-    ].filter(Boolean).join(' ');
 
     return withNormalizedView({
       ...base,
-      description: mergedDescription,
-      legend: mergedLegend.length ? mergedLegend : (base.legend || []),
-      node_drilldown_map: base.node_drilldown_map || connectivity?.node_drilldown_map || exposure?.node_drilldown_map || diagram.node_drilldown_map,
+      node_drilldown_map: base.node_drilldown_map || connectivity?.node_drilldown_map || diagram.node_drilldown_map,
     }, diagram);
   }
 
@@ -1220,7 +1201,7 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
   function getDiagramModes(diagram) {
     const views = diagram?.views || {};
     const modes = [];
-    if (views.connectivity || views.exposure || diagram?.mermaid) modes.push('overview');
+    if (views.connectivity || diagram?.mermaid) modes.push('overview');
     if (views.attack_paths || (Array.isArray(diagram?.attack_paths) && diagram.attack_paths.length > 0)) {
       modes.push('attack_paths');
     }
@@ -1268,7 +1249,6 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
       ...(diagram?.legend || []),
       ...(diagram?.views?.overview?.legend || []),
       ...(diagram?.views?.connectivity?.legend || []),
-      ...(diagram?.views?.exposure?.legend || []),
       ...(diagram?.views?.attack_paths?.legend || []),
     ];
     const legend = candidates.map(normalizeLegendItem).filter(Boolean);

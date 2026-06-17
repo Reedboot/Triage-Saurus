@@ -5425,6 +5425,9 @@ def api_diagrams(experiment_id: str):
                     "legend": view_payload.get("legend") or [],
                     "attack_paths": view_payload.get("attack_paths") or [],
                     "asset_summary": view_payload.get("asset_summary") or {},
+                    "nodes": view_payload.get("nodes") or [],
+                    "edges": view_payload.get("edges") or [],
+                    "type": view_payload.get("type") or "",
                 }
 
             response_diagrams.append(
@@ -18963,7 +18966,6 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     result = dict(connectivity_view)
     result["views"] = {
         "connectivity": connectivity_view,
-        "exposure": overlays["exposure"],
     }
     result["default_view"] = "connectivity"
 

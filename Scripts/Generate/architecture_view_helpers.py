@@ -472,14 +472,210 @@ def build_architecture_view_bundle(
         edges=attack_edges,
         title="Attack-path view",
         description="Shows plausible attacker movement from public footholds into APIs, workloads, secrets, and data stores.",
-        legend=[
-            "Dashed red edges: plausible attacker movement",
-            "Badges identify public footholds, executable workloads, secret stores, and data targets",
-        ],
+        legend=[],
         attack_paths=attack_paths,
         asset_summary=asset_summary,
         get_icon_url=get_icon_url,
     )
+
+    tier_order = {
+        "entry": 0,
+        "api": 1,
+        "backend": 2,
+        "identity": 3,
+        "data": 4,
+        "other": 5,
+    }
+    flow_nodes: list[dict] = []
+    flow_edges: list[dict] = []
+    flow_seen_edges: set[tuple[str, str, str]] = set()
+
+    def _flow_node_style(asset: dict) -> dict:
+        tier = asset.get("tier") or "other"
+        styles = {
+            "entry": {"borderColor": "#f97316", "backgroundColor": "#2a1608", "color": "#e5eef8"},
+            "api": {"borderColor": "#0ea5e9", "backgroundColor": "#082032", "color": "#e5eef8"},
+            "backend": {"borderColor": "#22c55e", "backgroundColor": "#082412", "color": "#e5eef8"},
+            "identity": {"borderColor": "#a855f7", "backgroundColor": "#221038", "color": "#e5eef8"},
+            "data": {"borderColor": "#3b82f6", "backgroundColor": "#0f1f44", "color": "#e5eef8"},
+            "other": {"borderColor": "#64748b", "backgroundColor": "#111827", "color": "#e5eef8"},
+        }
+        if asset.get("public"):
+            styles[tier] = {**styles.get(tier, styles["other"]), "borderColor": "#ef4444"}
+        return styles.get(tier, styles["other"])
+
+    flow_assets = sorted(
+        asset_by_name.values(),
+        key=lambda asset: (
+            tier_order.get(asset.get("tier") or "other", 99),
+            str(asset.get("friendly_type") or ""),
+            str(asset.get("resource_name") or ""),
+        ),
+    )
+    flow_groups: dict[str, list[dict]] = defaultdict(list)
+    for asset in flow_assets:
+        flow_groups[asset.get("tier") or "other"].append(asset)
+
+    base_x = 40
+    base_y = 40
+    column_width = 300
+    row_height = 124
+    internet_edges_present = False
+
+    if public_names:
+        flow_nodes.append(
+            {
+                "id": "Internet",
+                "type": "repoNode",
+                "position": {"x": base_x, "y": base_y},
+                "data": {
+                    "label": "Internet",
+                    "typeLabel": "External source",
+                    "tier": "internet",
+                    "public": True,
+                    "resourceType": "external_endpoint",
+                },
+                "style": {
+                    "width": 260,
+                    "borderColor": "#ef4444",
+                    "backgroundColor": "#2a0f0f",
+                    "color": "#e5eef8",
+                },
+            }
+        )
+
+    for tier, assets in flow_groups.items():
+        col = tier_order.get(tier, tier_order["other"]) + (1 if public_names else 0)
+        for index, asset in enumerate(assets):
+            flow_nodes.append(
+                {
+                    "id": asset["node_id"],
+                    "type": "repoNode",
+                    "position": {
+                        "x": base_x + (col * column_width),
+                        "y": base_y + (index * row_height),
+                    },
+                    "data": {
+                        "label": asset["resource_name"],
+                        "typeLabel": asset.get("friendly_type") or "resource",
+                        "tier": tier,
+                        "public": bool(asset.get("public")),
+                        "resourceType": asset.get("resource_type") or "",
+                        "repoName": asset.get("repo_name") or "",
+                        "sourceFile": asset.get("source_file") or "",
+                    },
+                    "sourcePosition": "right",
+                    "targetPosition": "left",
+                    "style": {
+                        "width": 260,
+                        **_flow_node_style(asset),
+                    },
+                }
+            )
+
+    for conn in connections:
+        conn_type = (conn.get("connection_type") or "").lower().strip()
+        if conn_type in _ADMIN_EDGE_TYPES:
+            continue
+        src = str(conn.get("source") or "")
+        tgt = str(conn.get("target") or "")
+        if not src or not tgt or src == tgt:
+            continue
+
+        if src == "Internet" and tgt in asset_by_name:
+            target_asset = asset_by_name[tgt]
+            edge_key = (src, target_asset["node_id"], conn_type)
+            if edge_key in flow_seen_edges:
+                continue
+            flow_seen_edges.add(edge_key)
+            internet_edges_present = True
+            flow_edges.append(
+                {
+                    "id": f"flow-{src.lower()}-{target_asset['node_id']}",
+                    "source": "Internet",
+                    "target": target_asset["node_id"],
+                    "label": "public" if conn_type else "public exposure",
+                    "type": "smoothstep",
+                    "data": {
+                        "connection_type": conn_type or "confirmed_public",
+                        "public": True,
+                    },
+                    "style": {
+                        "stroke": "#ef4444",
+                        "strokeWidth": 2.5,
+                    },
+                    "markerEnd": {
+                        "type": "arrowclosed",
+                        "color": "#ef4444",
+                    },
+                }
+            )
+            continue
+
+        if src not in asset_by_name or tgt not in asset_by_name:
+            continue
+
+        source_asset = asset_by_name[src]
+        target_asset = asset_by_name[tgt]
+        edge_key = (source_asset["node_id"], target_asset["node_id"], conn_type)
+        if edge_key in flow_seen_edges:
+            continue
+        flow_seen_edges.add(edge_key)
+
+        label = conn_type.replace("_", " ")
+        if conn_type in {"uses_database", "data_access"}:
+            label = "data access"
+        elif conn_type in {"routes_to", "route_to", "calls", "service_call"}:
+            label = "service"
+        elif conn_type in {"confirmed_public", "public", "public_access"}:
+            label = "public"
+
+        stroke = "#94a3b8"
+        width = 1.75
+        if source_asset.get("tier") in {"entry", "api"}:
+            stroke = "#f59e0b"
+        if conn_type in {"uses_database", "data_access"}:
+            stroke = "#38bdf8"
+        if target_asset.get("tier") == "identity":
+            stroke = "#a855f7"
+        if target_asset.get("tier") == "data":
+            stroke = "#3b82f6"
+
+        flow_edges.append(
+            {
+                "id": f"flow-{source_asset['node_id']}-{target_asset['node_id']}",
+                "source": source_asset["node_id"],
+                "target": target_asset["node_id"],
+                "label": label,
+                "type": "smoothstep",
+                "data": {
+                    "connection_type": conn_type,
+                    "public": bool(source_asset.get("public") or target_asset.get("public")),
+                },
+                "style": {
+                    "stroke": stroke,
+                    "strokeWidth": width,
+                },
+                "markerEnd": {
+                    "type": "arrowclosed",
+                    "color": stroke,
+                },
+            }
+        )
+
+    if not internet_edges_present and flow_nodes and flow_nodes[0]["id"] == "Internet":
+        flow_nodes = flow_nodes[1:]
+
+    react_flow_view = {
+        "nodes": flow_nodes,
+        "edges": flow_edges,
+        "title": "React Flow view",
+        "description": "Interactive architecture graph with the same resources and connections shown as a navigable flow.",
+        "legend": [],
+        "attack_paths": attack_paths,
+        "asset_summary": asset_summary,
+        "type": "react_flow",
+    }
 
     connectivity_view = {
         "code": connectivity_code,
@@ -503,7 +699,7 @@ def build_architecture_view_bundle(
         "asset_summary": asset_summary,
         "views": {
             "connectivity": connectivity_view,
-            "exposure": exposure_view,
             "attack_paths": attack_view,
+            "react_flow": react_flow_view,
         },
     }

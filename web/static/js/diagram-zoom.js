@@ -4,9 +4,17 @@
 import { state } from './state.js';
 import { getDiagramContentBounds } from './diagram-shared.js';
 
+function isReactFlowDiagramMode() {
+  return state.currentDiagramMode === 'react_flow';
+}
+
 // ── Transform ─────────────────────────────────────────────────────────────────
 
 export function applyTransform() {
+  if (isReactFlowDiagramMode()) {
+    updateZoomDisplay();
+    return;
+  }
   const zoomInner = document.getElementById('diagram-zoom-inner');
   if (zoomInner) {
     requestAnimationFrame(() => {
@@ -25,18 +33,21 @@ export function updateZoomDisplay() {
 }
 
 export function zoomIn() {
+  if (isReactFlowDiagramMode()) return;
   state.zoomState.scale = Math.min(state.zoomState.maxScale, state.zoomState.scale * 1.2);
   applyTransform();
   saveDiagramState(state.currentDiagramIndex);
 }
 
 export function zoomOut() {
+  if (isReactFlowDiagramMode()) return;
   state.zoomState.scale = Math.max(state.zoomState.minScale, state.zoomState.scale / 1.2);
   applyTransform();
   saveDiagramState(state.currentDiagramIndex);
 }
 
 export function zoomReset() {
+  if (isReactFlowDiagramMode()) return;
   scheduleDiagramFit();
 }
 
@@ -46,6 +57,7 @@ export function zoomReset() {
 // ── Fit ───────────────────────────────────────────────────────────────────────
 
 export function fitActiveDiagram(mode = 'contain') {
+  if (isReactFlowDiagramMode()) return;
   const activeDiagram = getActiveDiagramView();
   const svg = activeDiagram ? activeDiagram.querySelector('svg') : null;
   const zoomWrap = document.getElementById('diagram-zoom-wrap');
@@ -133,6 +145,7 @@ export function fitActiveDiagram(mode = 'contain') {
 }
 
 export function scheduleDiagramFit(attempt = 0) {
+  if (isReactFlowDiagramMode()) return;
   const activeDiagram = getActiveDiagramView();
   const svg = activeDiagram ? activeDiagram.querySelector('svg') : null;
   const zoomWrap = document.getElementById('diagram-zoom-wrap');
@@ -157,6 +170,7 @@ export function saveDiagramState(diagramIndex) {
 }
 
 export function loadDiagramState(diagramIndex) {
+  if (isReactFlowDiagramMode()) return;
   if (state.diagramStates[diagramIndex]) {
     const s = state.diagramStates[diagramIndex];
     state.zoomState.scale = s.scale;
@@ -172,6 +186,7 @@ export function loadDiagramState(diagramIndex) {
 // ── Pan / zoom interactivity ──────────────────────────────────────────────────
 
 export function initPanZoom() {
+  if (isReactFlowDiagramMode()) return;
   const zoomWrap    = document.getElementById('diagram-zoom-wrap');
   const diagramViews = document.getElementById('diagram-views');
   if (!zoomWrap || !diagramViews) return;

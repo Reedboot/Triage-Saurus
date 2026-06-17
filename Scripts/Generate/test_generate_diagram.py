@@ -361,8 +361,10 @@ def test_generate_architecture_diagram_bundle_includes_overlay_views(monkeypatch
     )
 
     assert bundle["default_view"] == "connectivity"
-    assert set(bundle["views"]) == {"connectivity", "exposure", "attack_paths"}
-    assert "Internet" in bundle["views"]["exposure"]["code"]
+    assert set(bundle["views"]) == {"connectivity", "attack_paths", "react_flow"}
+    assert "Internet" in bundle["views"]["connectivity"]["code"]
+    assert bundle["views"]["react_flow"]["nodes"]
+    assert bundle["views"]["react_flow"]["edges"]
     titles = {path["title"] for path in bundle["attack_paths"]}
     assert "Public ingress into architecture" in titles
     assert titles & {"Secrets pivot from workloads", "Data access after workload compromise"}

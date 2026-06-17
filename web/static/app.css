@@ -898,6 +898,10 @@ button.secondary:hover, .btn-secondary:hover { background: var(--border); color:
   display: block;
   margin: 0;
 }
+.diagram-view.active .diagram-reactflow-host {
+  display: block;
+  min-height: 520px;
+}
 .diagram-views {
   display: block;
   overflow: visible;
@@ -969,6 +973,73 @@ button.secondary:hover, .btn-secondary:hover { background: var(--border); color:
 /* Increase width for edge labels (foreignObject) to prevent unnecessary wrapping */
 .mermaid svg foreignObject {
   min-width: 140px;
+}
+
+.diagram-reactflow-shell {
+  width: 100%;
+  height: 520px;
+  min-height: 520px;
+}
+
+.diagram-reactflow-host {
+  width: 100%;
+  height: 520px;
+  min-height: 520px;
+}
+
+.diagram-reactflow-missing,
+.diagram-reactflow-empty {
+  min-height: 520px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  background: var(--bg-base);
+}
+
+.diagram-reactflow-node__tier {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: currentColor;
+  opacity: 0.72;
+}
+
+.diagram-reactflow-node__label {
+  font-size: 0.92rem;
+  font-weight: 700;
+  line-height: 1.25;
+  color: currentColor;
+}
+
+.diagram-reactflow-node__type {
+  font-size: 0.75rem;
+  line-height: 1.2;
+  color: currentColor;
+  opacity: 0.78;
+}
+
+.react-flow__attribution {
+  display: none;
+}
+
+.react-flow__controls {
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border) !important;
+}
+
+.react-flow__controls button {
+  background: var(--bg-base) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+
+.react-flow__minimap {
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border) !important;
 }
 
 /* Increase width for subgraph labels */

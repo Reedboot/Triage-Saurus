@@ -156,6 +156,197 @@ function getDiagramModePayload(diagram, mode) {
   return null;
 }
 
+function isReactFlowMode() {
+  return state.currentDiagramMode === 'react_flow';
+}
+
+function clearReactFlowRoots(container) {
+  if (!container) return;
+  container.querySelectorAll('.diagram-reactflow-host').forEach((host) => {
+    try {
+      host.__reactFlowRoot?.unmount?.();
+    } catch (_) {}
+    host.__reactFlowRoot = null;
+  });
+}
+
+function setDiagramChromeForMode(mode) {
+  const zoomWrap = document.getElementById('diagram-zoom-wrap');
+  const controls = document.getElementById('inline-diagram-controls');
+  const zoomInner = document.getElementById('diagram-zoom-inner');
+  if (zoomWrap) zoomWrap.dataset.renderMode = mode;
+  if (controls) controls.style.display = mode === 'react_flow' ? 'none' : '';
+  if (mode === 'react_flow' && zoomInner) {
+    zoomInner.style.transform = 'none';
+    zoomInner.style.transition = '';
+  }
+}
+
+function getReactFlowLibs() {
+  const React = window.React;
+  const ReactDOM = window.ReactDOM;
+  const ReactFlowLib = window.ReactFlow;
+  if (!React || !ReactDOM || !ReactFlowLib) return null;
+  return {
+    React,
+    ReactDOM,
+    ReactFlow: ReactFlowLib.ReactFlow,
+    Background: ReactFlowLib.Background,
+    Controls: ReactFlowLib.Controls,
+    Handle: ReactFlowLib.Handle,
+    MarkerType: ReactFlowLib.MarkerType,
+    MiniMap: ReactFlowLib.MiniMap,
+    Position: ReactFlowLib.Position,
+  };
+}
+
+function normalizeReactFlowNode(node, libs) {
+  const Position = libs?.Position || {};
+  const sourcePosition = String(node.sourcePosition || 'right').toLowerCase() === 'left'
+    ? Position.Left
+    : Position.Right;
+  const targetPosition = String(node.targetPosition || 'left').toLowerCase() === 'right'
+    ? Position.Right
+    : Position.Left;
+  const style = Object.assign(
+    {
+      width: 260,
+      borderRadius: 12,
+      border: '1px solid #30363d',
+      background: '#111827',
+      color: '#e6edf3',
+      boxShadow: '0 8px 20px rgba(0, 0, 0, 0.18)',
+      padding: 0,
+    },
+    node.style || {}
+  );
+  return {
+    id: String(node.id),
+    type: node.type || 'repoNode',
+    position: node.position || { x: 0, y: 0 },
+    data: node.data || {},
+    sourcePosition,
+    targetPosition,
+    draggable: false,
+    selectable: false,
+    style,
+  };
+}
+
+function normalizeReactFlowEdge(edge, libs) {
+  const MarkerType = libs?.MarkerType || {};
+  const markerType = String(edge?.markerEnd?.type || '').toLowerCase();
+  const fallbackColor = edge?.style?.stroke || '#94a3b8';
+  return {
+    id: String(edge.id),
+    source: String(edge.source),
+    target: String(edge.target),
+    label: edge.label || '',
+    type: edge.type || 'smoothstep',
+    animated: !!edge.animated,
+    data: edge.data || {},
+    style: edge.style || {},
+    markerEnd: {
+      type: markerType.includes('arrow') ? (MarkerType.ArrowClosed || 'arrowclosed') : (MarkerType.ArrowClosed || 'arrowclosed'),
+      color: edge?.markerEnd?.color || fallbackColor,
+    },
+  };
+}
+
+function renderReactFlowDiagram(container, payload) {
+  const libs = getReactFlowLibs();
+  if (!libs) {
+    container.innerHTML = '<div class="diagram-reactflow-missing">React Flow libraries are not available.</div>';
+    return;
+  }
+
+  const { React, ReactDOM, ReactFlow, Background, Controls, Handle, MiniMap, Position } = libs;
+  const h = React.createElement;
+  const nodes = (payload.nodes || []).map((node) => normalizeReactFlowNode(node, libs));
+  const edges = (payload.edges || []).map((edge) => normalizeReactFlowEdge(edge, libs));
+
+  if (!nodes.length) {
+    container.innerHTML = '<div class="diagram-reactflow-empty">No graph data available for this view.</div>';
+    return;
+  }
+
+  const nodeTypes = {
+    repoNode: function RepoNode({ data }) {
+      const tier = String(data?.tier || 'other');
+      const tierLabel = {
+        entry: 'Entry',
+        api: 'API',
+        backend: 'Backend',
+        identity: 'Identity',
+        data: 'Data',
+        internet: 'Internet',
+      }[tier] || 'Other';
+      return h(
+        'div',
+        {
+          className: `diagram-reactflow-node diagram-reactflow-node--${tier}`,
+          style: {
+            border: '1px solid currentColor',
+            borderRadius: '12px',
+            background: 'inherit',
+            padding: '10px 12px',
+            minHeight: '72px',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'center',
+            gap: '3px',
+          },
+          title: data?.resourceType || data?.typeLabel || data?.label,
+        },
+        h(Handle, { type: 'target', position: Position.Left, style: { background: 'currentColor', borderColor: 'currentColor' } }),
+        h('div', { className: 'diagram-reactflow-node__tier' }, tierLabel),
+        h('div', { className: 'diagram-reactflow-node__label' }, data?.label || 'Resource'),
+        h('div', { className: 'diagram-reactflow-node__type' }, data?.typeLabel || data?.resourceType || ''),
+        h(Handle, { type: 'source', position: Position.Right, style: { background: 'currentColor', borderColor: 'currentColor' } })
+      );
+    },
+  };
+
+  const ReactFlowDiagram = function ReactFlowDiagram() {
+    return h(
+      'div',
+      { className: 'diagram-reactflow-shell' },
+      h(
+        ReactFlow,
+        {
+          nodes,
+          edges,
+          nodeTypes,
+          fitView: true,
+          fitViewOptions: { padding: 0.2 },
+          minZoom: 0.15,
+          maxZoom: 2.5,
+          panOnDrag: true,
+          zoomOnScroll: true,
+          zoomOnPinch: true,
+          nodesDraggable: false,
+          nodesConnectable: false,
+          elementsSelectable: false,
+          proOptions: { hideAttribution: true },
+          style: { width: '100%', height: '100%', background: '#0d1117' },
+        },
+        h(MiniMap, {
+          nodeStrokeColor: (n) => n?.style?.borderColor || '#64748b',
+          nodeColor: (n) => n?.style?.backgroundColor || '#111827',
+          pannable: true,
+          zoomable: true,
+        }),
+        h(Background, { gap: 16, size: 1, color: '#1f2937' }),
+        h(Controls, { showInteractive: false })
+      )
+    );
+  };
+
+  const root = ReactDOM.createRoot(container);
+  container.__reactFlowRoot = root;
+  root.render(h(ReactFlowDiagram));
+}
+
 function renderDiagramModeTabs(diagrams) {
   const diagramModeTabs = document.getElementById('diagram-mode-tabs');
   if (!diagramModeTabs) return;
@@ -171,8 +362,8 @@ function renderDiagramModeTabs(diagrams) {
 
   const labels = {
     connectivity: 'Connectivity',
-    exposure: 'Exposure',
     attack_paths: 'Attack Paths',
+    react_flow: 'React Flow',
   };
 
   availableModes.forEach((mode) => {
@@ -298,6 +489,8 @@ export function renderDiagrams(diagrams) {
   setDiagramLoadingVisible(true, 'Rendering architecture diagram…');
   if (zoomInner) zoomInner.classList.add('is-rendering');
   cleanupStaleMermaidArtifacts();
+  clearReactFlowRoots(diagramViews);
+  setDiagramChromeForMode(state.currentDiagramMode);
 
   // Reset per-diagram zoom state
   Object.keys(state.diagramStates).forEach(k => delete state.diagramStates[k]);
@@ -314,11 +507,13 @@ export function renderDiagrams(diagrams) {
   renderDiagramModeTabs(diagrams);
 
   let addedCount = 0;
+  const reactFlowMode = isReactFlowMode();
   diagrams.forEach((diag, idx) => {
     const title = diag.title || `Diagram ${idx + 1}`;
     const modePayload = getDiagramModePayload(diag, state.currentDiagramMode);
     const code  = sanitizeMermaidSource((modePayload && modePayload.code) || diag.code).trim();
-    if (!code) {
+    const hasReactFlow = reactFlowMode && modePayload && Array.isArray(modePayload.nodes) && modePayload.nodes.length;
+    if (!code && !hasReactFlow) {
       console.warn('[renderDiagrams] Skipping diagram', idx, 'no code');
       return;
     }
@@ -334,13 +529,36 @@ export function renderDiagrams(diagrams) {
     const viewDiv = document.createElement('div');
     viewDiv.className   = 'diagram-view' + (idx === initialIndex ? ' active' : '');
     viewDiv.dataset.idx = idx;
+    viewDiv.dataset.renderMode = hasReactFlow ? 'react_flow' : 'mermaid';
 
-    const pre = document.createElement('pre');
-    pre.className       = 'mermaid';
-    pre.style.background = 'transparent';
-    pre.dataset.source  = code;
-    pre.textContent     = code;
-    viewDiv.appendChild(pre);
+    if (hasReactFlow) {
+      viewDiv.style.minHeight = '520px';
+      viewDiv.style.height = '100%';
+      const sourceCode = sanitizeMermaidSource(diag.code || '').trim();
+      if (sourceCode) {
+        const pre = document.createElement('pre');
+        pre.className = 'mermaid';
+        pre.style.display = 'none';
+        pre.dataset.source = sourceCode;
+        pre.textContent = sourceCode;
+        viewDiv.appendChild(pre);
+      }
+
+      const host = document.createElement('div');
+      host.className = 'diagram-reactflow-host';
+      host.style.width = '100%';
+      host.style.height = '520px';
+      host.style.minHeight = '520px';
+      host.style.background = '#0d1117';
+      viewDiv.appendChild(host);
+    } else {
+      const pre = document.createElement('pre');
+      pre.className       = 'mermaid';
+      pre.style.background = 'transparent';
+      pre.dataset.source  = code;
+      pre.textContent     = code;
+      viewDiv.appendChild(pre);
+    }
     diagramViews.appendChild(viewDiv);
 
     tabBtn.addEventListener('click', () => {
@@ -351,7 +569,10 @@ export function renderDiagrams(diagrams) {
         v.classList.toggle('active', v.dataset.idx === String(idx));
       });
       const selectedView = diagramViews.querySelector(`.diagram-view[data-idx="${idx}"]`);
-      if (selectedView && !selectedView.querySelector('svg')) {
+      const selectedMode = selectedView?.dataset.renderMode || 'mermaid';
+      if (selectedMode === 'react_flow') {
+        setDiagramLoadingVisible(false);
+      } else if (selectedView && !selectedView.querySelector('svg')) {
         setDiagramLoadingVisible(true, 'Loading selected diagram…');
       } else {
         setDiagramLoadingVisible(false);
@@ -367,6 +588,27 @@ export function renderDiagrams(diagrams) {
 
   const doRender = () => {
     window.mermaid.initialize(getMermaidConfig());
+    if (reactFlowMode) {
+      try {
+        diagramViews.querySelectorAll('.diagram-view').forEach((view, idx) => {
+          const payload = getDiagramModePayload(diagrams[idx], state.currentDiagramMode) || {};
+          const host = view.querySelector('.diagram-reactflow-host');
+          if (host && payload.nodes && payload.edges) {
+            renderReactFlowDiagram(host, payload);
+          }
+        });
+        state.currentDiagramIndex = initialIndex;
+        renderDiagramViewSummary(diagrams[initialIndex]);
+        if (zoomInner) zoomInner.classList.remove('is-rendering');
+        setDiagramLoadingVisible(false);
+      } catch (e) {
+        if (zoomInner) zoomInner.classList.remove('is-rendering');
+        setDiagramLoadingVisible(false);
+        console.error('[Diagrams] React Flow render error:', e);
+      }
+      return;
+    }
+
     renderMermaidInContainer(diagramViews)
       .then(() => {
         setTimeout(() => {

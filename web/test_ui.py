@@ -545,7 +545,7 @@ class TestDiagramPanel:
         assert abs(svg_center_y - wrap_center_y) < wrap_box["height"] * 0.25
 
     def test_architecture_mode_tabs_and_summary_render(self, home: Page):
-        """Architecture diagrams with overlay views should render mode tabs and update the summary."""
+        """Architecture diagrams should render mode tabs and update the summary."""
         home.wait_for_function("window._triage && typeof window._triage.renderDiagrams === 'function'")
         home.evaluate(
             """
@@ -563,14 +563,6 @@ class TestDiagramPanel:
                     asset_summary: { entry_points: 1, api_layer: 1, backends: 1, data_stores: 1, public_assets: 1 },
                     attack_paths: [{ title: 'Public ingress into architecture' }]
                   },
-                  exposure: {
-                    code: 'flowchart LR; Internet --> A[Gateway] --> B[API]',
-                    title: 'Exposure view',
-                    description: 'Shows internet-facing resources.',
-                    legend: ['Red edges: direct public exposure'],
-                    asset_summary: { entry_points: 1, api_layer: 1, backends: 1, data_stores: 1, public_assets: 1 },
-                    attack_paths: [{ title: 'Public ingress into architecture' }]
-                  },
                   attack_paths: {
                     code: 'flowchart LR; Internet -.-> A[Gateway] -.-> B[API]',
                     title: 'Attack-path view',
@@ -578,6 +570,20 @@ class TestDiagramPanel:
                     legend: ['Dashed red edges: attacker movement'],
                     asset_summary: { entry_points: 1, api_layer: 1, backends: 1, data_stores: 1, public_assets: 1 },
                     attack_paths: [{ title: 'Public ingress into architecture' }, { title: 'Secrets pivot from workloads' }]
+                  },
+                  react_flow: {
+                    type: 'react_flow',
+                    title: 'React Flow view',
+                    description: 'Interactive architecture graph.',
+                    legend: [],
+                    asset_summary: { entry_points: 1, api_layer: 1, backends: 1, data_stores: 1, public_assets: 1 },
+                    nodes: [
+                      { id: 'Internet', position: { x: 20, y: 20 }, data: { label: 'Internet', typeLabel: 'External', tier: 'internet', public: true } },
+                      { id: 'gateway', position: { x: 320, y: 20 }, data: { label: 'Gateway', typeLabel: 'Application Gateway', tier: 'entry', public: true } },
+                    ],
+                    edges: [
+                      { id: 'e1', source: 'Internet', target: 'gateway', label: 'public', type: 'smoothstep', style: { stroke: '#ef4444' } },
+                    ]
                   }
                 }
               }]);
@@ -590,6 +596,8 @@ class TestDiagramPanel:
         home.locator("#diagram-mode-tabs button:has-text('Attack Paths')").click()
         expect(home.locator("#diagram-view-summary")).to_contain_text("Likely attack paths")
         expect(home.locator("#diagram-view-summary")).to_contain_text("Secrets pivot from workloads")
+        home.locator("#diagram-mode-tabs button:has-text('React Flow')").click()
+        expect(home.locator("#diagram-views .react-flow")).to_be_visible()
 
     def test_rendered_diagram_svg_fills_wrapper(self, home: Page):
         """Rendered Mermaid SVG should fill the active diagram wrapper."""
@@ -983,15 +991,6 @@ class TestCloudPage:
                 "legend": ["Connectivity legend"],
                 "asset_summary": {"entry_points": 1, "api_layer": 0, "backends": 0, "data_stores": 0, "public_assets": 1},
             },
-            "exposure": {
-                "mermaid": mermaid_source,
-                "css_code": "",
-                "icon_map": {},
-                "node_drilldown_map": node_map,
-                "description": "Exposure mock view",
-                "legend": ["Exposure legend"],
-                "asset_summary": {"entry_points": 1, "api_layer": 0, "backends": 0, "data_stores": 0, "public_assets": 1},
-            },
             "attack_paths": {
                 "mermaid": mermaid_source,
                 "css_code": "",
@@ -1333,15 +1332,6 @@ class TestCloudPageAseNestedDrilldown:
         node_map = self._NODE_MAP
         views = {
             "connectivity": {
-                "mermaid": self._MERMAID_ASE,
-                "css_code": "",
-                "icon_map": {},
-                "node_drilldown_map": node_map,
-                "description": "ASE mock view",
-                "legend": ["Hosted apps"],
-                "asset_summary": {"entry_points": 0, "api_layer": 0, "backends": 1, "data_stores": 0, "public_assets": 0},
-            },
-            "exposure": {
                 "mermaid": self._MERMAID_ASE,
                 "css_code": "",
                 "icon_map": {},
@@ -1891,10 +1881,10 @@ class TestIngressDiagramGeneration:
         )
 
     def test_ingress_diagram_includes_overlay_views(self):
-        """Ingress payload should expose connectivity/exposure views plus attack-path summaries."""
+        """Ingress payload should expose connectivity views plus attack-path summaries."""
         result = self._call()
         views = result.get("views", {})
-        assert {"connectivity", "exposure"} <= set(views), views
+        assert "connectivity" in views, views
         assert result.get("default_view") == "connectivity"
         assert result.get("attack_paths"), "Expected attack-path summaries in the ingress payload"
 
@@ -2626,7 +2616,7 @@ class TestSubscriptionResourceGroupDiagrams:
         diagrams = self._call()
         assert diagrams, "Expected at least one RG diagram"
         first = diagrams[0]
-        assert {"connectivity", "exposure"} <= set(first.get("views", {}))
+        assert "connectivity" in set(first.get("views", {}))
         assert first.get("default_view") == "connectivity"
         assert first.get("relationship_count", 0) >= 1
 
@@ -2644,7 +2634,7 @@ class TestSubscriptionResourceGroupDiagrams:
 class TestCosmosDbFqdnResolution:
     """Regression tests for Cosmos DB endpoint resolution in cloud views."""
 
-    def test_exposure_view_derives_cosmos_fqdn(self):
+    def test_connectivity_view_derives_cosmos_fqdn(self):
         import sys
 
         sys.path.insert(0, str(REPO_ROOT))
@@ -2675,9 +2665,9 @@ class TestCosmosDbFqdnResolution:
             normalize_attack_paths=lambda raw_paths, reviewer=None: raw_paths,
         )
 
-        exposure_mermaid = diagrams[0]["views"]["exposure"]["mermaid"]
-        assert "cosmos-one.documents.azure.com" in exposure_mermaid
-        assert "Direct data plane" not in exposure_mermaid
+        connectivity_mermaid = diagrams[0]["views"]["connectivity"]["mermaid"]
+        assert "cosmos-one.documents.azure.com" in connectivity_mermaid
+        assert "Direct data plane" not in connectivity_mermaid
 
     def test_drilldown_table_derives_cosmos_fqdn(self):
         import sqlite3
@@ -2961,9 +2951,11 @@ class TestSubscriptionOverlayViews:
         import sys
 
         sys.path.insert(0, str(REPO_ROOT))
-        from web.subscription_diagram_helpers import build_subscription_overlay_views
+        from web.subscription_diagram_helpers import build_subscription_diagrams_by_rg
 
-        return build_subscription_overlay_views(
+        return build_subscription_diagrams_by_rg(
+            "Test Subscription",
+            "production",
             rows,
             sanitise_node_id=lambda value: "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in value),
             friendly_type=lambda arm_type: "App Gateway" if "applicationgateway" in (arm_type or "").lower() else (arm_type.split("/")[-1] if arm_type else "Resource"),
@@ -2988,8 +2980,8 @@ class TestSubscriptionOverlayViews:
                 None,
             ),
         ]
-        overlay = self._call(rows)
-        mermaid = overlay["exposure"]["mermaid"]
+        overlay = self._call(rows)[0]
+        mermaid = overlay["views"]["connectivity"]["mermaid"]
         assert 'Internet -->|"WAF"| rgnet_appgwone' in mermaid, mermaid
         assert "class rgnet_appgwone entryPointProtected;" in mermaid, mermaid
         assert "linkStyle 0 stroke:#f97316" in mermaid, mermaid
