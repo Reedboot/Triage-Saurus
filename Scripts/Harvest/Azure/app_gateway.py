@@ -159,13 +159,19 @@ def _get_auth_methods(props: dict[str, Any]) -> list[str]:
 
 
 def _get_waf_mode(gw: dict[str, Any], subscription_id: str) -> str | None:
-    """Read WAF mode from the gateway SKU properties (v2 inline) or WAF policy."""
+    """Read WAF mode from the gateway SKU properties (v2 inline) or WAF policy.
+    
+    Returns the WAF mode only if it is enabled. Returns None if WAF is disabled.
+    """
     props = gw.get("properties") or {}
     sku = gw.get("sku") or {}
     sku_name = (sku.get("name") or "").upper()
 
     if "WAF" in sku_name:
         waf_config = props.get("webApplicationFirewallConfiguration") or {}
+        # Check if WAF is explicitly enabled
+        if waf_config.get("enabled") is False:
+            return None
         mode = waf_config.get("firewallMode")
         if mode:
             return mode
