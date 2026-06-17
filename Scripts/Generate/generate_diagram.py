@@ -183,24 +183,35 @@ def _fetch_appgw_listener_data(subscription_id: str) -> List[dict]:
     - listener_name: unique listener name
     - hostname: public hostname from listener
     - protocol: HTTP or HTTPS
-    - waf_policy_name: WAF policy name (or None if no WAF)
+    - waf_policy_name: WAF policy name (or None if no WAF or WAF is disabled)
     - exposure_level: Public or Internal
+    
+    Only includes WAF policies that are enabled (state = 'Enabled'). Disabled WAF policies are filtered out.
     """
     listeners = []
     
     try:
         with get_db_connection() as conn:
             # Query appgw routing rules for all public listeners
-            # Include listeners with and without WAF policies
+            # Join with WAF policies table to filter out disabled policies
             cursor = conn.execute("""
                 SELECT DISTINCT
                     ar.gateway_name,
                     ar.listener_name,
                     ar.hostname,
                     ar.protocol,
-                    ar.waf_policy_name,
+                    CASE 
+                        WHEN ar.waf_policy_name IS NOT NULL 
+                             AND ar.waf_policy_name != 'None'
+                             AND (wp.state = 'Enabled' OR wp.state IS NULL)
+                        THEN ar.waf_policy_name
+                        ELSE NULL
+                    END as waf_policy_name,
                     ar.exposure_level
                 FROM appgw_routing_rules ar
+                LEFT JOIN appgw_waf_policies wp 
+                    ON ar.waf_policy_name = wp.name 
+                    AND ar.subscription_id = wp.subscription_id
                 WHERE ar.subscription_id = ?
                 AND ar.exposure_level = 'Public'
                 AND ar.hostname IS NOT NULL
@@ -208,17 +219,12 @@ def _fetch_appgw_listener_data(subscription_id: str) -> List[dict]:
             """, (subscription_id,))
             
             for row in cursor.fetchall():
-                # Skip 'None' string values from Azure
-                waf_name = row['waf_policy_name']
-                if waf_name == 'None':
-                    waf_name = None
-                
                 listeners.append({
                     'gateway_name': row['gateway_name'],
                     'listener_name': row['listener_name'],
                     'hostname': row['hostname'],
                     'protocol': row['protocol'],
-                    'waf_policy_name': waf_name,
+                    'waf_policy_name': row['waf_policy_name'],
                     'exposure_level': row['exposure_level'],
                 })
     except Exception as e:
