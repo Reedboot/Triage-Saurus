@@ -1,61 +1,71 @@
 ---
 name: subscription-diagram-check
-description: On-demand Playwright audit of a subscription's rendered diagrams — checks icons, dblclick functionality, WAF/listener nodes, and that what's displayed matches harvested reality.
+description: On-demand Playwright audit of a subscription's rendered React Flow diagrams - verifies the UI matches harvested Azure reality using screenshots, DOM checks, interaction tests, and diagram-to-asset comparison.
 ---
 
 Validate the subscription diagrams in the Triage-Saurus web UI following the workflow in `Agents/SubscriptionDiagramAgent.md`.
 
-## Prerequisites
-Before running, verify:
-1. The web UI is reachable: `curl -sf http://127.0.0.1:9000 > /dev/null || echo "Server not running"`
-2. Playwright is installed: `python3 -m playwright install chromium`
-3. A harvest has been completed for the target subscription.
+This skill audits the **actual rendered React Flow diagrams in the browser**, not backend diagram generation. Every check must be validated using Playwright and visual evidence.
 
-If the server is not running, instruct the user to start it (e.g. `bash Scripts/start_web.sh`) before proceeding.
+## Prerequisites
+
+1. Web UI reachable:
+   curl -sf http://127.0.0.1:9000 > /dev/null || echo "Server not running"
+
+2. Playwright installed:
+   python3 -m playwright install chromium
+
+3. Harvest completed for the subscription
+
+If not running:
+   bash Scripts/start_web.sh
 
 ## Inputs
 
-| Parameter | Required | Default | Description |
-|---|---|---|---|
-| `subscription_id` | ✅ | — | Azure subscription GUID or display name |
-| `base_url` | ❌ | `http://127.0.0.1:9000` | Base URL of the Triage-Saurus web UI |
+- subscription_id (required)
+- base_url (default http://127.0.0.1:9000)
 
-The user must supply `subscription_id`. Ask for it if not provided.
+## Audit Principles
 
-## Running the audit
+- Browser-rendered UI is source of truth
+- Screenshots are mandatory
+- Do not trust backend without UI validation
 
-Follow all 7 phases in `Agents/SubscriptionDiagramAgent.md` in order:
+## Phases
 
-1. **Navigate & Screenshot** — Load the subscription page, screenshot ingress + RG diagrams + assets table
-2. **Icon Audit** — Check every SVG `<image>` element for broken `href` references
-3. **Drilldown Smoke Test** — Dispatch `dblclick` on first `node-drillable` node; verify panel opens
-4. **Content Accuracy** — Compare DB asset counts vs. diagram node counts for top 10 resource types
-5. **WAF & Listener Verification** — Confirm WAF policy nodes and HTTP/HTTPS listener nodes present
-6. **Exposure Accuracy** — Confirm every `is_public=1` asset has a red-arrow path in ingress diagram
-7. **SQL Disambiguation** — Confirm SQL Database rows show parent server name hint
+1. Navigate & Screenshot
+- Load page /subscriptions/{subscription_id}
+- Wait for .react-flow
+- Capture ingress, RG (5), assets table
+
+2. Icon Audit
+- Validate rendered icons load
+- Detect broken/empty icons
+
+3. Drilldown Test
+- Double-click node
+- Confirm panel opens
+
+4. Content Accuracy
+- Compare node counts vs asset counts
+
+5. WAF/Listener
+- Confirm WAF + HTTP/HTTPS nodes exist
+
+6. Exposure
+- Confirm is_public nodes have visible path
+
+7. SQL
+- Ensure server name shown
 
 ## Output
 
-Write all artifacts to `Output/Audit/SubscriptionDiagramCheck_<sub_id>_<timestamp>/`:
+Output/Audit/SubscriptionDiagramCheck_<sub_id>_<timestamp>/
 
-```
-report.md                  ← full findings with summary table
-screenshots/
-  ingress_diagram.png      ← Internet Entry Points & Routing Flow
-  rg_<name>.png            ← per-RG expanded diagrams (first 5)
-  assets_table.png         ← cloud assets table
-icon_audit.json            ← broken icon details
-drilldown_smoke.json       ← smoke test result
-```
-
-After writing the report, show the user a brief summary of findings and the path to the full report.
-
-## Key files
-
-| File | Purpose |
-|---|---|
-| `Agents/SubscriptionDiagramAgent.md` | Full agent instructions and check definitions |
-| `web/app.py` | `_build_ingress_diagram()` — generates ingress Mermaid |
-| `web/templates/partials/subscriptions.html` | `_attachDrilldownHandlers()` — wires dblclick |
-| `Scripts/Harvest/Azure/function_apps.py` | `fetch_ase_ilb_map()` — ILB ASE classification |
-| `Scripts/Harvest/Azure/cosmos_db.py` | `_classify_exposure()` — CosmosDB public check |
+Files:
+- report.md
+- screenshots/
+- icon_audit.json
+- drilldown_smoke.json
+- render_audit.json
+- content_accuracy.json
