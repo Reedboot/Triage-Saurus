@@ -302,6 +302,12 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
     try { return new Date(iso).toLocaleString(); } catch(e) { return iso; }
   }
 
+  function architectureUrl(subId) {
+    const url = new URL('/cloud/architecture', window.location.origin);
+    url.searchParams.set('sub', subId);
+    return url.toString();
+  }
+
   async function waitForMermaid() {
     let attempts = 0;
     while (!window.mermaid && attempts < 100) {
@@ -1125,9 +1131,11 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
       const tbody = document.getElementById('subscriptions-tbody');
       tbody.innerHTML = subs.map(s => `
        <tr>
-         <td style="cursor:pointer;" class="subscription-name-cell" data-sub-id="${s.id}" data-sub-name="${s.display_name}">
-           <strong style="color:#60a5fa; text-decoration:underline;">${s.display_name || s.id}</strong><br/>
-           <small style="color:var(--text-muted);font-size:0.75rem;">${s.id}</small>
+         <td class="subscription-name-cell">
+           <a href="${architectureUrl(s.id)}" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:none;display:inline-block;">
+             <strong style="color:#60a5fa; text-decoration:underline;">${escapeHtml(s.display_name || s.id)}</strong><br/>
+             <small style="color:var(--text-muted);font-size:0.75rem;">${escapeHtml(s.id)}</small>
+           </a>
          </td>
          <td><span style="display:inline-block;padding:2px 8px;border-radius:6px;font-size:0.75rem;font-weight:600;background:#0066cc;color:#fff;">${s.provider}</span></td>
          <td>${renderBadge(s.environment, s.env_badge)}</td>
@@ -1137,16 +1145,16 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
          <td style="font-size:0.8rem;">${formatDate(s.last_synced)}</td>
          <td style="text-align:center;">
            <a href="/cloud/assets?sub=${encodeURIComponent(s.id)}" class="btn btn-sm" style="padding:4px 12px; font-size:0.75rem; text-decoration:none;">📦 Show Assets</a>
+           <button type="button" class="btn btn-sm subscription-preview-btn" data-sub-id="${escapeHtml(s.id)}" data-sub-name="${escapeHtml(s.display_name || s.id)}" style="padding:4px 12px; font-size:0.75rem; margin-left:6px;">👁️ Preview</button>
+           <a href="${architectureUrl(s.id)}" target="_blank" rel="noopener noreferrer" class="btn btn-sm" style="padding:4px 12px; font-size:0.75rem; text-decoration:none; margin-left:6px;">🧭 React Flow</a>
          </td>
        </tr>
       `).join('');
 
       document.getElementById('subscriptions-list').style.display = 'block';
-
-      tbody.querySelectorAll('.subscription-name-cell').forEach(cell => {
-       cell.addEventListener('click', () => loadDiagram(cell.dataset.subId, cell.dataset.subName));
+      tbody.querySelectorAll('.subscription-preview-btn').forEach(button => {
+        button.addEventListener('click', () => loadDiagram(button.dataset.subId, button.dataset.subName));
       });
-
     } catch(e) {
       document.getElementById('subscriptions-loading').textContent = 'Failed to load subscriptions.';
     }

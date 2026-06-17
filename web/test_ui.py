@@ -1055,11 +1055,11 @@ class TestCloudPage:
         )
 
     def _load_diagram(self, page: Page, live_server: str, mermaid_source: str) -> None:
-        """Navigate to /cloud, mock APIs, click the subscription, wait for SVG."""
+        """Navigate to /cloud, mock APIs, click preview, wait for SVG."""
         self._setup_mocks(page, mermaid_source)
         page.goto(live_server + "/cloud")
-        page.wait_for_selector(".subscription-name-cell", timeout=8000)
-        page.locator(".subscription-name-cell").first.click()
+        page.wait_for_selector(".subscription-preview-btn", timeout=8000)
+        page.locator(".subscription-preview-btn").first.click()
         page.wait_for_selector("#ingress-diagram-div svg", timeout=15000)
         page.wait_for_timeout(1500)  # allow post-processing to complete
 
@@ -1079,10 +1079,22 @@ class TestCloudPage:
         expect(rows).to_have_count(1)
         assert "Test Subscription" in rows.first.inner_text()
 
-    def test_diagram_renders_on_subscription_click(self, page: Page, live_server: str):
-        """Clicking a subscription row loads and renders the ingress SVG."""
+    def test_diagram_renders_on_subscription_preview(self, page: Page, live_server: str):
+        """Clicking preview loads and renders the ingress SVG."""
         self._load_diagram(page, live_server, self._MERMAID_DISTINCT_LABELS)
         expect(page.locator("#ingress-diagram-div svg")).to_be_visible()
+
+    def test_subscription_name_opens_react_flow_new_tab(self, page: Page, live_server: str):
+        """Clicking the subscription name should open the React Flow page in a new tab."""
+        self._setup_mocks(page, self._MERMAID_DISTINCT_LABELS)
+        page.goto(live_server + "/cloud")
+        page.wait_for_selector(".subscription-name-cell a", timeout=8000)
+
+        with page.expect_popup() as popup_info:
+            page.locator(".subscription-name-cell a").first.click()
+        popup = popup_info.value
+
+        expect(popup).to_have_url(f"{live_server}/cloud/architecture?sub={self._SUB_ID}", timeout=15000)
 
     def test_mode_toggle_renders_subscription_views(self, page: Page, live_server: str):
         """Overview/Attack-path mode buttons should render for subscription popup views."""
@@ -1268,8 +1280,8 @@ class TestCloudPage:
         )
 
         page.goto(live_server + "/cloud")
-        page.wait_for_selector(".subscription-name-cell", timeout=8000)
-        page.locator(".subscription-name-cell").first.click()
+        page.wait_for_selector(".subscription-preview-btn", timeout=8000)
+        page.locator(".subscription-preview-btn").first.click()
         page.wait_for_selector("#ingress-diagram-div svg", timeout=15000)
         page.wait_for_timeout(1000)
 
@@ -1397,8 +1409,8 @@ class TestCloudPageAseNestedDrilldown:
     def test_dblclick_opens_ase_drilldown(self, page: Page, live_server: str):
         self._setup_mocks(page)
         page.goto(live_server + "/cloud")
-        page.wait_for_selector(".subscription-name-cell", timeout=8000)
-        page.locator(".subscription-name-cell").first.click()
+        page.wait_for_selector(".subscription-preview-btn", timeout=8000)
+        page.locator(".subscription-preview-btn").first.click()
         page.wait_for_selector("#ingress-diagram-div svg g.node-drillable", timeout=8000)
 
         page.locator("#ingress-diagram-div svg g.node-drillable").dblclick()
@@ -1589,8 +1601,8 @@ class TestCloudPageApimNestedDrilldown:
     def test_apim_node_expands_nested_methods(self, page: Page, live_server: str):
         self._setup_mocks(page)
         page.goto(live_server + "/cloud")
-        page.wait_for_selector(".subscription-name-cell", timeout=8000)
-        page.locator(".subscription-name-cell").first.click()
+        page.wait_for_selector(".subscription-preview-btn", timeout=8000)
+        page.locator(".subscription-preview-btn").first.click()
         page.wait_for_selector("#ingress-diagram-div svg g.node-drillable", timeout=8000)
 
         page.locator("#ingress-diagram-div svg g.node-drillable").click()
