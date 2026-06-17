@@ -694,7 +694,7 @@ function App() {
       omittedCount > 0 ? `<span><strong>${displayedCount}</strong> shown</span>` : null,
       `<span><strong>${connectionCount}</strong> connections</span>`,
       payload?.summary?.layout_mode ? `<span><strong>${payload.summary.layout_mode}</strong> mode</span>` : null,
-      `<span><strong>${subscriptionName || "pipeline-customer-production"}</strong></span>`,
+      `<span><strong>${subscriptionName || "subscription-production"}</strong></span>`,
     ]
       .filter(Boolean)
       .join(" ");
@@ -915,7 +915,7 @@ function App() {
       setNodes(preparedNodes);
       setEdges(deduplicatedEdges);
       setGraphKey(`${payload.subscription_id || sub || "latest"}:${payload?.summary?.layout_mode || mode}:${preparedNodes.length}:${preparedEdges.length}`);
-      renderSummary(payload, payload.subscription_name || sub || "pipeline-customer-production");
+      renderSummary(payload, payload.subscription_name || sub || "subscription-production");
       const isEmpty = preparedNodes.length === 0;
       emptyEl.hidden = !isEmpty;
       rootEl.hidden = isEmpty;

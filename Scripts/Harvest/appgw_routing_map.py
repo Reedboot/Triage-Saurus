@@ -18,7 +18,7 @@ For each Application Gateway in the subscription this script:
   8. Stores WAF policy summary in appgw_waf_policies table
 
 Usage:
-    python Scripts/Harvest/appgw_routing_map.py --subscription "pipeline-customer-production"
+    python Scripts/Harvest/appgw_routing_map.py --subscription "subscription-production"
     python Scripts/Harvest/appgw_routing_map.py --all
 """
 from __future__ import annotations

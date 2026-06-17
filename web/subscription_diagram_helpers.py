@@ -41,7 +41,7 @@ def subscription_node_id(item: dict, sanitise_node_id: Callable[[str], str]) -> 
 def subscription_short_name(name: str, max_len: int = 28) -> str:
     import re
 
-    for prefix in ("cbuk-core-prodgreen-", "cbuk-core-prod-", "cbuk-", "pipeline-customer-production-"):
+    for prefix in ("cbuk-core-prodgreen-", "cbuk-core-prod-", "cbuk-", "subscription-production-"):
         if name.lower().startswith(prefix):
             name = name[len(prefix):]
             break

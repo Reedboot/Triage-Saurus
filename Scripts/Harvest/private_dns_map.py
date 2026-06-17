@@ -18,7 +18,7 @@ Tables populated:
   - resource_connections    (dns_resolution type edges)
 
 Usage:
-    python Scripts/Harvest/private_dns_map.py --subscription "pipeline-customer-production"
+    python Scripts/Harvest/private_dns_map.py --subscription "subscription-production"
     python Scripts/Harvest/private_dns_map.py --all
 """
 from __future__ import annotations

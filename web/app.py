@@ -13038,7 +13038,7 @@ def _cloud_latest_experiment_id(conn) -> str | None:
 
 
 def _cloud_subscription_default_selector() -> str:
-    return "pipeline-customer-production"
+    return "subscription-production"
 
 
 def _cloud_resolve_subscription(conn, selector: str | None) -> sqlite3.Row | None:
@@ -16625,7 +16625,7 @@ def _subscription_node_id(item: dict) -> str:
 
 def _subscription_short_name(name: str, max_len: int = 28) -> str:
     import re as _re
-    for prefix in ("cbuk-core-prodgreen-", "cbuk-core-prod-", "cbuk-", "pipeline-customer-production-"):
+    for prefix in ("cbuk-core-prodgreen-", "cbuk-core-prod-", "cbuk-", "subscription-production-"):
         if name.lower().startswith(prefix):
             name = name[len(prefix):]
             break
@@ -17095,7 +17095,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     def _short_name(name: str, max_len: int = 28) -> str:
         """Strip common Azure env prefixes/location suffixes for readability."""
         import re as _re
-        for prefix in ("cbuk-core-prodgreen-", "cbuk-core-prod-", "cbuk-", "pipeline-customer-production-"):
+        for prefix in ("cbuk-core-prodgreen-", "cbuk-core-prod-", "cbuk-", "subscription-production-"):
             if name.lower().startswith(prefix):
                 name = name[len(prefix):]
                 break
