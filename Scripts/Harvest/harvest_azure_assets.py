@@ -14,6 +14,12 @@ Usage:
     # Faster storage inventory: skip blob-object enumeration
     python Scripts/Harvest/harvest_azure_assets.py --subscription "My-Prod-Sub" --skip-storage-blobs
 
+    # Target a subset of component groups
+    python Scripts/Harvest/harvest_azure_assets.py --subscription "My-Prod-Sub" --components "App Gateways" --components "APIM"
+
+    # Isolate a single component group without correlation steps
+    python Scripts/Harvest/harvest_azure_assets.py --subscription "My-Prod-Sub" --components "App Gateways" --skip-post-harvest
+
 Prerequisites:
     - Python 3.9+
     - Azure CLI (az) installed and in PATH — https://aka.ms/installazurecli
@@ -101,6 +107,40 @@ ProgressCallback = Callable[[str], None]
 _MAX_PROVIDER_WORKERS = 6
 _PROGRESS_REFRESH_SECONDS = 10.0
 _PROVIDER_WRITE_CHUNK = 250
+
+
+def _normalize_provider_filters(raw_filters: list[str] | None) -> list[str]:
+    filters: list[str] = []
+    for raw in raw_filters or []:
+        for value in str(raw).split(","):
+            cleaned = value.strip()
+            if cleaned:
+                filters.append(cleaned)
+    return filters
+
+
+def _select_provider_specs(provider_filters: list[str] | None) -> list[tuple[str, ProviderFn]]:
+    provider_specs = list(PROVIDERS)
+    filters = _normalize_provider_filters(provider_filters)
+    if not filters:
+        return provider_specs
+
+    available = {label.lower(): (label, fn) for label, fn in provider_specs}
+    selected: list[tuple[str, ProviderFn]] = []
+    missing: list[str] = []
+    for raw in filters:
+        match = available.get(raw.lower())
+        if not match:
+            missing.append(raw)
+            continue
+        if match not in selected:
+            selected.append(match)
+
+    if missing:
+        available_labels = ", ".join(label for label, _ in provider_specs)
+        raise ValueError(f"Unknown provider label(s): {', '.join(missing)}. Available labels: {available_labels}")
+
+    return selected
 
 
 @dataclass
@@ -602,6 +642,8 @@ def harvest_subscription(
     sub: dict[str, Any],
     conn: sqlite3.Connection,
     dry_run: bool = False,
+    provider_filters: list[str] | None = None,
+    skip_post_harvest: bool = False,
 ) -> int:
     sub_id = sub["id"]
     sub_name = sub.get("name") or sub.get("displayName") or sub_id
@@ -613,7 +655,7 @@ def harvest_subscription(
     seen_ids: set[str] = set()
     pending_backfill_jobs: list[BackfillJob] = []
     total = 0
-    provider_specs = list(PROVIDERS)
+    provider_specs = _select_provider_specs(provider_filters)
 
     def _store_result(result: HarvestOutput) -> tuple[int, int]:
         nonlocal total
@@ -691,69 +733,72 @@ def harvest_subscription(
     else:
         print("  [providers] no parallel harvesters configured")
 
-    # App Gateway routing + rewrites + WAF — runs after assets so fqdn_to_asset lookup is populated
-    print(f"  [App Gateway Routing] harvesting listeners, routing rules, rewrite rules & WAF policies...", flush=True)
-    try:
-        rules, rewrite_sets, rewrite_rules, waf = appgw_routing_map.harvest_routing(sub_id, conn, dry_run=dry_run)
-        action = "would write" if dry_run else "written"
-        print(
-            f"  [App Gateway Routing] {rules} routing rules, "
-            f"{rewrite_sets} rewrite rule sets ({rewrite_rules} rewrite rules), "
-            f"{waf} WAF policies {action}"
-        )
-    except Exception as exc:
-        print(f"  [App Gateway Routing] FAILED ({exc})")
+    if skip_post_harvest:
+        print("  [post-harvest] skipped by request")
+    else:
+        # App Gateway routing + rewrites + WAF — runs after assets so fqdn_to_asset lookup is populated
+        print(f"  [App Gateway Routing] harvesting listeners, routing rules, rewrite rules & WAF policies...", flush=True)
+        try:
+            rules, rewrite_sets, rewrite_rules, waf = appgw_routing_map.harvest_routing(sub_id, conn, dry_run=dry_run)
+            action = "would write" if dry_run else "written"
+            print(
+                f"  [App Gateway Routing] {rules} routing rules, "
+                f"{rewrite_sets} rewrite rule sets ({rewrite_rules} rewrite rules), "
+                f"{waf} WAF policies {action}"
+            )
+        except Exception as exc:
+            print(f"  [App Gateway Routing] FAILED ({exc})")
 
-    # Private DNS zones/records for internal host resolution coverage
-    print(f"  [Private DNS] harvesting zones, records, and VNet links...", flush=True)
-    try:
-        dns_summary = private_dns_map.harvest_private_dns(sub_id, conn, dry_run=dry_run)
-        action = "would harvest" if dry_run else "written"
-        print(
-            f"  [Private DNS] {dns_summary.get('zones', 0)} zones, "
-            f"{dns_summary.get('records', 0)} records {action}"
-        )
-    except Exception as exc:
-        print(f"  [Private DNS] FAILED ({exc})")
+        # Private DNS zones/records for internal host resolution coverage
+        print(f"  [Private DNS] harvesting zones, records, and VNet links...", flush=True)
+        try:
+            dns_summary = private_dns_map.harvest_private_dns(sub_id, conn, dry_run=dry_run)
+            action = "would harvest" if dry_run else "written"
+            print(
+                f"  [Private DNS] {dns_summary.get('zones', 0)} zones, "
+                f"{dns_summary.get('records', 0)} records {action}"
+            )
+        except Exception as exc:
+            print(f"  [Private DNS] FAILED ({exc})")
 
-    # AKS ingress → service → deployment route model
-    print(f"  [AKS Routes] harvesting ingress→service→deployment mappings...", flush=True)
-    try:
-        route_count = aks.harvest_routes(sub_id, conn, dry_run=dry_run)
-        action = "would harvest" if dry_run else "written"
-        print(f"  [AKS Routes] {route_count} routes {action}")
-    except Exception as exc:
-        print(f"  [AKS Routes] FAILED ({exc})")
+        # AKS ingress → service → deployment route model
+        print(f"  [AKS Routes] harvesting ingress→service→deployment mappings...", flush=True)
+        try:
+            route_count = aks.harvest_routes(sub_id, conn, dry_run=dry_run)
+            action = "would harvest" if dry_run else "written"
+            print(f"  [AKS Routes] {route_count} routes {action}")
+        except Exception as exc:
+            print(f"  [AKS Routes] FAILED ({exc})")
 
-    # APIM API → backend routes (staged backfill: operations enrich asynchronously)
-    print(f"  [APIM Routes] harvesting API→backend mappings...", flush=True)
-    try:
-        phase_started = time.perf_counter()
-        result = apim.harvest_routes(sub_id, conn, dry_run=dry_run, stage_backfill=True)
-        asset_count, backfill_count = _store_result(result)
-        action = "would write" if dry_run else "written"
-        print(f"  [APIM Routes] {asset_count} routes {action}, {backfill_count} operation(s) queued for backfill in {time.perf_counter() - phase_started:.2f}s")
-    except Exception as exc:
-        print(f"  [APIM Routes] FAILED ({exc})")
+        # APIM API → backend routes (staged backfill: operations enrich asynchronously)
+        print(f"  [APIM Routes] harvesting API→backend mappings...", flush=True)
+        try:
+            phase_started = time.perf_counter()
+            result = apim.harvest_routes(sub_id, conn, dry_run=dry_run, stage_backfill=True)
+            asset_count, backfill_count = _store_result(result)
+            action = "would write" if dry_run else "written"
+            print(f"  [APIM Routes] {asset_count} routes {action}, {backfill_count} operation(s) queued for backfill in {time.perf_counter() - phase_started:.2f}s")
+        except Exception as exc:
+            print(f"  [APIM Routes] FAILED ({exc})")
 
-    # APIM backend inventory + API-to-backend links
-    print(f"  [APIM Backend Links] harvesting backend inventory and route links...", flush=True)
-    try:
-        phase_started = time.perf_counter()
-        backend_count, link_count = apim_routing_map.harvest_backends(sub_id, conn, dry_run=dry_run)
-        action = "would write" if dry_run else "written"
-        print(f"  [APIM Backend Links] {backend_count} backends, {link_count} links {action} in {time.perf_counter() - phase_started:.2f}s")
-    except Exception as exc:
-        print(f"  [APIM Backend Links] FAILED ({exc})")
+        # APIM backend inventory + API-to-backend links
+        print(f"  [APIM Backend Links] harvesting backend inventory and route links...", flush=True)
+        try:
+            phase_started = time.perf_counter()
+            backend_count, link_count = apim_routing_map.harvest_backends(sub_id, conn, dry_run=dry_run)
+            action = "would write" if dry_run else "written"
+            print(f"  [APIM Backend Links] {backend_count} backends, {link_count} links {action} in {time.perf_counter() - phase_started:.2f}s")
+        except Exception as exc:
+            print(f"  [APIM Backend Links] FAILED ({exc})")
 
-    # Function App HTTP triggers
-    print(f"  [Function App Triggers] harvesting HTTP trigger routes...", flush=True)
-    try:
-        trigger_count = function_apps.harvest_http_triggers(sub_id, conn, dry_run=dry_run)
-        action = "would write" if dry_run else "written"
-        print(f"  [Function App Triggers] {trigger_count} triggers {action}")
-    except Exception as exc:
-        print(f"  [Function App Triggers] FAILED ({exc})")
+        # Function App HTTP triggers
+        print(f"  [Function App Triggers] harvesting HTTP trigger routes...", flush=True)
+        try:
+            trigger_count = function_apps.harvest_http_triggers(sub_id, conn, dry_run=dry_run)
+            action = "would write" if dry_run else "written"
+            print(f"  [Function App Triggers] {trigger_count} triggers {action}")
+        except Exception as exc:
+            print(f"  [Function App Triggers] FAILED ({exc})")
 
     # Front Door routing rules
     print(f"  [Front Door Routes] harvesting routing rules...", flush=True)
@@ -820,6 +865,19 @@ def main() -> None:
         action="store_true",
         help="Skip blob-object enumeration under storage containers (faster on large subscriptions)",
     )
+    parser.add_argument(
+        "--components",
+        "--providers",
+        dest="provider_filters",
+        action="append",
+        metavar="LABEL",
+        help="Harvest only selected provider groups. Repeat the flag or pass a comma-separated list.",
+    )
+    parser.add_argument(
+        "--skip-post-harvest",
+        action="store_true",
+        help="Skip post-harvest correlation steps such as routing, DNS, AKS, APIM, and trigger enrichment",
+    )
     args = parser.parse_args()
 
     set_probe_enabled(not args.skip_probes)
@@ -855,8 +913,20 @@ def main() -> None:
     _ensure_schema(conn)
 
     grand_total = 0
+    provider_filters = _normalize_provider_filters(args.provider_filters)
     for sub in target_subs:
-        grand_total += harvest_subscription(sub, conn, dry_run=args.dry_run)
+        try:
+            grand_total += harvest_subscription(
+                sub,
+                conn,
+                dry_run=args.dry_run,
+                provider_filters=provider_filters,
+                skip_post_harvest=args.skip_post_harvest,
+            )
+        except ValueError as exc:
+            print(f"[error] {exc}", file=sys.stderr)
+            conn.close()
+            sys.exit(1)
 
     conn.close()
     print(f"\n[harvest] Done. {grand_total} assets across {len(target_subs)} subscription(s).")

@@ -21,14 +21,24 @@
   function extractEdgeMetadata(diagramSource, sourceId, targetId) {
     if (!diagramSource) return null;
     
-    // Match lines with arrows between source and target nodes
-    // Pattern: sourceId -->|"label"| targetId  %% {metadata}
-    const edgePattern = new RegExp(
-      `${escapeRegex(sourceId)}\\s+-->\\|[^|]+\\|\\s+${escapeRegex(targetId)}\\s+%%\\s+(.+)$`,
-      'gm'
-    );
+    const patterns = [
+      // Legacy inline form: sourceId -->|"label"| targetId  %% {metadata}
+      new RegExp(
+        `${escapeRegex(sourceId)}\\s+-->\\|[^|]+\\|\\s+${escapeRegex(targetId)}\\s+%%\\s+(.+)$`,
+        'gm'
+      ),
+      // Safer two-line form: %% {metadata}\nsourceId -->|"label"| targetId
+      new RegExp(
+        `(?:^|\\n)\\s*%%\\s+(.+)\\n\\s*${escapeRegex(sourceId)}\\s+-->\\|[^|]+\\|\\s+${escapeRegex(targetId)}(?=\\s|$)`,
+        'gm'
+      ),
+    ];
     
-    const match = edgePattern.exec(diagramSource);
+    let match = null;
+    for (const pattern of patterns) {
+      match = pattern.exec(diagramSource);
+      if (match) break;
+    }
     if (!match) return null;
     
     try {

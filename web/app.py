@@ -15930,7 +15930,7 @@ _SUBSCRIPTION_DIAGRAM_CACHE: dict[str, tuple[float, str, dict]] = {}
 _SUBSCRIPTION_DIAGRAM_CACHE_TTL = 600  # 10 minutes
 # Bump this whenever diagram rendering logic changes (listener icons, pool icons, edge labels, etc.)
 # so the DB cache is automatically invalidated for all subscriptions.
-_DIAGRAM_CODE_VERSION = "v12"  # bumped: compact CSS classes to fix Mermaid 500-char line limit
+_DIAGRAM_CODE_VERSION = "v13"  # bumped: move APIM edge metadata onto its own line to avoid Mermaid parse errors
 
 
 def _subscription_diagram_cache_signature(conn, sub_id: str) -> tuple[str | None, tuple[str, str] | None]:
@@ -18497,7 +18497,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 _metadata_json = _metadata_json[:_max_metadata_len] + '..."}'
             
             _add_link(
-                f'    {_source_nid} -->|"{_edge_label}"| {api_nid}  %% {_metadata_json}',
+                f'    %% {_metadata_json}\n    {_source_nid} -->|"{_edge_label}"| {api_nid}',
                 "orange",
             )
      
@@ -18612,7 +18612,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 _metadata_json = _metadata_json[:_max_metadata_len] + '..."}'
             
             _add_link(
-                f'    {_source_nid} -->|"{_edge_label}"| {_be_nid}  %% {_metadata_json}',
+                f'    %% {_metadata_json}\n    {_source_nid} -->|"{_edge_label}"| {_be_nid}',
                 "#f59e0b",
             )
 
