@@ -4060,3 +4060,54 @@ class TestCloudAssetsApi:
         assert any(item["label"] == "App Service Environment" for item in data["type_summary"])
         assert any(item["label"] == "Function App" for item in data["type_summary"])
         assert any(item["label"] == "ACR" for item in data["type_summary"])
+
+    def test_api_subscriptions_counts_distinct_assets(self, monkeypatch):
+        import os
+        import sys
+        import sqlite3
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT,
+                last_synced TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                is_public INTEGER DEFAULT 0
+            );
+            """
+        )
+        conn.executemany(
+            "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+            [
+                ("sub-1", "Demo Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+                ("sub-1", "Demo Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO provisioned_assets (id, subscription_id, is_public) VALUES (?, ?, ?)",
+            [
+                ("asset-1", "sub-1", 1),
+                ("asset-2", "sub-1", 0),
+            ],
+        )
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+
+        client = app_module.app.test_client()
+        resp = client.get("/api/subscriptions")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert len(data["subscriptions"]) == 1
+        subscription = data["subscriptions"][0]
+        assert subscription["asset_count"] == 2
+        assert subscription["public_count"] == 1

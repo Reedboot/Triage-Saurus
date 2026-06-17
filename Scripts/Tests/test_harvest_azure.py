@@ -34,7 +34,7 @@ from Azure._helpers import (
     route_path_matches,
 )
 from Azure._staged import BackfillJob, StagedRows
-from Azure import app_configuration, storage, aks, key_vault, sql_server, service_bus, event_hub
+from Azure import app_configuration, storage, aks, key_vault, sql_server, service_bus, event_hub, virtual_network
 
 
 def _is_ip_address(value: str) -> bool:
@@ -452,6 +452,46 @@ class TestExtractIpRestrictions:
         result = extract_ip_restrictions(network_acls=network_acls)
         assert isinstance(result, list)
         assert "10.0.0.0/8" in result
+
+
+class TestVirtualNetworkHarvest:
+    def test_emits_subnet_assets_with_attachment_metadata(self, monkeypatch):
+        vnet_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-one"
+        subnet_id = f"{vnet_id}/subnets/app"
+
+        def fake_az(args, subscription_id):
+            assert args == ["network", "vnet", "list"]
+            return [{
+                "id": vnet_id,
+                "name": "vnet-one",
+                "resourceGroup": "rg-net",
+                "location": "westus",
+                "type": "Microsoft.Network/virtualNetworks",
+                "properties": {
+                    "addressSpace": {"addressPrefixes": ["10.0.0.0/16"]},
+                    "subnets": [{
+                        "id": subnet_id,
+                        "name": "app",
+                        "properties": {
+                            "addressPrefix": "10.0.1.0/24",
+                            "networkSecurityGroup": {"id": "/nsgs/app-nsg", "name": "app-nsg"},
+                            "routeTable": {"id": "/routetables/app-rt", "name": "app-rt"},
+                            "delegations": [{"properties": {"serviceName": "Microsoft.Web/serverFarms"}}],
+                        },
+                    }],
+                },
+            }]
+
+        monkeypatch.setattr(virtual_network, "az", fake_az)
+        rows = virtual_network.harvest("sub-1")
+
+        assert {row["id"] for row in rows} == {vnet_id, subnet_id}
+        subnet_row = next(row for row in rows if row["id"] == subnet_id)
+        extra = json.loads(subnet_row["raw_json"])["_extra"]
+        assert extra["parent_vnet_id"] == vnet_id
+        assert extra["network_security_group_name"] == "app-nsg"
+        assert extra["route_table_name"] == "app-rt"
+        assert extra["delegations"] == ["Microsoft.Web/serverFarms"]
 
 
 # ---------------------------------------------------------------------------
@@ -2144,7 +2184,9 @@ class TestSubscriptionOverlayPlanLinks:
             ),
         ]
         plan_links = [("rg1", "functions_windows", "rg1", "functions_plan")]
-        view = mod.build_subscription_overlay_views(
+        diagrams = mod.build_subscription_diagrams_by_rg(
+            "Test Subscription",
+            "production",
             rows,
             sanitise_node_id=lambda s: s.replace("/", "_").replace("-", "_"),
             friendly_type=lambda t: t,
@@ -2152,11 +2194,83 @@ class TestSubscriptionOverlayPlanLinks:
             normalize_attack_paths=lambda *args, **kwargs: [],
             plan_links=plan_links,
         )
-        assert "hosted on" not in view["exposure"]["mermaid"]
-        assert view["exposure"]["asset_summary"]["backends"] == 1
-        titles = {v.get("title") for v in view["exposure"]["node_drilldown_map"].values()}
+        view = diagrams[0]["views"]["connectivity"]
+        assert "hosted on" not in view["mermaid"]
+        assert diagrams[0]["asset_summary"]["backends"] == 1
+        titles = {v.get("title") for v in view["node_drilldown_map"].values()}
         assert "functions_plan" in titles, titles
         assert "functions_windows" not in titles, titles
+
+
+class TestSubscriptionNetworkRendering:
+    def _import_helper(self):
+        import importlib.util
+        web_dir = ROOT / "web"
+        spec = importlib.util.spec_from_file_location(
+            "subscription_diagram_helpers",
+            web_dir / "subscription_diagram_helpers.py",
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_synthesizes_subnet_nodes_and_edges_from_vnet_raw_json(self):
+        mod = self._import_helper()
+        vnet_raw = json.dumps({
+            "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-one",
+            "name": "vnet-one",
+            "properties": {
+                "subnets": [{
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-one/subnets/app",
+                    "name": "app",
+                    "properties": {
+                        "addressPrefix": "10.0.1.0/24",
+                        "networkSecurityGroup": {"id": "/nsgs/app-nsg", "name": "app-nsg"},
+                        "routeTable": {"id": "/routetables/app-rt", "name": "app-rt"},
+                    },
+                }],
+            },
+            "_extra": {
+                "subnets": [{
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-one/subnets/app",
+                    "name": "app",
+                    "properties": {
+                        "addressPrefix": "10.0.1.0/24",
+                        "networkSecurityGroup": {"id": "/nsgs/app-nsg", "name": "app-nsg"},
+                        "routeTable": {"id": "/routetables/app-rt", "name": "app-rt"},
+                    },
+                }],
+            },
+        })
+        pe_raw = json.dumps({
+            "properties": {
+                "subnet": {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-one/subnets/app"
+                }
+            },
+            "_extra": {
+                "subnet_id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-one/subnets/app"
+            },
+        })
+        rows = [
+            ("vnet-one", "Microsoft.Network/virtualNetworks", "rg-net", "", 0, None, "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-one", 0, None, 0, None, None, vnet_raw, "[]"),
+            ("pe-one", "Microsoft.Network/privateEndpoints", "rg-net", "", 0, None, "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/privateEndpoints/pe-one", 0, None, 0, None, None, pe_raw, "[]"),
+        ]
+
+        diagrams = mod.build_subscription_diagrams_by_rg(
+            "Test Subscription",
+            "production",
+            rows,
+            sanitise_node_id=lambda s: s.replace("/", "_").replace("-", "_"),
+            friendly_type=lambda t: "Subnet" if "subnets" in (t or "").lower() else t,
+            get_icon_path=lambda t: None,
+            normalize_attack_paths=lambda *args, **kwargs: [],
+        )
+
+        mermaid = diagrams[0]["views"]["connectivity"]["mermaid"]
+        assert "contains" in mermaid
+        assert "in subnet" in mermaid
+        assert "app-nsg" in mermaid
 
 
 class TestKeyVaultHarvest:

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 from typing import Callable
 
 
 SUBSCRIPTION_DRILLABLE_ARM_TYPES = {
+    "microsoft.network/virtualnetworks",
+    "microsoft.network/virtualnetworks/subnets",
     "microsoft.network/applicationgateways",
     "microsoft.apimanagement/service",
     "microsoft.appconfiguration/configurationstores",
@@ -34,7 +37,10 @@ SUBSCRIPTION_FQDN_SUFFIXES = {
 
 def subscription_node_id(item: dict, sanitise_node_id: Callable[[str], str]) -> str:
     rg = item.get("rg") or "grp"
-    combined = f"{rg}_{item.get('name') or item.get('label') or 'resource'}"
+    if item.get("parent_vnet_name") and "subnet" in (item.get("arm_type") or "").lower():
+        combined = f"{rg}_{item.get('parent_vnet_name')}_{item.get('name') or item.get('label') or 'resource'}"
+    else:
+        combined = f"{rg}_{item.get('name') or item.get('label') or 'resource'}"
     return sanitise_node_id(combined)
 
 
@@ -63,10 +69,29 @@ def subscription_known_fqdn_suffix(arm_type: str) -> str | None:
 def subscription_asset_tier(arm_type: str, name: str = "") -> str:
     type_key = (arm_type or "").lower()
     item = {"name": name}
-    if "applicationgateway" in type_key or "frontdoor" in type_key or "publicipaddress" in type_key or "trafficmanager" in type_key or "cdn/profiles" in type_key or "network/loadbalancers" in type_key or "azurefirewalls" in type_key:
+    if (
+        "applicationgateway" in type_key
+        or "frontdoor" in type_key
+        or "publicipaddress" in type_key
+        or "trafficmanager" in type_key
+        or "cdn/profiles" in type_key
+        or "network/loadbalancers" in type_key
+        or "bastionhost" in type_key
+        or "azurefirewalls" in type_key
+    ):
         return "entry"
     if "apimanagement" in type_key:
         return "api"
+    if (
+        "virtualnetwork" in type_key
+        or "/subnets" in type_key
+        or "networksecuritygroup" in type_key
+        or "routetable" in type_key
+        or "privateendpoint" in type_key
+        or "privatednszones" in type_key
+        or "privatednszone" in type_key
+    ):
+        return "network"
     if (
         "managedcluster" in type_key
         or "containerinstance" in type_key
@@ -82,6 +107,8 @@ def subscription_asset_tier(arm_type: str, name: str = "") -> str:
         return "backend"
     if "sites" in type_key:
         return "backend" if not subscription_is_function_app(item) else "backend"
+    if "virtualmachinescalesets" in type_key:
+        return "backend"
     if (
         "sql" in type_key
         or "documentdb" in type_key
@@ -98,6 +125,29 @@ def subscription_asset_tier(arm_type: str, name: str = "") -> str:
 
 
 def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str]) -> list[dict]:
+    def _parse_json(value: object) -> dict | list | None:
+        if value is None or value == "":
+            return None
+        if isinstance(value, (dict, list)):
+            return value
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            return None
+        return parsed if isinstance(parsed, (dict, list)) else None
+
+    def _extract_subnet_id(parsed_raw_json: dict) -> str | None:
+        props = parsed_raw_json.get("properties") or {}
+        for candidate in (
+            props.get("subnetId"),
+            props.get("virtualNetworkSubnetId"),
+            (props.get("subnet") or {}).get("id"),
+            (props.get("hostingEnvironmentProfile") or {}).get("subnetResourceId"),
+        ):
+            if candidate:
+                return str(candidate)
+        return None
+
     assets: list[dict] = []
     for row in rows:
         name, rtype, rg, fqdn, is_public, sku = row[:6]
@@ -106,6 +156,22 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
         listeners = row[8] if len(row) > 8 else None
         is_restricted = bool(row[9]) if len(row) > 9 else False
         waf_mode = row[10] if len(row) > 10 else None
+        routing_targets = row[11] if len(row) > 11 else None
+        raw_json = row[12] if len(row) > 12 else None
+        auth_methods_raw = row[13] if len(row) > 13 else None
+        parsed_raw = _parse_json(raw_json)
+        if isinstance(auth_methods_raw, str):
+            try:
+                auth_methods = json.loads(auth_methods_raw)
+                if not isinstance(auth_methods, list):
+                    auth_methods = []
+            except Exception:
+                auth_methods = []
+        elif isinstance(auth_methods_raw, list):
+            auth_methods = auth_methods_raw
+        else:
+            auth_methods = []
+
         asset = {
             "name": name,
             "arm_type": rtype,
@@ -117,11 +183,78 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
             "has_waf": has_waf,
             "waf_mode": waf_mode,
             "listeners": listeners,
+            "routing_targets": routing_targets,
             "is_restricted": is_restricted,
             "tier": subscription_asset_tier(rtype, name),
             "friendly_type": friendly_type(rtype),
             "short_name": subscription_short_name(name or "resource"),
+            "auth_methods": auth_methods,
         }
+        if isinstance(parsed_raw, dict):
+            subnet_id = _extract_subnet_id(parsed_raw)
+            if subnet_id:
+                asset["subnet_id"] = subnet_id
+            extra = parsed_raw.get("_extra") or {}
+            if isinstance(extra, dict):
+                if extra.get("parent_vnet_id"):
+                    asset["parent_vnet_id"] = extra.get("parent_vnet_id")
+                    asset["parent_vnet_name"] = extra.get("parent_vnet_name")
+                    asset["parent_vnet_resource_group"] = extra.get("parent_vnet_resource_group")
+                    asset["address_prefix"] = extra.get("address_prefix")
+                    asset["address_prefixes"] = extra.get("address_prefixes") or []
+                    asset["network_security_group_id"] = extra.get("network_security_group_id")
+                    asset["network_security_group_name"] = extra.get("network_security_group_name")
+                    asset["route_table_id"] = extra.get("route_table_id")
+                    asset["route_table_name"] = extra.get("route_table_name")
+                    asset["delegations"] = extra.get("delegations") or []
+                elif (rtype or "").lower().endswith("/virtualnetworks"):
+                    subnets = extra.get("subnets") or []
+                    for subnet in subnets:
+                        if not isinstance(subnet, dict):
+                            continue
+                        subnet_name = subnet.get("name")
+                        subnet_id = subnet.get("id") or (
+                            f"{asset_id}/subnets/{subnet_name}" if asset_id and subnet_name else None
+                        )
+                        subnet_props = subnet.get("properties") or {}
+                        if not subnet_name or not subnet_id:
+                            continue
+                        assets.append({
+                            "name": subnet_name,
+                            "arm_type": "Microsoft.Network/virtualNetworks/subnets",
+                            "rg": rg or "default",
+                            "fqdn": "",
+                            "public": False,
+                            "sku": None,
+                            "id": subnet_id,
+                            "has_waf": False,
+                            "waf_mode": None,
+                            "listeners": None,
+                            "routing_targets": None,
+                            "is_restricted": bool(subnet_props.get("networkSecurityGroup") or subnet_props.get("routeTable")),
+                            "tier": "network",
+                            "friendly_type": friendly_type("Microsoft.Network/virtualNetworks/subnets"),
+                            "short_name": subscription_short_name(subnet_name),
+                            "parent_vnet_id": asset_id,
+                            "parent_vnet_name": name,
+                            "parent_vnet_resource_group": rg or "default",
+                            "resources": [
+                                {"rg": rg or "default", "name": name},
+                                {"rg": rg or "default", "name": subnet_name},
+                            ],
+                            "address_prefix": subnet_props.get("addressPrefix"),
+                            "address_prefixes": subnet_props.get("addressPrefixes") or [],
+                            "network_security_group_id": (subnet_props.get("networkSecurityGroup") or {}).get("id"),
+                            "network_security_group_name": (subnet_props.get("networkSecurityGroup") or {}).get("name"),
+                            "route_table_id": (subnet_props.get("routeTable") or {}).get("id"),
+                            "route_table_name": (subnet_props.get("routeTable") or {}).get("name"),
+                            "delegations": [
+                                (d.get("properties") or {}).get("serviceName")
+                                for d in subnet_props.get("delegations") or []
+                                if (d.get("properties") or {}).get("serviceName")
+                            ],
+                            "auth_methods": [],
+                        })
         resolved_fqdn = subscription_primary_fqdn(asset)
         asset["fqdn"] = resolved_fqdn
         asset["fqdns"] = [resolved_fqdn] if resolved_fqdn else []
@@ -148,7 +281,45 @@ def subscription_apply_plan_hierarchy(assets: list[dict], plan_links: list | Non
     def _type(asset: dict) -> str:
         return (asset.get("arm_type") or asset.get("type") or "").lower()
 
-    asset_map = {_key(asset): dict(asset) for asset in assets}
+    def _is_plan_type(asset: dict) -> bool:
+        return any(token in _type(asset) for token in ("serverfarms", "hostingenvironment"))
+
+    def _is_site_type(asset: dict) -> bool:
+        return "sites" in _type(asset)
+
+    def _merge_asset_payload(base: dict, extra: dict) -> dict:
+        merged = dict(base)
+        merged_resources = list(merged.get("resources") or [])
+        for resource in extra.get("resources") or []:
+            if resource not in merged_resources:
+                merged_resources.append(resource)
+        if merged_resources:
+            merged["resources"] = merged_resources
+
+        merged_fqdns = list(dict.fromkeys([*(merged.get("fqdns") or []), *(extra.get("fqdns") or [])]))
+        if merged_fqdns:
+            merged["fqdns"] = merged_fqdns
+
+        merged["public"] = bool(merged.get("public") or extra.get("public"))
+        merged["is_restricted"] = bool(merged.get("is_restricted") or extra.get("is_restricted"))
+
+        if base is not extra and (_is_plan_type(base) or _is_plan_type(extra)) and (_is_site_type(base) or _is_site_type(extra)):
+            merged["hosted_site_count"] = max(int(merged.get("hosted_site_count") or 0), int(extra.get("hosted_site_count") or 0), 1)
+        return merged
+
+    asset_map: dict[tuple[str, str], dict] = {}
+    for asset in assets:
+        key = _key(asset)
+        existing = asset_map.get(key)
+        if existing is None:
+            asset_map[key] = dict(asset)
+            continue
+        existing_is_plan = _is_plan_type(existing)
+        new_is_plan = _is_plan_type(asset)
+        if new_is_plan and not existing_is_plan:
+            asset_map[key] = _merge_asset_payload(asset, existing)
+        else:
+            asset_map[key] = _merge_asset_payload(existing, asset)
     hosted_by_parent: dict[tuple[str, str], list[dict]] = defaultdict(list)
 
     for site_rg, site_name, plan_rg, plan_name in plan_links:
@@ -156,6 +327,19 @@ def subscription_apply_plan_hierarchy(assets: list[dict], plan_links: list | Non
         plan_key = ((plan_name or "").lower(), (plan_rg or "").lower())
         site_asset = asset_map.get(site_key)
         parent_asset = asset_map.get(plan_key)
+        if site_key == plan_key:
+            site_candidate = next(
+                (asset for asset in assets if _key(asset) == site_key and _is_site_type(asset)),
+                None,
+            )
+            parent_candidate = next(
+                (asset for asset in assets if _key(asset) == plan_key and _is_plan_type(asset)),
+                None,
+            )
+            if site_candidate:
+                site_asset = site_candidate
+            if parent_candidate:
+                parent_asset = parent_candidate
         if not site_asset or not parent_asset:
             continue
         parent_type = _type(parent_asset)
@@ -277,6 +461,17 @@ def subscription_asset_label(asset: dict, include_badges: bool = False, include_
         asset.get("friendly_type") or asset.get("arm_type") or "resource",
         asset.get("short_name") or asset.get("name") or "resource",
     ]
+    if asset.get("parent_vnet_name") and "subnet" in (asset.get("arm_type") or "").lower():
+        parts.append(f"vnet: {asset.get('parent_vnet_name')}")
+        if asset.get("address_prefix"):
+            parts.append(str(asset.get("address_prefix")))
+        if asset.get("network_security_group_name"):
+            parts.append(f"nsg: {asset.get('network_security_group_name')}")
+        if asset.get("route_table_name"):
+            parts.append(f"rt: {asset.get('route_table_name')}")
+        delegations = asset.get("delegations") or []
+        if delegations:
+            parts.append(f"delegated: {', '.join(str(d) for d in delegations[:2])}")
     fqdn = subscription_primary_fqdn(asset)
     if include_fqdn and fqdn:
         parts.append(fqdn if len(fqdn) <= 42 else fqdn[:40] + "...")
@@ -308,6 +503,8 @@ def subscription_node_class(asset: dict) -> str:
         return "entryPointProtected" if (asset.get("has_waf") or asset.get("waf_mode") or asset.get("is_restricted")) else "entryPoint"
     if tier == "api":
         return "apiGateway"
+    if tier == "network":
+        return "network"
     if subscription_is_secret_store(asset.get("arm_type") or ""):
         return "secretStore"
     if tier == "data":
@@ -390,6 +587,7 @@ def render_subscription_view(
     lines.append("    classDef dataStore stroke:#2563eb,stroke-width:2px,fill:#172554;")
     lines.append("    classDef dataStorePublic stroke:#ef4444,stroke-width:2px,fill:#3b0a0a;")
     lines.append("    classDef secretStore stroke:#8b5cf6,stroke-width:2px,fill:#2e1065;")
+    lines.append("    classDef network stroke:#64748b,stroke-width:2px,fill:#0f172a;")
     lines.append("    classDef summary stroke:#6b7280,stroke-width:2px,fill:#111827;")
     lines.append("    classDef neutral stroke:#6b7280,stroke-width:2px,fill:#111827;")
 
@@ -409,6 +607,7 @@ def render_subscription_view(
         ".dataStore { stroke: #2563eb; stroke-width: 2px; fill: #172554; }",
         ".dataStorePublic { stroke: #ef4444; stroke-width: 2px; fill: #3b0a0a; }",
         ".secretStore { stroke: #8b5cf6; stroke-width: 2px; fill: #2e1065; }",
+        ".network { stroke: #64748b; stroke-width: 2px; fill: #0f172a; }",
         ".summary { stroke: #6b7280; stroke-width: 2px; fill: #111827; }",
     ]
 
@@ -594,22 +793,47 @@ def build_subscription_diagrams_by_rg(
     diagrams = []
 
     def rg_asset_summary(rg_assets: list[dict]) -> dict:
+        hosted_site_keys = {
+            ((site_name or "").lower(), (site_rg or "").lower())
+            for site_rg, site_name, _plan_rg, _plan_name in (plan_links or [])
+        }
+        def _is_visible_backend(asset: dict) -> bool:
+            if asset.get("tier") != "backend":
+                return False
+            key = ((asset.get("name") or "").lower(), (asset.get("rg") or "").lower())
+            if key in hosted_site_keys and "sites" in (asset.get("arm_type") or "").lower():
+                return False
+            return True
+
         return {
             "entry_points": sum(1 for asset in rg_assets if asset.get("tier") == "entry"),
             "api_layer": sum(1 for asset in rg_assets if asset.get("tier") == "api"),
-            "backends": sum(1 for asset in rg_assets if asset.get("tier") == "backend"),
+            "backends": sum(1 for asset in rg_assets if _is_visible_backend(asset)),
             "data_stores": sum(1 for asset in rg_assets if asset.get("tier") == "data"),
             "public_assets": sum(1 for asset in rg_assets if asset.get("public")),
         }
 
     def build_rg_view(rg: str, rg_assets: list[dict]) -> tuple[dict, int]:
         rg_assets = subscription_apply_plan_hierarchy(rg_assets, plan_links)
-        entries = [a for a in rg_assets if a.get("tier") == "entry"]
-        apis = [a for a in rg_assets if a.get("tier") == "api"]
-        backends = [a for a in rg_assets if a.get("tier") == "backend"]
-        data = [a for a in rg_assets if a.get("tier") == "data"]
-        public_assets = [a for a in rg_assets if a.get("public")]
         summary = rg_asset_summary(rg_assets)
+        hosted_site_keys = {
+            ((site_name or "").lower(), (site_rg or "").lower())
+            for site_rg, site_name, _plan_rg, _plan_name in (plan_links or [])
+        }
+        visible_rg_assets = [
+            asset
+            for asset in rg_assets
+            if not (
+                asset.get("tier") == "backend"
+                and "sites" in (asset.get("arm_type") or "").lower()
+                and ((asset.get("name") or "").lower(), (asset.get("rg") or "").lower()) in hosted_site_keys
+            )
+        ]
+        entries = [a for a in visible_rg_assets if a.get("tier") == "entry"]
+        apis = [a for a in visible_rg_assets if a.get("tier") == "api"]
+        backends = [a for a in visible_rg_assets if a.get("tier") == "backend"]
+        data = [a for a in visible_rg_assets if a.get("tier") == "data"]
+        public_assets = [a for a in visible_rg_assets if a.get("public")]
 
         # Detect AKS/SF-only RGs: compute clusters with no entry points or API layer
         # in scope. These clusters are connected at the subscription level (via APIM)
@@ -668,11 +892,16 @@ def build_subscription_diagrams_by_rg(
         exposure_internal_data = [a for a in data if not a.get("public")][:3] if (entries or apis or exposure_public_backends) else []
         exposure_data = exposure_public_data + exposure_internal_data
 
-        for asset in rg_assets:
+        for asset in visible_rg_assets:
             add_asset_node(asset, badges=False, include_fqdn=False)
 
         edges: list[dict] = []
         edge_keys: set[tuple[str, str, str]] = set()
+        asset_by_id = {
+            str(asset.get("id")).lower(): asset
+            for asset in visible_rg_assets
+            if asset.get("id")
+        }
 
         def add_edge(src: str, dst: str, label: str, color: str, *, width: str = "2px", dasharray: str | None = None) -> None:
             if src not in seen_nodes or dst not in seen_nodes:
@@ -701,6 +930,40 @@ def build_subscription_diagrams_by_rg(
             if restricted:
                 return subscription_allowlist_label(asset), "#f59e0b"
             return subscription_primary_fqdn(asset) or "public edge", "#ef4444"
+
+        # Network topology: VNet -> subnet and subnet -> contained resources.
+        subnet_assets = [
+            asset for asset in visible_rg_assets
+            if "subnet" in (asset.get("arm_type") or "").lower()
+            and asset.get("parent_vnet_name")
+        ]
+        for subnet in subnet_assets:
+            subnet_node_id = subscription_node_id(subnet, sanitise_node_id)
+            parent_vnet_id = str(subnet.get("parent_vnet_id") or "").lower()
+            parent_vnet_asset = asset_by_id.get(parent_vnet_id)
+            if parent_vnet_asset:
+                add_edge(
+                    subscription_node_id(parent_vnet_asset, sanitise_node_id),
+                    subnet_node_id,
+                    "contains",
+                    "#64748b",
+                    dasharray="6,3",
+                )
+
+        for asset in visible_rg_assets:
+            subnet_id = str(asset.get("subnet_id") or "").lower()
+            if not subnet_id:
+                continue
+            subnet_asset = asset_by_id.get(subnet_id)
+            if not subnet_asset:
+                continue
+            add_edge(
+                subscription_node_id(subnet_asset, sanitise_node_id),
+                subscription_node_id(asset, sanitise_node_id),
+                "in subnet",
+                "#64748b",
+                dasharray="6,3",
+            )
 
         # For cluster-only RGs, connect each cluster to the synthetic APIM context node
         # so it's clear the cluster is not orphaned — it's reachable from the subscription-level APIM.
@@ -765,23 +1028,6 @@ def build_subscription_diagrams_by_rg(
                         "data flow",
                         "#ffffff",
                     )
-
-        if plan_links:
-            plan_assets = {
-                ((asset.get("name") or "").lower(), (asset.get("rg") or "").lower()): asset
-                for asset in rg_assets
-                if "serverfarms" in (asset.get("arm_type") or "").lower()
-            }
-            site_assets = {
-                ((asset.get("name") or "").lower(), (asset.get("rg") or "").lower()): asset
-                for asset in rg_assets
-                if "sites" in (asset.get("arm_type") or "").lower()
-            }
-            for site_rg, site_name, plan_rg, plan_name in plan_links:
-                site_asset = site_assets.get((site_name.lower(), site_rg.lower()))
-                plan_asset = plan_assets.get((plan_name.lower(), plan_rg.lower()))
-                if site_asset and plan_asset:
-                    add_edge(subscription_node_id(site_asset, sanitise_node_id), subscription_node_id(plan_asset, sanitise_node_id), "hosted on", "#ffffff")
 
         descriptions = {
             "connectivity": "Shows inferred application, API, data, and hosting relationships inside this resource group.",

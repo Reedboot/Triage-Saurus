@@ -54,4 +54,49 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "raw_json": json.dumps({**vnet, "_extra": extra}),
         })
 
+        for subnet in subnets:
+            subnet_props = subnet.get("properties") or {}
+            subnet_name = subnet.get("name")
+            subnet_id = subnet.get("id") or (
+                f"{vnet['id']}/subnets/{subnet_name}" if subnet_name else None
+            )
+            if not subnet_name or not subnet_id:
+                continue
+
+            subnet_extra = {
+                "parent_vnet_id": vnet["id"],
+                "parent_vnet_name": vnet.get("name"),
+                "parent_vnet_resource_group": vnet.get("resourceGroup"),
+                "address_prefix": subnet_props.get("addressPrefix"),
+                "address_prefixes": subnet_props.get("addressPrefixes") or [],
+                "network_security_group_id": (subnet_props.get("networkSecurityGroup") or {}).get("id"),
+                "network_security_group_name": (subnet_props.get("networkSecurityGroup") or {}).get("name"),
+                "route_table_id": (subnet_props.get("routeTable") or {}).get("id"),
+                "route_table_name": (subnet_props.get("routeTable") or {}).get("name"),
+                "delegations": [
+                    (d.get("properties") or {}).get("serviceName")
+                    for d in subnet_props.get("delegations") or []
+                    if (d.get("properties") or {}).get("serviceName")
+                ],
+            }
+
+            results.append({
+                "id": subnet_id,
+                "subscription_id": subscription_id,
+                "resource_group": vnet.get("resourceGroup"),
+                "name": subnet_name,
+                "type": "Microsoft.Network/virtualNetworks/subnets",
+                "location": vnet.get("location"),
+                "sku": None,
+                "tags": json.dumps({}),
+                "is_public": 0,
+                "is_restricted": 0,
+                "ip_restrictions": json.dumps([]),
+                "endpoints": json.dumps([]),
+                "auth_methods": json.dumps([]),
+                "fqdn": None,
+                "pipeline_tag": None,
+                "raw_json": json.dumps({**subnet, "_extra": subnet_extra}),
+            })
+
     return results

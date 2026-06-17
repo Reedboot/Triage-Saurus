@@ -12384,7 +12384,7 @@ def api_repo_subscriptions_get(experiment_id: str, repo_name: str):
             """
             SELECT rs.subscription_id, rs.deploy_role, rs.notes, rs.created_at,
                    s.display_name, s.environment, s.state, s.last_synced,
-                   COUNT(pa.id) AS asset_count
+                   COUNT(DISTINCT pa.id) AS asset_count
             FROM repository_subscriptions rs
             JOIN subscriptions s ON s.id = rs.subscription_id
             LEFT JOIN provisioned_assets pa ON pa.subscription_id = s.id
@@ -14006,7 +14006,7 @@ def _build_subscription_architecture_payload(
             is_restricted = asset.get("is_restricted")
             
             if has_waf and is_restricted:
-                edge_color = "#f97316"  # Orange - WAF + IP allowlist
+                edge_color = "#f97316"  # Orange - WAF + IP restricted
                 label = f"WAF + Restricted · {protocol}:{port}"
             elif has_waf:
                 edge_color = "#f97316"  # Orange - WAF protected
@@ -14069,8 +14069,8 @@ def _build_subscription_architecture_payload(
             
             # Determine edge color and label based on protection level
             if has_waf and is_restricted:
-                edge_color = "#f97316"  # Orange - WAF + IP allowlist
-                waf_label = "WAF + IP allowlist"
+                edge_color = "#f97316"  # Orange - WAF + IP restricted
+                waf_label = "WAF + IP restricted"
             elif has_waf:
                 if "prevention" in waf_mode.lower():
                     edge_color = "#f97316"  # Orange - WAF Prevention
@@ -15421,9 +15421,9 @@ def api_cloud_assets_all():
             """
             SELECT s.id, s.display_name, s.environment, s.state,
                    s.last_synced,
-                   COUNT(pa.id)                            AS total,
-                   SUM(CASE WHEN pa.is_public=1 THEN 1 ELSE 0 END) AS public_count,
-                   SUM(CASE WHEN pa.status='potentially_removed' THEN 1 ELSE 0 END) AS stale_count
+                   COUNT(DISTINCT pa.id)                            AS total,
+                   COUNT(DISTINCT CASE WHEN pa.is_public=1 THEN pa.id END) AS public_count,
+                   COUNT(DISTINCT CASE WHEN pa.status='potentially_removed' THEN pa.id END) AS stale_count
             FROM subscriptions s
             LEFT JOIN provisioned_assets pa ON pa.subscription_id = s.id
             GROUP BY s.id
@@ -15781,8 +15781,8 @@ def api_subscriptions_list():
         rows = conn.execute(
             """
             SELECT s.id, s.display_name, s.environment, s.state, s.last_synced,
-                   COUNT(pa.id) AS asset_count,
-                   SUM(pa.is_public) AS public_count
+                   COUNT(DISTINCT pa.id) AS asset_count,
+                   COUNT(DISTINCT CASE WHEN pa.is_public = 1 THEN pa.id END) AS public_count
             FROM subscriptions s
             LEFT JOIN provisioned_assets pa ON pa.subscription_id = s.id
             GROUP BY s.id
@@ -16119,7 +16119,8 @@ def api_subscription_diagram(sub_id: str):
                        ELSE NULL
                    END AS routing_targets,
                    pa.raw_json,
-                   pa.auth_methods
+                   pa.auth_methods,
+                   pa.ip_restrictions
             FROM provisioned_assets pa
             WHERE subscription_id = ?
             ORDER BY 
@@ -16334,6 +16335,18 @@ def _friendly_type(arm_type: str) -> str:
         "microsoft.web/sites": "App Service",
         "microsoft.web/serverfarms": "App Service Plan",
         "microsoft.web/hostingenvironments": "App Service Environment",
+        "microsoft.network/virtualnetworks": "VNet",
+        "microsoft.network/virtualnetworks/subnets": "Subnet",
+        "microsoft.network/networksecuritygroups": "NSG",
+        "microsoft.network/routetables": "Route Table",
+        "microsoft.network/publicipaddresses": "Public IP",
+        "microsoft.network/loadbalancers": "Load Balancer",
+        "microsoft.network/bastionhosts": "Bastion",
+        "microsoft.network/privateendpoints": "Private Endpoint",
+        "microsoft.network/privatednszones": "Private DNS Zone",
+        "microsoft.network/privatednszones/virtualnetworklinks": "Private DNS Link",
+        "microsoft.managedidentity/userassignedidentities": "Managed Identity",
+        "microsoft.compute/virtualmachinescalesets": "VM Scale Set",
         "microsoft.storage/storageaccounts/blobservices/containers": "Blob Container",
         "microsoft.storage/storageaccounts/blobservices/containers/blobs": "Blob",
         "microsoft.sql/servers/databases": "SQL Database",
@@ -16353,8 +16366,6 @@ def _friendly_type(arm_type: str) -> str:
         "microsoft.cognitiveservices/accounts": "AI Services",
         "microsoft.insights/components": "App Insights",
         "microsoft.appconfiguration/configurationstores": "App Config",
-        "microsoft.network/virtualnetworks": "VNet",
-        "microsoft.network/networksecuritygroups": "NSG",
         "microsoft.network/trafficmanagerprofiles": "Traffic Manager",
         "microsoft.servicefabric/clusters": "Service Fabric",
         "microsoft.search/searchservices": "AI Search",
@@ -17140,6 +17151,107 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         if isinstance(anonymous_pull, bool):
             return not anonymous_pull
         return True
+
+    def _normalise_auth_methods(auth_methods_raw) -> list[str]:
+        if isinstance(auth_methods_raw, str):
+            try:
+                auth_methods_raw = json.loads(auth_methods_raw)
+            except Exception:
+                return []
+        if not isinstance(auth_methods_raw, list):
+            return []
+        return [str(method or "").strip().lower() for method in auth_methods_raw if str(method or "").strip()]
+
+    def _auth_summary(auth_methods_raw) -> str | None:
+        tokens = set(_normalise_auth_methods(auth_methods_raw))
+        labels: list[str] = []
+        if tokens.intersection({"managed_identity", "managedidentity", "system_assigned_identity", "user_assigned_identity", "msi"}):
+            labels.append("Managed identity")
+        if tokens.intersection({"azure_ad", "azuread", "entra", "entra_id"}):
+            labels.append("Azure AD")
+        if tokens.intersection({"basic_publishing_credentials", "account_key", "sas_token", "username_password", "basic_credentials"}):
+            labels.append("Basic credentials")
+        return ", ".join(labels) if labels else None
+
+    def _parse_rules(value) -> list:
+        if value is None or value == "":
+            return []
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except Exception:
+                return []
+            return parsed if isinstance(parsed, list) else []
+        return []
+
+    def _restriction_label(raw_json, ip_restrictions=None) -> str | None:
+        parsed = raw_json
+        if isinstance(raw_json, str):
+            try:
+                parsed = json.loads(raw_json)
+            except Exception:
+                parsed = {}
+        if not isinstance(parsed, dict):
+            parsed = {}
+        props = parsed.get("properties") or {}
+        extra = parsed.get("_extra") or {}
+        rule_sets = [
+            ip_restrictions,
+            extra.get("ip_restrictions"),
+            extra.get("ip_rules"),
+            extra.get("network_security_restrictions"),
+            props.get("ipRules"),
+            props.get("ipSecurityRestrictions"),
+            (props.get("networkAcls") or {}).get("ipRules"),
+            (props.get("networkAcls") or {}).get("virtualNetworkRules"),
+            (props.get("networkRuleSet") or {}).get("ipRules"),
+            (props.get("networkRuleSet") or {}).get("virtualNetworkRules"),
+        ]
+        for rule_set in rule_sets:
+            if _parse_rules(rule_set):
+                if any("/subnets/" in str(rule).lower() or "virtualnetwork" in str(rule).lower() for rule in _parse_rules(rule_set)):
+                    return "VNet restricted"
+                return "IP restricted"
+        default_actions = [
+            extra.get("network_default_action"),
+            props.get("networkDefaultAction"),
+            (props.get("networkAcls") or {}).get("defaultAction"),
+            (props.get("networkRuleSet") or {}).get("defaultAction"),
+        ]
+        if any(str(action or "").strip().lower() == "deny" for action in default_actions):
+            return "IP restricted"
+        return None
+
+    def _rbac_label(raw_json) -> str | None:
+        parsed = raw_json
+        if isinstance(raw_json, str):
+            try:
+                parsed = json.loads(raw_json)
+            except Exception:
+                parsed = {}
+        if not isinstance(parsed, dict):
+            return None
+        props = parsed.get("properties") or {}
+        for candidate in (
+            props.get("enableRbacAuthorization"),
+            parsed.get("enableRbacAuthorization"),
+            (parsed.get("_extra") or {}).get("enable_rbac_authorization"),
+        ):
+            if isinstance(candidate, bool):
+                return "RBAC true" if candidate else "RBAC false"
+        return None
+
+    def _node_security_suffix(item: dict) -> str:
+        parts: list[str] = []
+        restriction = item.get("restriction_label")
+        if restriction:
+            parts.append(str(restriction))
+        auth = item.get("auth_summary")
+        if auth:
+            parts.append(str(auth))
+        return f" ({', '.join(parts)})" if parts else ""
     
     # Categorize resources by type to show entry point flow
     entry_points = []  # Public IPs, App Gateways, WAFs
@@ -17178,6 +17290,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         routing_targets = row[11] if len(row) > 11 else None
         raw_json = row[12] if len(row) > 12 else None
         auth_methods_raw = row[13] if len(row) > 13 else None
+        ip_restrictions_raw = row[14] if len(row) > 14 else None
         try:
             auth_methods = json.loads(auth_methods_raw) if isinstance(auth_methods_raw, str) else (auth_methods_raw or [])
             if not isinstance(auth_methods, list):
@@ -17188,6 +17301,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         auth_required = bool(auth_tokens) and not bool(
             auth_tokens.intersection({"none", "anonymous", "unauthenticated", "no_auth"})
         )
+        restriction_label = _restriction_label(raw_json, ip_restrictions_raw) or (("IP restricted" if is_restricted else None))
+        rbac_label = _rbac_label(raw_json)
         item = {
             "name": name,
             "type": rtype,
@@ -17197,11 +17312,14 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             "rg": rg,
             "has_waf": has_waf,
             "listeners": listeners,
-            "is_restricted": bool(is_restricted),
+            "is_restricted": bool(is_restricted or restriction_label),
+            "restriction_label": restriction_label,
             "waf_mode": waf_mode,
             "routing_targets": routing_targets,
             "auth_methods": auth_methods,
             "auth_required": auth_required,
+            "auth_summary": _auth_summary(auth_methods),
+            "rbac_label": rbac_label,
         }
         type_key = (rtype or "").lower()
         if "containerregistry" in type_key:
@@ -17367,7 +17485,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 for item in items:
                     result.append({
                         "name": item["name"],
-                        "label": _short_name(item["name"]),
+                        "label": f"{_short_name(item['name'])}{_node_security_suffix(item)}",
                         "count": 1,
                         "type": category,
                         "arm_type": item["type"],
@@ -17394,7 +17512,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                         merged_targets.append(target)
                 result.append({
                     "name": f"{category}_ep_group",
-                    "label": category,
+                    "label": f"{category}{_node_security_suffix({'restriction_label': 'IP restricted' if any(i.get('is_restricted') for i in items) else None, 'auth_summary': next((i.get('auth_summary') for i in items if i.get('auth_summary')), None)})}",
                     "count": len(items),
                     "type": category,
                     "arm_type": items[0]["type"],
@@ -17589,7 +17707,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 for item in items:
                     result.append({
                         "name": item["name"],
-                        "label": _short_name(item["name"]),
+                        "label": f"{_short_name(item['name'])}{_node_security_suffix(item)}",
                         "count": 1,
                         "type": category,
                         "arm_type": item["type"],
@@ -17606,7 +17724,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 _group_auth_required = _auth_required_values.pop() if len(_auth_required_values) == 1 else None
                 result.append({
                     "name": f"{category}_ds_group",
-                    "label": f"{category} ({len(items)}×)",
+                    "label": f"{category} ({len(items)}×){_node_security_suffix({'restriction_label': 'IP restricted' if any(i.get('is_restricted') for i in items) else None, 'auth_summary': next((i.get('auth_summary') for i in items if i.get('auth_summary')), None)})}",
                     "count": len(items),
                     "type": category,
                     "arm_type": items[0]["type"],
@@ -17949,12 +18067,14 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         node_id = _get_node_id(item)
         arm_type = item.get("arm_type") or item["type"]
         label = item.get("label") or item.get("type") or _friendly_type(arm_type)
-        access_indicator = " 🌐" if item.get("public") else " 🔒"
+        access_indicator = " 🌐" if item.get("public") and not item.get("is_restricted") else " 🔒"
         if "containerregistry" in (arm_type or "").lower():
             exposure_txt = "Public" if item.get("public") else "Private"
             creds_req = item.get("acr_requires_credentials")
             creds_txt = "Creds required" if creds_req is not False else "Anonymous pull"
             label = f"{label} ({exposure_txt}, {creds_txt})"
+        elif item.get("restriction_label") or item.get("auth_summary"):
+            label = f"{label}{_node_security_suffix(item)}"
         # ⚠️ badge for publicly-exposed App Service Plans not confirmed in APIM routing
         if item.get("apim_unverified"):
             access_indicator += " ⚠️"
@@ -17969,17 +18089,21 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             if item.get("public"):
                 exposure_txt = "Public"
             elif item.get("is_restricted"):
-                exposure_txt = "Restricted"
+                exposure_txt = item.get("restriction_label") or "IP restricted"
             else:
                 exposure_txt = "Private"
-            auth_required = item.get("auth_required")
-            if auth_required is True:
-                auth_txt = "Auth required"
-            elif auth_required is False:
-                auth_txt = "Anonymous access"
-            else:
-                auth_txt = "Auth unknown"
+            auth_txt = item.get("auth_summary")
+            if not auth_txt:
+                auth_required = item.get("auth_required")
+                if auth_required is True:
+                    auth_txt = "Auth required"
+                elif auth_required is False:
+                    auth_txt = "Anonymous access"
+                else:
+                    auth_txt = "Auth unknown"
             label = f"{label} ({exposure_txt}, {auth_txt})"
+        elif item.get("restriction_label") or item.get("auth_summary"):
+            label = f"{label}{_node_security_suffix(item)}"
         if arm_type:
             lines.append(_node_line(node_id, label, arm_type))
         else:
@@ -18159,7 +18283,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             proto = "TCP:6380"
         elif "documentdb" in t:
             proto = "HTTPS"
-        elif "sites" in t or "managedcluster" in t or "apimanagement" in t:
+        elif "sites" in t or "serverfarms" in t or "hostingenvironment" in t or "managedcluster" in t or "apimanagement" in t:
             proto = "HTTP/HTTPS"
         else:
             proto = "TCP"
@@ -18168,7 +18292,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     def _allowlist_target_label(item: dict) -> str:
         """Label IP-allowlisted edges with the concrete resource family."""
         family = str(item.get("type") or item.get("label") or _friendly_type(item.get("arm_type") or "")).strip()
-        return f"IP allowlist ({family})" if family else "IP allowlist"
+        return f"IP restricted ({family})" if family else "IP restricted"
 
     def _is_allowlist_target(item: dict) -> bool:
         """Only show allowlist edges for endpoints that actually accept inbound traffic."""
@@ -18216,7 +18340,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             return "DNS routing", "#f97316"
 
         if has_waf and restricted:
-            return "WAF + IP allowlist", "#f97316"
+            return "WAF + IP restricted", "#f97316"
         if has_waf:
             if "prevention" in waf_mode:
                 return "WAF (Prev) 🛡️", "#f97316"
@@ -18384,7 +18508,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             elif entry.get("has_waf") or entry.get("waf_mode"):
                 routing_label = '"Routing (WAF ✓)"'
             elif entry.get("is_restricted"):
-                routing_label = '"Routing (IP allowlist)"'
+                routing_label = '"Routing (IP restricted)"'
             else:
                 routing_label = '"Routing"'
             _add_link(f'    {_get_node_id(entry)} -->|{routing_label}| {api_nid}', "orange")
@@ -18410,7 +18534,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             elif entry.get("has_waf") or entry.get("waf_mode"):
                 routing_label = '"Routing (WAF ✓)"'
             elif entry.get("is_restricted"):
-                routing_label = '"Routing (IP allowlist)"'
+                routing_label = '"Routing (IP restricted)"'
             else:
                 routing_label = '"Routing"'
             _add_link(f'    {_get_node_id(entry)} -->|{routing_label}| {first_backend_nid}', "orange")
@@ -18713,37 +18837,60 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         Single resource → exact FQDN.  Group → wildcard pattern (*.vault.azure.net).
         Falls back to protocol label when no FQDN can be determined.
         """
+        count = int(item.get("count") or 1)
+        if count > 1 or item.get("is_group") or item.get("hosted_site_count"):
+            return _data_exposure_label(arm_type, count)
+
         fqdns = _resolve_fqdns(item)
-        count = item.get("count", 1)
         if fqdns:
             first = fqdns[0]
             if len(first) > 40:
                 first = first[:38] + "…"
             # For groups show count alongside the pattern so scale is clear
-            return f"{first} x{count}" if count > 1 else first
-        return _data_exposure_label(arm_type, count)
+            label = f"{first} x{count}" if count > 1 else first
+        else:
+            label = _data_exposure_label(arm_type, count)
+
+        if item.get("rbac_label") and any(token in arm_type for token in ("keyvault", "storage", "appconfiguration", "documentdb")):
+            return f"{item['rbac_label']} · {label}"
+        return label
 
     for item in shown_backend:
         arm_type = (item.get("arm_type") or "").lower()
         if item.get("public"):
             node_id = _get_node_id(item)
-            # Prefix backends that bypass AppGW/APIM with ⚠️ to highlight the exposure
-            arrow_label = "⚠️ " + _direct_exposure_label(arm_type, item)
-            _add_link(f'    Internet -->|"{arrow_label}"| {node_id}', "red")
+            # Prefix backends that bypass AppGW/APIM with the exposure posture.
+            arrow_label = _direct_exposure_label(arm_type, item)
+            if item.get("is_restricted"):
+                arrow_label = f"IP restricted · {arrow_label}"
+            else:
+                arrow_label = "⚠️ " + arrow_label
+            arrow_color = "#f59e0b" if item.get("is_restricted") else "red"
+            _add_link(f'    Internet -->|"{arrow_label}"| {node_id}', arrow_color)
 
     for item in shown_api:
         arm_type = (item.get("arm_type") or "").lower()
         if item.get("public"):
             node_id = _get_node_id(item)
-            arrow_label = "⚠️ " + _direct_exposure_label(arm_type, item)
-            _add_link(f'    Internet -->|"{arrow_label}"| {node_id}', "red")
+            arrow_label = _direct_exposure_label(arm_type, item)
+            if item.get("is_restricted"):
+                arrow_label = f"IP restricted · {arrow_label}"
+            else:
+                arrow_label = "⚠️ " + arrow_label
+            arrow_color = "#f59e0b" if item.get("is_restricted") else "red"
+            _add_link(f'    Internet -->|"{arrow_label}"| {node_id}', arrow_color)
 
     for item in shown_data:
         arm_type = (item.get("arm_type") or "").lower()
         if item.get("public"):
             node_id = _get_node_id(item)
-            arrow_label = "⚠️ " + _direct_exposure_label(arm_type, item)
-            _add_link(f'    Internet -->|"{arrow_label}"| {node_id}', "red")
+            arrow_label = _direct_exposure_label(arm_type, item)
+            if item.get("is_restricted"):
+                arrow_label = f"IP restricted · {arrow_label}"
+            else:
+                arrow_label = "⚠️ " + arrow_label
+            arrow_color = "#f59e0b" if item.get("is_restricted") else "red"
+            _add_link(f'    Internet -->|"{arrow_label}"| {node_id}', arrow_color)
 
     for item in shown_api + shown_backend + shown_data:
         if item.get("is_restricted") and not item.get("public") and _is_allowlist_target(item):
