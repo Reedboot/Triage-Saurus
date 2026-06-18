@@ -322,6 +322,7 @@ function renderReactFlowDiagram(container, payload) {
           minZoom: 0.15,
           maxZoom: 2.5,
           panOnDrag: true,
+          panOnScroll: false,
           zoomOnScroll: true,
           zoomOnPinch: true,
           nodesDraggable: false,

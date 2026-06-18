@@ -31,7 +31,10 @@
       
       try {
         console.log('[TriageMermaid] Calling mermaid.run()');
-        const result = await window.mermaid.run();
+        const nodes = container ? Array.from(container.querySelectorAll('.mermaid')) : [];
+        const result = nodes.length && window.mermaid.run
+          ? await window.mermaid.run({ nodes })
+          : await window.mermaid.run();
         console.log('[TriageMermaid] mermaid.run() completed, result:', result);
       } catch (e) {
         console.error('[TriageMermaid] Error calling mermaid.run():', e);

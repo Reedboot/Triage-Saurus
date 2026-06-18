@@ -3239,6 +3239,248 @@ class TestCloudPosture:
         data = resp.get_json()
         assert data["posture"]["behind_waf"] is True
 
+    def test_subscription_architecture_payload_handles_current_waf_schema(self):
+        import sqlite3
+
+        from web.app import _build_subscription_architecture_payload
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE subscriptions (
+                    id TEXT PRIMARY KEY,
+                    display_name TEXT,
+                    environment TEXT,
+                    state TEXT
+                );
+                CREATE TABLE provisioned_assets (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    resource_group TEXT,
+                    name TEXT,
+                    type TEXT,
+                    location TEXT,
+                    sku TEXT,
+                    fqdn TEXT,
+                    is_public INTEGER DEFAULT 0,
+                    status TEXT,
+                    pipeline_tag TEXT,
+                    first_detected TEXT,
+                    last_synced TEXT,
+                    raw_json TEXT,
+                    is_restricted INTEGER DEFAULT 0,
+                    waf_mode TEXT
+                );
+                CREATE TABLE appgw_waf_policies (
+                    name TEXT,
+                    subscription_id TEXT,
+                    resource_group TEXT,
+                    mode TEXT,
+                    state TEXT,
+                    managed_rule_sets TEXT,
+                    custom_rules_count INTEGER DEFAULT 0,
+                    associated_gateways TEXT
+                );
+                """
+            )
+            conn.execute(
+                "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+                ("sub-1", "Test Subscription", "production", "Enabled"),
+            )
+            conn.execute(
+                """
+                INSERT INTO appgw_waf_policies (
+                    name, subscription_id, resource_group, mode, state, managed_rule_sets,
+                    custom_rules_count, associated_gateways
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "policy-one",
+                    "sub-1",
+                    "rg-net",
+                    "Prevention",
+                    "Enabled",
+                    '[{"type": "OWASP", "version": "3.2"}]',
+                    2,
+                    '["appgw-one"]',
+                ),
+            )
+
+            payload = _build_subscription_architecture_payload(conn, "sub-1")
+        finally:
+            conn.close()
+
+        waf_nodes = [node for node in payload["nodes"] if node["data"].get("typeLabel") == "WAF Policy"]
+        assert len(waf_nodes) == 1, payload
+        assert waf_nodes[0]["data"].get("label") == "policy-one", waf_nodes[0]
+
+    def test_cloud_architecture_page_labels_tabs_mermaid_and_react_flow(self, monkeypatch):
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+        conn.commit()
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+
+        client = app_module.app.test_client()
+        resp = client.get("/cloud/architecture?sub=sub-1")
+        assert resp.status_code == 200
+        html = resp.get_data(as_text=True)
+        assert "Mermaid" in html
+        assert "React Flow" in html
+        assert "Miro" not in html
+
+    def test_api_cloud_architecture_returns_payload_with_current_waf_schema(self, monkeypatch):
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            CREATE TABLE appgw_waf_policies (
+                name TEXT,
+                subscription_id TEXT,
+                resource_group TEXT,
+                mode TEXT,
+                state TEXT,
+                managed_rule_sets TEXT,
+                custom_rules_count INTEGER DEFAULT 0,
+                associated_gateways TEXT
+            );
+            CREATE TABLE firewall_policies (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                name TEXT,
+                resource_group TEXT,
+                associated_firewalls TEXT,
+                mode TEXT,
+                threat_intelligence_mode TEXT,
+                dns_proxy_enabled INTEGER DEFAULT 0,
+                rule_collection_groups TEXT,
+                nat_rule_count INTEGER DEFAULT 0,
+                app_rule_count INTEGER DEFAULT 0,
+                last_synced TEXT
+            );
+            CREATE TABLE firewall_app_rules (
+                firewall_policy_id TEXT,
+                subscription_id TEXT,
+                firewall_name TEXT
+            );
+            CREATE TABLE firewall_nat_rules (
+                firewall_policy_id TEXT,
+                subscription_id TEXT,
+                firewall_name TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+        conn.execute(
+            """
+            INSERT INTO appgw_waf_policies (
+                name, subscription_id, resource_group, mode, state, managed_rule_sets,
+                custom_rules_count, associated_gateways
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "policy-one",
+                "sub-1",
+                "rg-net",
+                "Prevention",
+                "Enabled",
+                '[{"type": "OWASP", "version": "3.2"}]',
+                2,
+                '["appgw-one"]',
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO firewall_policies (
+                id, subscription_id, name, resource_group, associated_firewalls, mode,
+                threat_intelligence_mode, dns_proxy_enabled, rule_collection_groups,
+                nat_rule_count, app_rule_count, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "fw-1",
+                "sub-1",
+                "fw-policy-one",
+                "rg-net",
+                '["fw-one"]',
+                "Alert",
+                "Alert",
+                0,
+                "[]",
+                1,
+                3,
+                "2026-06-01T00:00:00Z",
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/architecture?sub=sub-1&view=overview")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["subscription_id"] == "sub-1"
+        assert any(node["data"].get("typeLabel") == "WAF Policy" for node in data["nodes"])
+        assert any(node["data"].get("typeLabel") == "Network Firewall" for node in data["nodes"])
+
     def test_subscription_diagram_uses_persistent_cache(self, monkeypatch):
         import json
         import os

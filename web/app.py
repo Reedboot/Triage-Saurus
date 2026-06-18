@@ -13380,19 +13380,39 @@ def _build_subscription_architecture_payload(
 
     # Add WAF Policy nodes as separate visible nodes
     if _table_exists(conn, "appgw_waf_policies"):
+        waf_policy_columns = _table_columns(conn, "appgw_waf_policies")
+        waf_select_cols = [
+            "name",
+            "subscription_id",
+            "resource_group" if "resource_group" in waf_policy_columns else "NULL AS resource_group",
+            "mode" if "mode" in waf_policy_columns else "NULL AS mode",
+            "state" if "state" in waf_policy_columns else "NULL AS state",
+            "associated_gateways" if "associated_gateways" in waf_policy_columns else "NULL AS associated_gateways",
+        ]
+        if "managed_rule_sets" in waf_policy_columns:
+            waf_select_cols.append("managed_rule_sets")
+        if "custom_rules_count" in waf_policy_columns:
+            waf_select_cols.append("custom_rules_count")
         waf_policy_rows = conn.execute(
             """
-            SELECT name, subscription_id, resource_group, mode, state, managed_rules_enabled, custom_rules_count, associated_gateways
+            SELECT {select_cols}
             FROM appgw_waf_policies
             WHERE subscription_id = ? AND COALESCE(LOWER(state), 'enabled') != 'disabled'
             ORDER BY name
-            """,
+            """.format(select_cols=", ".join(waf_select_cols)),
             (sub_id,),
         ).fetchall()
         for waf_row in waf_policy_rows:
+            waf_row = dict(waf_row)
             waf_mode = (waf_row["mode"] or "Unknown").strip()
             state = (waf_row["state"] or "Enabled").strip()
-            managed_rules = "Managed Rules" if waf_row.get("managed_rules_enabled") else ""
+            managed_rules = ""
+            if "managed_rule_sets" in waf_policy_columns:
+                try:
+                    managed_rule_sets = json.loads(waf_row.get("managed_rule_sets") or "[]")
+                except Exception:
+                    managed_rule_sets = []
+                managed_rules = "Managed Rules" if managed_rule_sets else ""
             custom_count = waf_row.get("custom_rules_count") or 0
             sku_label = f"{waf_mode} · {state}" + (f" · {managed_rules}" if managed_rules else "") + (f" · {custom_count} custom rules" if custom_count > 0 else "")
             assets.append(
@@ -13436,19 +13456,62 @@ def _build_subscription_architecture_payload(
 
     # Add Network Firewall nodes if present
     if _table_exists(conn, "firewall_policies"):
+        firewall_policy_columns = _table_columns(conn, "firewall_policies")
+        fw_select_cols = [
+            "fp.id",
+            "fp.name",
+            "fp.resource_group" if "resource_group" in firewall_policy_columns else "NULL AS resource_group",
+            "NULL AS location",
+            "fp.sku" if "sku" in firewall_policy_columns else "NULL AS sku",
+            "fp.threat_intelligence_mode" if "threat_intelligence_mode" in firewall_policy_columns else "NULL AS threat_intelligence_mode",
+            "fp.mode" if "mode" in firewall_policy_columns else "NULL AS mode",
+            "fp.associated_firewalls" if "associated_firewalls" in firewall_policy_columns else "NULL AS associated_firewalls",
+        ]
+        app_rules_count_expr = "0"
+        nat_rules_count_expr = "0"
+        if "associated_firewalls" in firewall_policy_columns:
+            app_rules_count_expr = """
+                (
+                    SELECT COUNT(*)
+                    FROM firewall_app_rules far
+                    WHERE far.subscription_id = fp.subscription_id
+                      AND EXISTS (
+                          SELECT 1
+                          FROM json_each(COALESCE(fp.associated_firewalls, '[]')) af
+                          WHERE af.value = far.firewall_name
+                      )
+                )
+            """
+            nat_rules_count_expr = """
+                (
+                    SELECT COUNT(*)
+                    FROM firewall_nat_rules fnr
+                    WHERE fnr.subscription_id = fp.subscription_id
+                      AND EXISTS (
+                          SELECT 1
+                          FROM json_each(COALESCE(fp.associated_firewalls, '[]')) af
+                          WHERE af.value = fnr.firewall_name
+                      )
+                )
+            """
         firewall_rows = conn.execute(
             """
-            SELECT fp.id, fp.name, fp.resource_group, fp.location, fp.sku, fp.threat_intel_mode,
-                   (SELECT COUNT(*) FROM firewall_app_rules far WHERE far.firewall_policy_id = fp.id) as app_rules_count,
-                   (SELECT COUNT(*) FROM firewall_nat_rules fnr WHERE fnr.firewall_policy_id = fp.id) as nat_rules_count
+            SELECT {select_cols},
+                   {app_rules_count_expr} as app_rules_count,
+                   {nat_rules_count_expr} as nat_rules_count
             FROM firewall_policies fp
             WHERE fp.subscription_id = ?
             ORDER BY fp.name
-            """,
+            """.format(
+                select_cols=", ".join(fw_select_cols),
+                app_rules_count_expr=app_rules_count_expr,
+                nat_rules_count_expr=nat_rules_count_expr,
+            ),
             (sub_id,),
         ).fetchall() if _table_exists(conn, "firewall_app_rules") and _table_exists(conn, "firewall_nat_rules") else []
         for fw_row in firewall_rows:
-            threat_mode = (fw_row["threat_intel_mode"] or "Alert").strip()
+            fw_row = dict(fw_row)
+            threat_mode = (fw_row.get("threat_intelligence_mode") or fw_row.get("mode") or "Alert").strip()
             app_rules = fw_row.get("app_rules_count") or 0
             nat_rules = fw_row.get("nat_rules_count") or 0
             sku_label = f"{threat_mode} · {app_rules + nat_rules} rules"
@@ -13460,7 +13523,7 @@ def _build_subscription_architecture_payload(
                     "type_label": "Firewall Policy",
                     "display_type_label": "Network Firewall",
                     "resource_group": fw_row["resource_group"] or "",
-                    "location": fw_row["location"],
+                    "location": fw_row.get("location"),
                     "sku": sku_label,
                     "fqdn": None,
                     "is_public": False,
@@ -14540,6 +14603,13 @@ def api_cloud_architecture():
         experiment_id = (request.args.get("experiment_id") or "").strip()
         repo_name = (request.args.get("repo_name") or "").strip() or None
 
+        if view_mode in {"mermaid", "overview"}:
+            view_mode = "overview"
+        elif view_mode in {"reactflow", "full"}:
+            view_mode = "full"
+        else:
+            view_mode = "overview"
+
         if subscription_selector or not experiment_id:
             payload = _build_subscription_architecture_payload(conn, subscription_selector, view_mode=view_mode)
             return jsonify(payload)
@@ -14788,9 +14858,9 @@ def api_cloud_resource_details():
                 "encryption_at_rest": _extract_encryption_at_rest(raw_json),
             },
             "identity": {
-                "type": raw_json.get("identity", {}).get("type"),
+                "type": (raw_json.get("identity") or {}).get("type"),
                 "managed_identity": _extract_managed_identity(raw_json),
-                "user_assigned_identities": list((raw_json.get("identity", {}).get("userAssignedIdentities") or {}).keys()),
+                "user_assigned_identities": list(((raw_json.get("identity") or {}).get("userAssignedIdentities") or {}).keys()),
             },
             "logging": {
                 "diagnostic_logging_enabled": _has_diagnostic_logging(raw_json),
@@ -14827,7 +14897,9 @@ def _extract_sku_tier(raw_json: dict) -> str | None:
 
 def _extract_managed_identity(raw_json: dict) -> bool:
     """Check if resource has managed identity enabled."""
-    identity = raw_json.get("identity", {})
+    identity = raw_json.get("identity") or {}
+    if not isinstance(identity, dict):
+        return False
     identity_type = (identity.get("type") or "").lower()
     return "systemassigned" in identity_type or "userassigned" in identity_type
 
@@ -15338,14 +15410,26 @@ def get_apim_child_apis():
 
 @app.route("/cloud/architecture")
 def cloud_architecture_page():
-    """Render the React Flow cloud architecture view."""
+    """Render the cloud architecture view."""
     conn = _get_db_with_schema()
     initial_subscription = (request.args.get("sub") or request.args.get("subscription") or "").strip()
     initial_view_mode = (request.args.get("view") or request.args.get("mode") or "").strip().lower()
-    if initial_view_mode not in {"overview", "full"}:
-        initial_view_mode = "overview"
-    if conn and not initial_subscription:
-        initial_subscription = _cloud_subscription_default_selector()
+    if initial_view_mode in {"mermaid", "overview"}:
+        initial_view_mode = "mermaid"
+    elif initial_view_mode in {"reactflow", "full"}:
+        initial_view_mode = "reactflow"
+    else:
+        initial_view_mode = "mermaid"
+    subscription_options = []
+    if conn:
+        subscription_options = _get_available_subscriptions(conn)
+        resolved_row = _cloud_resolve_subscription(conn, initial_subscription or None)
+        if resolved_row:
+            initial_subscription = resolved_row["display_name"] or resolved_row["id"]
+        elif not initial_subscription:
+            default_row = _cloud_resolve_subscription(conn, None)
+            if default_row:
+                initial_subscription = default_row["display_name"] or default_row["id"]
     if conn:
         conn.close()
     from flask import render_template as _rt
@@ -15353,6 +15437,7 @@ def cloud_architecture_page():
         "cloud_architecture.html",
         initial_subscription=initial_subscription,
         initial_view_mode=initial_view_mode,
+        subscription_options=subscription_options,
     )
 
 

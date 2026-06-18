@@ -1,3 +1,13 @@
+import {
+  sanitizeMermaidSource,
+  stampSvgDimensions,
+} from "./diagram-shared.js";
+import {
+  patchForeignObjectLabels,
+  enhancePlaceholderGlyphs,
+  applyEmojiIconFallback,
+} from "./diagram-base.js";
+
 const React = window.React;
 const { createRoot } = window.ReactDOM;
 const { Background, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow } = window.ReactFlow;
@@ -13,9 +23,30 @@ const errorCardEl = document.getElementById("cloud-arch-error-card");
 const errorEl = document.getElementById("cloud-arch-error");
 const formEl = document.getElementById("cloud-arch-form");
 const subscriptionInput = document.getElementById("subscription-input");
+const mermaidViewEl = document.getElementById("cloud-arch-mermaid-view");
+const mermaidRootEl = document.getElementById("cloud-arch-mermaid-root");
 const viewButtons = Array.from(document.querySelectorAll("[data-cloud-arch-view]"));
-const INITIAL_VIEW_MODE = (CONFIG.initialViewMode || "overview").toLowerCase();
-let activeViewMode = INITIAL_VIEW_MODE === "full" ? "full" : "overview";
+const INITIAL_VIEW_MODE = (CONFIG.initialViewMode || "mermaid").toLowerCase();
+
+function normalizeViewMode(value) {
+  const mode = (value || "").trim().toLowerCase();
+  if (mode === "reactflow" || mode === "full") {
+    return "reactflow";
+  }
+  return "mermaid";
+}
+
+function viewModeLabel(mode) {
+  return normalizeViewMode(mode) === "reactflow" ? "React Flow" : "Mermaid";
+}
+
+let activeViewMode = normalizeViewMode(INITIAL_VIEW_MODE);
+if (rootEl) {
+  rootEl.hidden = activeViewMode === "mermaid";
+}
+if (mermaidViewEl) {
+  mermaidViewEl.hidden = activeViewMode !== "mermaid";
+}
 
 const PROVIDER_THEMES = {
   azure: { label: "Azure", iconPath: "/static/assets/icons/azure/compute/aks.svg", border: "#0078d4", background: "rgba(0, 120, 212, 0.14)" },
@@ -35,9 +66,190 @@ function themeFor(key) {
   return PROVIDER_THEMES[key] || PROVIDER_THEMES.unknown;
 }
 
+async function readJsonResponse(resp) {
+  const contentType = (resp.headers.get("content-type") || "").toLowerCase();
+  const bodyText = await resp.text();
+
+  if (!bodyText) {
+    return null;
+  }
+
+  if (contentType.includes("application/json") || bodyText.trim().startsWith("{") || bodyText.trim().startsWith("[")) {
+    try {
+      return JSON.parse(bodyText);
+    } catch (err) {
+      throw new Error(`Invalid JSON response: ${err.message}`);
+    }
+  }
+
+  throw new Error(bodyText.trim().slice(0, 300) || `Unexpected ${resp.status} response`);
+}
+
+function escapeMermaidText(value) {
+  return String(value ?? "")
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\r?\n/g, " ")
+    .replace(/\|/g, "/")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function sanitizeMermaidId(value, fallback) {
+  const raw = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return raw || fallback;
+}
+
+function buildNodeLabel(nodeLabel, typeLabel, repoLabel) {
+  const lines = [typeLabel, nodeLabel, repoLabel]
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .map((item) => escapeMermaidText(item));
+
+  return lines.join("\\n");
+}
+
+function buildMermaidGraph(payload, subscriptionName) {
+  const nodes = Array.isArray(payload?.nodes) ? payload.nodes : [];
+  const edges = Array.isArray(payload?.edges) ? payload.edges : [];
+  const nodeIdMap = new Map();
+  const providerOrder = Object.keys(PROVIDER_THEMES);
+  const providerGroups = new Map();
+  let autoIndex = 0;
+
+  for (const node of nodes) {
+    const providerKey = node?.data?.providerKey || "unknown";
+    if (!providerGroups.has(providerKey)) {
+      providerGroups.set(providerKey, []);
+    }
+    providerGroups.get(providerKey).push(node);
+  }
+
+  const orderedProviders = [
+    ...providerOrder,
+    ...Array.from(providerGroups.keys()).filter((key) => !providerOrder.includes(key)).sort(),
+  ];
+
+  for (const providerKey of orderedProviders) {
+    if (!providerGroups.has(providerKey)) continue;
+    providerGroups.get(providerKey).sort((a, b) => {
+      const aLabel = String(a?.data?.label || a?.id || "");
+      const bLabel = String(b?.data?.label || b?.id || "");
+      return aLabel.localeCompare(bLabel);
+    });
+  }
+
+  const lines = ["flowchart TB"];
+  const rootLabel = escapeMermaidText(subscriptionName || "Cloud Architecture");
+  lines.push(`  subgraph ARCH["${rootLabel}"]`);
+
+  for (const providerKey of orderedProviders) {
+    const bucket = providerGroups.get(providerKey);
+    if (!bucket || bucket.length === 0) continue;
+    const theme = themeFor(providerKey);
+    const groupId = `grp_${sanitizeMermaidId(providerKey, "provider")}`;
+    lines.push(`    subgraph ${groupId}["${escapeMermaidText(theme.label)}"]`);
+    for (const node of bucket) {
+      const mermaidId = sanitizeMermaidId(node?.id, `node_${autoIndex++}`);
+      nodeIdMap.set(String(node?.id), mermaidId);
+      const title = node?.data?.label || node?.data?.providerLabel || node?.id || "Node";
+      const typeLabel = node?.data?.typeLabel || "";
+      const repoLabel = node?.data?.repoName || "";
+      const nodeLabel = buildNodeLabel(title, typeLabel, repoLabel);
+      lines.push(`      ${mermaidId}["${nodeLabel}"]`);
+      const className = node?.data?.summaryNode
+        ? "cloudSummary"
+        : node?.data?.public
+          ? "cloudPublic"
+          : node?.data?.isRestricted
+            ? "cloudRestricted"
+            : "cloudPrivate";
+      lines.push(`      class ${mermaidId} ${className}`);
+    }
+    lines.push("    end");
+  }
+
+  lines.push("");
+  lines.push("    classDef cloudPrivate fill:#0f172a,stroke:#64748b,stroke-width:2px,color:#e2e8f0;");
+  lines.push("    classDef cloudPublic fill:#102a43,stroke:#f97316,stroke-width:2px,color:#ffffff;");
+  lines.push("    classDef cloudRestricted fill:#1f2937,stroke:#f59e0b,stroke-width:2px,color:#ffffff;");
+  lines.push("    classDef cloudSummary fill:#111827,stroke:#94a3b8,stroke-width:2px,stroke-dasharray:4 3,color:#e2e8f0;");
+
+  const seenEdges = new Set();
+  for (const edge of edges) {
+    const sourceId = nodeIdMap.get(String(edge?.source));
+    const targetId = nodeIdMap.get(String(edge?.target));
+    if (!sourceId || !targetId) continue;
+    const rawLabel = String(edge?.label || "").trim();
+    const label = rawLabel ? `|${escapeMermaidText(rawLabel)}|` : "";
+    const edgeKey = `${sourceId}->${targetId}->${label}`;
+    if (seenEdges.has(edgeKey)) continue;
+    seenEdges.add(edgeKey);
+    lines.push(`    ${sourceId} -->${label} ${targetId}`);
+  }
+
+  lines.push("  end");
+  return lines.join("\n");
+}
+
+async function renderMermaidGraph(payload, subscriptionName) {
+  if (!mermaidViewEl || !mermaidRootEl) {
+    return;
+  }
+
+  const diagram = buildMermaidGraph(payload, subscriptionName);
+  const mermaidSource = sanitizeMermaidSource(diagram);
+
+  if (!window.mermaid) {
+    return;
+  }
+
+  if (window.mermaid.initialize) {
+    window.mermaid.initialize({
+      startOnLoad: false,
+      theme: "dark",
+      securityLevel: "loose",
+      maxTextSize: 500000,
+      flowchart: {
+        useMaxWidth: false,
+        htmlLabels: false,
+      },
+      onError: (err) => {
+        console.error("[Mermaid] Rendering error:", err?.message || err);
+      },
+    });
+  }
+
+  try {
+    const renderId = `cloud_arch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const rendered = await window.mermaid.render(renderId, mermaidSource);
+    mermaidRootEl.innerHTML = rendered.svg || "";
+    const svg = mermaidRootEl.querySelector("svg");
+    if (svg) {
+      stampSvgDimensions(svg);
+      patchForeignObjectLabels(svg);
+      enhancePlaceholderGlyphs(svg);
+      applyEmojiIconFallback(svg);
+      if (window.MermaidIconInjector) {
+        const iconDataUrl = "/api/icon-mappings?provider=all";
+        [0, 250, 700].forEach((delay) => {
+          setTimeout(() => window.MermaidIconInjector.processAllDiagrams({ iconDataUrl }), delay);
+        });
+      }
+    }
+  } catch (err) {
+    console.error("[cloud-architecture] Mermaid render failed:", err);
+    mermaidRootEl.innerHTML = `<pre style="color: var(--red); white-space: pre-wrap;">${escapeHtml(err.message || String(err))}</pre>`;
+  }
+}
+
 function syncViewButtons() {
   for (const button of viewButtons) {
-    const mode = (button.dataset.cloudArchView || "").toLowerCase();
+    const mode = normalizeViewMode(button.dataset.cloudArchView || "");
     const isActive = mode === activeViewMode;
     button.classList.toggle("is-active", isActive);
     button.setAttribute("aria-pressed", isActive ? "true" : "false");
@@ -201,15 +413,18 @@ function openModal(resourceId, nodeData) {
   }
   
   fetch(url.toString(), { headers: { Accept: "application/json" } })
-    .then(resp => resp.json())
-    .then(data => {
-      if (data.error) {
+    .then(async (resp) => {
+      const data = await readJsonResponse(resp);
+      if (!resp.ok) {
+        throw new Error(data?.error || `Request failed with status ${resp.status}`);
+      }
+      if (data?.error) {
         throw new Error(data.error);
       }
       renderModalContent(data);
     })
     .catch(err => {
-      modalBody.innerHTML = `<div class="cloud-arch-modal-empty">❌ Error loading details: ${err.message}</div>`;
+      modalBody.innerHTML = `<div class="cloud-arch-modal-empty">❌ Error loading details: ${escapeHtml(err.message)}</div>`;
     });
 }
 
@@ -683,17 +898,18 @@ function App() {
     errorEl.textContent = "";
   }, []);
 
-  const renderSummary = useCallback((payload, subscriptionName) => {
+  const renderSummary = useCallback((payload, subscriptionName, viewMode) => {
     const providers = payload?.summary?.provider_counts || [];
     const resourceCount = payload?.summary?.resource_count ?? 0;
     const displayedCount = payload?.summary?.displayed_resource_count ?? resourceCount;
     const omittedCount = payload?.summary?.omitted_resource_count ?? 0;
     const connectionCount = payload?.summary?.connection_count ?? 0;
+    const modeLabel = viewModeLabel(viewMode);
     summaryLineEl.innerHTML = [
       `<span><strong>${resourceCount}</strong> resources</span>`,
       omittedCount > 0 ? `<span><strong>${displayedCount}</strong> shown</span>` : null,
       `<span><strong>${connectionCount}</strong> connections</span>`,
-      payload?.summary?.layout_mode ? `<span><strong>${payload.summary.layout_mode}</strong> mode</span>` : null,
+      payload?.summary?.layout_mode ? `<span><strong>${modeLabel}</strong> mode</span>` : null,
       `<span><strong>${subscriptionName || "subscription-production"}</strong></span>`,
     ]
       .filter(Boolean)
@@ -752,7 +968,7 @@ function App() {
 
     const url = new URL("/api/cloud/architecture", window.location.origin);
     const sub = (subscriptionName || "").trim();
-    const mode = (viewMode || activeViewMode || "overview").trim().toLowerCase() === "full" ? "full" : "overview";
+    const mode = normalizeViewMode(viewMode || activeViewMode || "mermaid");
     activeViewMode = mode;
     syncViewButtons();
     if (sub) {
@@ -762,7 +978,7 @@ function App() {
 
     try {
       const resp = await fetch(url.toString(), { headers: { Accept: "application/json" } });
-      const payload = await resp.json();
+      const payload = await readJsonResponse(resp);
       if (!resp.ok) {
         throw new Error(payload?.error || `Request failed with status ${resp.status}`);
       }
@@ -915,15 +1131,24 @@ function App() {
       setNodes(preparedNodes);
       setEdges(deduplicatedEdges);
       setGraphKey(`${payload.subscription_id || sub || "latest"}:${payload?.summary?.layout_mode || mode}:${preparedNodes.length}:${preparedEdges.length}`);
-      renderSummary(payload, payload.subscription_name || sub || "subscription-production");
+      renderSummary(payload, payload.subscription_name || sub || "subscription-production", mode);
       const isEmpty = preparedNodes.length === 0;
       emptyEl.hidden = !isEmpty;
-      rootEl.hidden = isEmpty;
+      if (mermaidViewEl) {
+        mermaidViewEl.hidden = isEmpty || mode !== "mermaid";
+      }
+      rootEl.hidden = isEmpty || mode === "mermaid";
+      if (mermaidRootEl && mode !== "mermaid") {
+        mermaidRootEl.innerHTML = "";
+      }
       if (!isEmpty) {
         const query = new URLSearchParams();
         if (payload.subscription_id || sub) query.set("sub", payload.subscription_name || sub);
         if (mode) query.set("view", mode);
         window.history.replaceState(null, "", `${window.location.pathname}${query.toString() ? `?${query}` : ""}`);
+        if (mode === "mermaid") {
+          await renderMermaidGraph(payload, payload.subscription_name || sub || "subscription-production");
+        }
       }
     } catch (err) {
       setNodes([]);
@@ -931,6 +1156,12 @@ function App() {
       setGraphKey(`error:${Date.now()}`);
       emptyEl.hidden = true;
       rootEl.hidden = true;
+      if (mermaidViewEl) {
+        mermaidViewEl.hidden = true;
+      }
+      if (mermaidRootEl) {
+        mermaidRootEl.innerHTML = "";
+      }
       showError(err instanceof Error ? err.message : String(err));
       summaryLineEl.textContent = "Unable to load cloud architecture.";
       legendEl.innerHTML = "";
@@ -968,7 +1199,7 @@ function App() {
         proOptions: { hideAttribution: true },
         minZoom: 0.08,
         maxZoom: 2.5,
-        panOnScroll: true,
+        panOnScroll: false,
         zoomOnScroll: true,
         nodesDraggable: false,
         nodesConnectable: false,
@@ -996,11 +1227,11 @@ if (formEl) {
 
 for (const button of viewButtons) {
   button.addEventListener("click", () => {
-    const mode = (button.dataset.cloudArchView || "").toLowerCase();
+    const mode = normalizeViewMode(button.dataset.cloudArchView || "");
     if (!mode || mode === activeViewMode) {
       return;
     }
-    activeViewMode = mode === "full" ? "full" : "overview";
+    activeViewMode = mode;
     syncViewButtons();
     if (typeof window.__triageCloudArchLoad === "function") {
       window.__triageCloudArchLoad((subscriptionInput.value || "").trim(), activeViewMode);

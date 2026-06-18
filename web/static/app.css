@@ -1031,10 +1031,14 @@ button.secondary:hover, .btn-secondary:hover { background: var(--border); color:
   border: 1px solid var(--border) !important;
 }
 
-.react-flow__controls button {
+.react-flow__controls-button {
   background: var(--bg-base) !important;
   color: var(--text) !important;
   border-color: var(--border) !important;
+}
+
+.react-flow__controls-button svg {
+  fill: currentColor !important;
 }
 
 .react-flow__minimap {

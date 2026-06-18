@@ -8,6 +8,9 @@
   <link rel="stylesheet" href="/static/app.css?v=8" />
   <link rel="stylesheet" href="/static/vendor/reactflow.css" />
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+  <script src="/static/js/mermaid-loader.js"></script>
+  <script src="/static/js/mermaid-icon-injector.js" defer></script>
+  <script src="/static/js/cloud-mermaid-helper.js" defer></script>
   <style>
     body {
       margin: 0;
@@ -61,6 +64,42 @@
     .cloud-arch-view-toggle button:focus-visible {
       outline: 2px solid var(--accent-border);
       outline-offset: 2px;
+    }
+
+    .cloud-arch-views {
+      position: absolute;
+      inset: 0;
+    }
+
+    .cloud-arch-view {
+      position: absolute;
+      inset: 0;
+    }
+
+    .cloud-arch-view[hidden] {
+      display: none !important;
+    }
+
+    .cloud-arch-mermaid-view {
+      overflow: auto;
+      padding: 24px;
+      background: #1a1a1a;
+    }
+
+    #cloud-arch-mermaid-root {
+      min-width: min(1400px, calc(100vw - 80px));
+    }
+
+    #cloud-arch-mermaid-root .mermaid {
+      display: inline-block;
+      width: max-content;
+      min-width: 100%;
+      background: #161b22;
+      border-radius: 8px;
+      padding: 30px;
+      overflow-x: auto;
+      margin-bottom: 20px;
+      min-height: 600px;
     }
 
     .cloud-arch-title {
@@ -676,12 +715,12 @@
         <span class="emoji">☁️</span>
         <span>Cloud Architecture</span>
       </div>
-      <div class="cloud-arch-view-toggle" role="group" aria-label="Graph view mode">
-        <button type="button" data-cloud-arch-view="overview" class="is-active">Overview</button>
-        <button type="button" data-cloud-arch-view="full">Full graph</button>
+      <div class="cloud-arch-view-toggle" role="group" aria-label="Diagram view mode">
+        <button type="button" data-cloud-arch-view="mermaid" class="is-active">Mermaid</button>
+        <button type="button" data-cloud-arch-view="reactflow">React Flow</button>
       </div>
       <form class="cloud-arch-form" id="cloud-arch-form">
-        <input class="cloud-arch-input" id="subscription-input" name="sub" value="{{ initial_subscription }}" placeholder="Subscription id or name" />
+        <input class="cloud-arch-input" id="subscription-input" name="sub" list="cloud-arch-subscription-options" value="{{ initial_subscription }}" placeholder="Subscription name" autocomplete="off" />
         <button class="btn-diagram" type="submit">Load architecture</button>
       </form>
     </header>
@@ -728,7 +767,12 @@
         </div>
       </div>
 
-      <div id="cloud-arch-root" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0;"></div>
+      <div class="cloud-arch-views">
+        <div class="cloud-arch-view cloud-arch-mermaid-view" id="cloud-arch-mermaid-view" hidden>
+          <div id="cloud-arch-mermaid-root"></div>
+        </div>
+        <div class="cloud-arch-view" id="cloud-arch-root" style="top: 0; left: 0; right: 0; bottom: 0;"></div>
+      </div>
       <div class="cloud-arch-empty" id="cloud-arch-empty" hidden>
         <div>
           <div style="font-size: 2rem; margin-bottom: 8px;">🕸️</div>
@@ -737,6 +781,12 @@
       </div>
     </main>
   </div>
+
+  <datalist id="cloud-arch-subscription-options">
+    {% for sub in subscription_options or [] %}
+      <option value="{{ sub.display_name }}">{{ sub.display_name }}{% if sub.environment %} ({{ sub.environment }}){% endif %}</option>
+    {% endfor %}
+  </datalist>
 
   <!-- Component Detail Modal -->
   <div class="cloud-arch-modal-overlay" id="cloud-arch-modal-overlay" hidden>
