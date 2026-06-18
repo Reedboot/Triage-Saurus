@@ -2955,6 +2955,106 @@ class TestCosmosDbFqdnResolution:
         assert len(result["rows"]) == 1, result["rows"]
         assert result["rows"][0][2] == "Redis Cache", result["rows"]
 
+    def test_generic_drilldown_disambiguates_duplicate_resource_names(self):
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        from web.app import _build_child_table
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute(
+                """
+                CREATE TABLE provisioned_assets (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    resource_group TEXT,
+                    name TEXT,
+                    type TEXT,
+                    location TEXT,
+                    sku TEXT,
+                    tags TEXT,
+                    is_public INTEGER DEFAULT 0,
+                    fqdn TEXT,
+                    pipeline_tag TEXT,
+                    raw_json TEXT,
+                    endpoints TEXT,
+                    auth_methods TEXT,
+                    first_detected TEXT,
+                    last_synced TEXT,
+                    status TEXT DEFAULT 'active',
+                    is_restricted INTEGER DEFAULT 0
+                )
+                """
+            )
+            conn.executemany(
+                """
+                INSERT INTO provisioned_assets (
+                    id, subscription_id, resource_group, name, type, location, sku,
+                    tags, is_public, fqdn, pipeline_tag, raw_json, endpoints, auth_methods,
+                    first_detected, last_synced, status, is_restricted
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        "/subscriptions/sub-1/resourceGroups/blue-network-ukwest/providers/Microsoft.Network/publicIPAddresses/bastion",
+                        "sub-1",
+                        "blue-network-ukwest",
+                        "bastion",
+                        "Microsoft.Network/publicIPAddresses",
+                        "uksouth",
+                        "Standard",
+                        None,
+                        1,
+                        None,
+                        None,
+                        "{}",
+                        None,
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        "active",
+                        0,
+                    ),
+                    (
+                        "/subscriptions/sub-1/resourceGroups/green-network-ukwest/providers/Microsoft.Network/publicIPAddresses/bastion",
+                        "sub-1",
+                        "green-network-ukwest",
+                        "bastion",
+                        "Microsoft.Network/publicIPAddresses",
+                        "uksouth",
+                        "Standard",
+                        None,
+                        1,
+                        None,
+                        None,
+                        "{}",
+                        None,
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        "active",
+                        0,
+                    ),
+                ],
+            )
+
+            result = _build_child_table(
+                conn,
+                "sub-1",
+                "Microsoft.Network/publicIPAddresses",
+                [{"rg": "blue-network-ukwest", "name": "bastion"}, {"rg": "green-network-ukwest", "name": "bastion"}],
+            )
+        finally:
+            conn.close()
+
+        assert result["view_type"] == "table"
+        assert {row[0] for row in result["rows"]} == {
+            "bastion (blue-network-ukwest)",
+            "bastion (green-network-ukwest)",
+        }, result["rows"]
+
 
 class TestSubscriptionOverlayViews:
     """Regression tests for the shared subscription overlay helper."""
@@ -3352,6 +3452,91 @@ class TestCloudPosture:
         assert "React Flow" in html
         assert "Miro" not in html
 
+    def test_api_cloud_resource_details_handles_nsg_null_sku(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                tags TEXT,
+                is_public INTEGER DEFAULT 0,
+                fqdn TEXT,
+                pipeline_tag TEXT,
+                raw_json TEXT,
+                waf_mode TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                status TEXT DEFAULT 'active',
+                is_restricted INTEGER DEFAULT 0
+            );
+            """
+        )
+        nsg_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/production_windows"
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, tags,
+                is_public, fqdn, pipeline_tag, raw_json, waf_mode, first_detected, last_synced, status, is_restricted
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                nsg_id,
+                "sub-1",
+                "rg-net",
+                "production_windows",
+                "Microsoft.Network/networkSecurityGroups",
+                "westus",
+                None,
+                "{}",
+                0,
+                None,
+                None,
+                json.dumps({"sku": None, "properties": None}),
+                None,
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+                "active",
+                0,
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/resource-details", query_string={"id": nsg_id})
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        assert data["type_label"] == "NSG"
+        assert data["configuration"]["sku_tier"] is None
+
     def test_api_cloud_architecture_returns_payload_with_current_waf_schema(self, monkeypatch):
         import os
         import sqlite3
@@ -3480,6 +3665,304 @@ class TestCloudPosture:
         assert data["subscription_id"] == "sub-1"
         assert any(node["data"].get("typeLabel") == "WAF Policy" for node in data["nodes"])
         assert any(node["data"].get("typeLabel") == "Network Firewall" for node in data["nodes"])
+
+    def test_api_cloud_architecture_renders_bastion_public_ip_hierarchy(self, monkeypatch):
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            CREATE TABLE appgw_routing_rules (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                gateway_name TEXT,
+                backend_fqdn TEXT,
+                backend_pool_name TEXT,
+                protocol TEXT,
+                port INTEGER,
+                waf_policy_name TEXT,
+                listener_protocol TEXT
+            );
+            CREATE TABLE appgw_waf_policies (
+                name TEXT,
+                subscription_id TEXT,
+                resource_group TEXT,
+                mode TEXT,
+                state TEXT,
+                managed_rule_sets TEXT,
+                custom_rules_count INTEGER DEFAULT 0,
+                associated_gateways TEXT
+            );
+            CREATE TABLE firewall_policies (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                name TEXT,
+                resource_group TEXT,
+                associated_firewalls TEXT,
+                mode TEXT,
+                threat_intelligence_mode TEXT,
+                dns_proxy_enabled INTEGER DEFAULT 0,
+                rule_collection_groups TEXT,
+                nat_rule_count INTEGER DEFAULT 0,
+                app_rule_count INTEGER DEFAULT 0,
+                last_synced TEXT
+            );
+            CREATE TABLE firewall_app_rules (
+                firewall_policy_id TEXT,
+                subscription_id TEXT,
+                firewall_name TEXT
+            );
+            CREATE TABLE firewall_nat_rules (
+                firewall_policy_id TEXT,
+                subscription_id TEXT,
+                firewall_name TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+        conn.executemany(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    "/subscriptions/sub-1/resourceGroups/blue-network-ukwest/providers/Microsoft.Network/bastionHosts/bastion",
+                    "sub-1",
+                    "blue-network-ukwest",
+                    "bastion",
+                    "Microsoft.Network/bastionHosts",
+                    "uksouth",
+                    "Standard",
+                    None,
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    "{}",
+                    0,
+                    None,
+                ),
+                (
+                    "/subscriptions/sub-1/resourceGroups/blue-network-ukwest/providers/Microsoft.Network/publicIPAddresses/bastion",
+                    "sub-1",
+                    "blue-network-ukwest",
+                    "bastion",
+                    "Microsoft.Network/publicIPAddresses",
+                    "uksouth",
+                    "Standard",
+                    None,
+                    1,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    "{}",
+                    0,
+                    None,
+                ),
+            ],
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/architecture?sub=sub-1&view=connectivity")
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        mermaid = data["views"]["connectivity"]["mermaid"]
+        bastion_id = "blue_network_ukwest_bastion_bastion"
+        public_ip_id = "blue_network_ukwest_public_ip_bastion"
+        assert f"subgraph {bastion_id}_bastion[\"Bastion\"]" in mermaid, mermaid
+        assert f"{public_ip_id}[\"" in mermaid, mermaid
+        assert f"{bastion_id}[\"" in mermaid, mermaid
+        assert f"{public_ip_id} -->|Bastion| {bastion_id}" in mermaid, mermaid
+        bastion_node_line = next(line for line in mermaid.splitlines() if f"{bastion_id}[" in line)
+        assert "WAF" not in bastion_node_line, mermaid
+
+    def test_api_cloud_architecture_includes_icon_metadata_for_mermaid_nodes(self, monkeypatch):
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE repositories (
+                id INTEGER PRIMARY KEY,
+                repo_name TEXT
+            );
+            CREATE TABLE resources (
+                id INTEGER PRIMARY KEY,
+                experiment_id TEXT,
+                repo_id INTEGER,
+                resource_name TEXT,
+                resource_type TEXT,
+                provider TEXT,
+                parent_resource_id INTEGER,
+                source_file TEXT,
+                raw_json TEXT,
+                discovered_by TEXT,
+                discovery_method TEXT,
+                status TEXT,
+                first_seen TEXT,
+                last_seen TEXT
+            );
+            """
+        )
+        conn.execute("INSERT INTO repositories (id, repo_name) VALUES (?, ?)", (1, "repo-a"))
+        conn.execute(
+            """
+            INSERT INTO resources (
+                id, experiment_id, repo_id, resource_name, resource_type, provider,
+                parent_resource_id, source_file, raw_json, discovered_by, discovery_method, status,
+                first_seen, last_seen
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                1,
+                "exp-1",
+                1,
+                "appgw-one",
+                "Microsoft.Network/applicationGateways",
+                "Azure",
+                None,
+                "",
+                "null",
+                "scan",
+                "scan",
+                "active",
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/architecture?experiment_id=exp-1")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        node = next(n for n in data["nodes"] if n["data"].get("label") == "appgw-one")
+        assert node["data"].get("iconClass") == "icon-azurerm-app-gateway", node["data"]
+        assert node["data"].get("iconPath", "").endswith("app-gateway.svg"), node["data"]
+
+    def test_api_cloud_architecture_handles_null_raw_json(self, monkeypatch):
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            """
+        )
+        conn.execute("INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)", ("sub-1", "Test Subscription", "production", "Enabled"))
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json, is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "asset-1",
+                "sub-1",
+                "rg-net",
+                "appgw-one",
+                "Microsoft.Network/applicationGateways",
+                "eastus",
+                "Standard_v2",
+                "appgw-one.example.com",
+                1,
+                "active",
+                "",
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+                None,
+                0,
+                None,
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/architecture?sub=sub-1&view=mermaid")
+        assert resp.status_code == 200
 
     def test_subscription_diagram_uses_persistent_cache(self, monkeypatch):
         import json

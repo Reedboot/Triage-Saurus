@@ -35,6 +35,7 @@ from Azure._helpers import (
 )
 from Azure._staged import BackfillJob, StagedRows
 from Azure import app_configuration, storage, aks, key_vault, sql_server, service_bus, event_hub, virtual_network
+from Azure import virtual_machine
 
 
 def _is_ip_address(value: str) -> bool:
@@ -492,6 +493,39 @@ class TestVirtualNetworkHarvest:
         assert extra["network_security_group_name"] == "app-nsg"
         assert extra["route_table_name"] == "app-rt"
         assert extra["delegations"] == ["Microsoft.Web/serverFarms"]
+
+
+class TestVirtualMachineHarvest:
+    def test_emits_vms_with_public_ip_metadata(self, monkeypatch):
+        vm_id = "/subscriptions/sub-1/resourceGroups/rg-compute/providers/Microsoft.Compute/virtualMachines/vm-one"
+
+        def fake_az(args, subscription_id):
+            assert args == ["vm", "list", "-d"]
+            return [{
+                "id": vm_id,
+                "name": "vm-one",
+                "resourceGroup": "rg-compute",
+                "location": "westus",
+                "type": "Microsoft.Compute/virtualMachines",
+                "vmSize": "Standard_B2s",
+                "publicIps": "20.30.40.50",
+                "privateIps": "10.1.0.4",
+                "osType": "Linux",
+                "powerState": "VM running",
+                "properties": {},
+            }]
+
+        monkeypatch.setattr(virtual_machine, "az", fake_az)
+        rows = virtual_machine.harvest("sub-1")
+
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["id"] == vm_id
+        assert row["is_public"] == 1
+        extra = json.loads(row["raw_json"])["_extra"]
+        assert extra["public_ips"] == "20.30.40.50"
+        assert extra["private_ips"] == "10.1.0.4"
+        assert extra["os_type"] == "Linux"
 
 
 # ---------------------------------------------------------------------------

@@ -9,7 +9,6 @@
  */
 
 import {
-  waitForMermaid,
   applyDiagramScale,
   autoFitDiagram,
   patchForeignObjectLabels,
@@ -22,12 +21,25 @@ import {
   stampSvgDimensions,
 } from './diagram-shared.js';
 
+import {
+  renderMermaidSource,
+  waitForCloudMermaid,
+} from './cloud-mermaid-helper.js';
+
 // ── Scale & transform helpers ─────────────────────────────────────────────────
 
 function postProcessSvg(svgEl) {
   if (!svgEl) return;
   patchForeignObjectLabels(svgEl);
   stampSvgDimensions(svgEl);
+}
+
+export async function renderMermaidDiagram({
+  source,
+  rootEl,
+  onRendered,
+}) {
+  return renderMermaidSource({ source, rootEl, onRendered });
 }
 
 function getCurrentScale(container) {
@@ -134,7 +146,7 @@ export async function initSubscriptionDiagrams() {
   
   // Wait for Mermaid
   try {
-    await waitForMermaid();
+    await waitForCloudMermaid();
   } catch (err) {
     console.error('[subscription-diagrams] Mermaid init failed:', err);
     return;

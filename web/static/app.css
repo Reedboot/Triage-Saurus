@@ -2697,6 +2697,86 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
   margin-top: 12px;
 }
 
+
+#drilldown-content .tree-drilldown-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+#drilldown-content .tree-drilldown-table thead th {
+  padding: 8px 12px;
+  text-align: left;
+  background: #0f172a;
+  color: #94a3b8;
+  font-weight: 600;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  border-bottom: 1px solid #1e293b;
+  white-space: nowrap;
+}
+
+#drilldown-content .tree-drilldown-row {
+  border-bottom: 1px solid #1e293b;
+}
+
+#drilldown-content .tree-drilldown-row:hover {
+  background: rgba(96, 165, 250, 0.05);
+}
+
+#drilldown-content .expand-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  border: none;
+  background: transparent;
+  color: #60a5fa;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  transition: transform .12s ease;
+}
+
+#drilldown-content .expand-toggle.open {
+  transform: rotate(90deg);
+}
+
+#drilldown-content .child-count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.6em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #1f2937;
+  color: #cbd5e1;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+#drilldown-content .tree-drilldown-empty {
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  padding: 8px 0;
+}
+
+/* Drillable node visual affordance — JS adds these classes to SVG <g> elements */
+.node-drillable rect,
+.node-drillable polygon,
+.node-drillable path.label-container {
+  stroke: #60a5fa !important;
+  stroke-dasharray: 5, 3 !important;
+  stroke-width: 2.5px !important;
+  cursor: pointer !important;
+}
+
+.node-drillable:hover rect,
+.node-drillable:hover polygon {
+  filter: brightness(1.15);
+}
+
 .footprint-summary {
   font-size: 0.95rem;
   margin-bottom: 12px;

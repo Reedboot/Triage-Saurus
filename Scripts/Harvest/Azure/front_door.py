@@ -248,6 +248,35 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
                 "pipeline_tag": None,
                 "raw_json": json.dumps({**profile, "_extra": {"endpoint_hosts": hosts}}),
             })
+            for endpoint in endpoints:
+                endpoint_name = safe_str(endpoint.get("name"))
+                if not endpoint_name:
+                    continue
+                endpoint_host = safe_str((endpoint.get("properties") or endpoint).get("hostName") or endpoint.get("hostName"))
+                results.append({
+                    "id": endpoint.get("id") or f"{profile['id']}/afdEndpoints/{endpoint_name}",
+                    "subscription_id": subscription_id,
+                    "resource_group": profile.get("resourceGroup"),
+                    "name": endpoint_name,
+                    "type": endpoint.get("type", "Microsoft.Cdn/profiles/afdEndpoints"),
+                    "location": profile.get("location"),
+                    "sku": infer_sku(profile),
+                    "tags": json.dumps(profile.get("tags") or {}),
+                    "is_public": 1,
+                    "is_restricted": 0,
+                    "ip_restrictions": json.dumps([]),
+                    "endpoints": build_endpoints([(endpoint_host, 443, "https")] if endpoint_host else []),
+                    "auth_methods": json.dumps([]),
+                    "fqdn": endpoint_host,
+                    "pipeline_tag": None,
+                    "raw_json": json.dumps({
+                        **endpoint,
+                        "_extra": {
+                            "profile_name": profile_name,
+                            "profile_tier": infer_sku(profile),
+                        },
+                    }),
+                })
         except Exception as exc:
             print(f"    [front-door] {profile_name} SKIPPED ({exc})")
 

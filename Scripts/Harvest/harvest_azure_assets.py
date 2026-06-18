@@ -56,6 +56,10 @@ from Azure import cosmos_db, app_service_plan, service_bus, container_registry, 
 from Azure import redis_cache, event_hub, app_configuration, service_fabric, cognitive_services
 from Azure import data_factory, app_service_environment, app_insights, private_endpoint, traffic_manager
 from Azure import front_door, firewall
+from Azure import network_security_group, route_table, public_ip, load_balancer, bastion_host
+from Azure import user_assigned_identity, virtual_machine, virtual_machine_scale_set, image
+from Azure import log_analytics_workspace, monitor_action_group, activity_log_alert
+from Azure import app_service_certificate, app_service_certificate_order
 from Azure._staged import BackfillJob, StagedRows
 from Azure._helpers import set_probe_enabled
 import appgw_routing_map
@@ -77,6 +81,9 @@ PROVIDERS = [
     ("Web Apps",                web_apps.harvest),
     ("Function Apps",           function_apps.harvest),
     ("AKS",                     aks.harvest),
+    ("Virtual Machines",        virtual_machine.harvest),
+    ("Virtual Machine Scale Sets", virtual_machine_scale_set.harvest),
+    ("Images",                  image.harvest),
     ("Service Fabric",          service_fabric.harvest),
     # ── Data ────────────────────────────────────────────────────────────
     ("Cosmos DB",               cosmos_db.harvest),
@@ -93,11 +100,22 @@ PROVIDERS = [
     ("Key Vaults",              key_vault.harvest),
     ("App Configuration",       app_configuration.harvest),
     ("Container Registries",    container_registry.harvest),
+    ("User Assigned Identities", user_assigned_identity.harvest),
+    ("Certificates",            app_service_certificate.harvest),
+    ("Certificate Orders",      app_service_certificate_order.harvest),
     ("Private Endpoints",       private_endpoint.harvest),
     # ── Observability ────────────────────────────────────────────────────
     ("App Insights",            app_insights.harvest),
+    ("Log Analytics Workspaces", log_analytics_workspace.harvest),
+    ("Monitor Action Groups",    monitor_action_group.harvest),
+    ("Activity Log Alerts",      activity_log_alert.harvest),
     # ── Networking ───────────────────────────────────────────────────────
     ("Virtual Networks",        virtual_network.harvest),
+    ("Network Security Groups",  network_security_group.harvest),
+    ("Route Tables",            route_table.harvest),
+    ("Public IPs",              public_ip.harvest),
+    ("Load Balancers",          load_balancer.harvest),
+    ("Bastion Hosts",           bastion_host.harvest),
     ("Firewalls",               firewall.harvest),
 ]
 

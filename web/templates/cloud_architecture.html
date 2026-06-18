@@ -10,7 +10,7 @@
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
   <script src="/static/js/mermaid-loader.js"></script>
   <script src="/static/js/mermaid-icon-injector.js" defer></script>
-  <script src="/static/js/cloud-mermaid-helper.js" defer></script>
+  <script type="module" src="/static/js/cloud-mermaid-helper.js"></script>
   <style>
     body {
       margin: 0;
@@ -84,10 +84,14 @@
       overflow: auto;
       padding: 24px;
       background: #1a1a1a;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
     }
 
     #cloud-arch-mermaid-root {
       min-width: min(1400px, calc(100vw - 80px));
+      flex: 1 1 auto;
     }
 
     #cloud-arch-mermaid-root .mermaid {
@@ -508,8 +512,8 @@
       border-radius: 16px;
       box-shadow: 0 24px 48px rgba(0, 0, 0, 0.3);
       width: 100%;
-      max-width: 900px;
-      max-height: 90vh;
+      max-width: 1500px;
+      max-height: 96vh;
       overflow: hidden;
       display: flex;
       flex-direction: column;
@@ -769,6 +773,12 @@
 
       <div class="cloud-arch-views">
         <div class="cloud-arch-view cloud-arch-mermaid-view" id="cloud-arch-mermaid-view" hidden>
+          <div class="diagram-toolbar" aria-label="Mermaid diagram controls">
+            <button type="button" class="btn-small" data-diagram-zoom-out="cloud-arch-mermaid-root" title="Zoom out">−</button>
+            <button type="button" class="btn-small" data-diagram-zoom-in="cloud-arch-mermaid-root" title="Zoom in">+</button>
+            <button type="button" class="btn-small" data-diagram-fit="cloud-arch-mermaid-root" title="Fit to view">Fit</button>
+            <button type="button" class="btn-small" data-diagram-export="cloud-arch-mermaid-root" title="Export PNG">Export</button>
+          </div>
           <div id="cloud-arch-mermaid-root"></div>
         </div>
         <div class="cloud-arch-view" id="cloud-arch-root" style="top: 0; left: 0; right: 0; bottom: 0;"></div>
@@ -839,6 +849,6 @@
       });
     })();
   </script>
-  <script type="module" src="/static/js/cloud-architecture-reactflow.js?v=8"></script>
+  <script type="module" src="/static/js/cloud-architecture-reactflow.js?v=9"></script>
 </body>
 </html>

@@ -13213,6 +13213,102 @@ def _build_subscription_architecture_payload(
         """,
         (sub_id,),
     ).fetchall()
+
+    if view_mode == "overview":
+        overlay_rows: list[tuple] = []
+        for row in asset_rows:
+            overlay_rows.append(
+                (
+                    row["name"],
+                    row["type"],
+                    row["resource_group"],
+                    row["fqdn"],
+                    row["is_public"],
+                    row["sku"],
+                    row["id"],
+                    bool(row["waf_mode"]),
+                    None,
+                    bool(row["is_restricted"]),
+                    row["waf_mode"],
+                    None,
+                    row["raw_json"],
+                    None,
+                )
+            )
+
+        plan_links: list[tuple[str, str, str, str]] = []
+        try:
+            site_plan_rows = conn.execute(
+                """
+                SELECT name, resource_group,
+                       COALESCE(
+                           json_extract(raw_json, '$.appServicePlanId'),
+                           json_extract(raw_json, '$.serverFarmId')
+                       ) AS plan_arm_id
+                FROM provisioned_assets
+                WHERE subscription_id = ?
+                  AND (type LIKE '%Web/sites%' OR type LIKE '%Web/Sites%')
+                  AND COALESCE(
+                        json_extract(raw_json, '$.appServicePlanId'),
+                        json_extract(raw_json, '$.serverFarmId')
+                      ) IS NOT NULL
+                LIMIT 50
+                """,
+                (sub_id,),
+            ).fetchall()
+            for site_name, site_rg, plan_arm_id in site_plan_rows:
+                plan_rg, plan_name = _arm_id_name_and_rg(plan_arm_id)
+                if plan_name:
+                    plan_links.append((site_rg or "", site_name, plan_rg, plan_name))
+        except Exception:
+            pass
+
+        try:
+            ase_site_rows = conn.execute(
+                """
+                SELECT name, resource_group,
+                       COALESCE(
+                           json_extract(raw_json, '$.properties.hostingEnvironmentProfile.id'),
+                           json_extract(raw_json, '$.hostingEnvironmentProfile.id')
+                       ) AS ase_arm_id
+                FROM provisioned_assets
+                WHERE subscription_id = ?
+                  AND (type LIKE '%Web/sites%' OR type LIKE '%Web/Sites%')
+                  AND COALESCE(
+                        json_extract(raw_json, '$.properties.hostingEnvironmentProfile.id'),
+                        json_extract(raw_json, '$.hostingEnvironmentProfile.id')
+                      ) IS NOT NULL
+                LIMIT 50
+                """,
+                (sub_id,),
+            ).fetchall()
+            for site_name, site_rg, ase_arm_id in ase_site_rows:
+                ase_rg, ase_name = _arm_id_name_and_rg(ase_arm_id)
+                if ase_name:
+                    plan_links.append((site_rg or "", site_name, ase_rg, ase_name))
+        except Exception:
+            pass
+
+        ingress_diagram = _build_ingress_diagram(overlay_rows, plan_links=plan_links)
+        resource_count = len(asset_rows)
+        connection_count = len(ingress_diagram.get("attack_paths") or [])
+        payload = {
+            "subscription_id": sub_id,
+            "subscription_name": sub_name,
+            "environment": sub_env,
+            "total_assets": resource_count,
+            "summary": {
+                "resource_count": resource_count,
+                "connection_count": connection_count,
+                "provider_counts": [],
+                "layout_mode": "mermaid",
+            },
+            **ingress_diagram,
+            "nodes": [],
+            "edges": [],
+        }
+        return payload
+
     raw_json_by_id = {str(row["id"]).lower(): (row["raw_json"] or "{}") for row in asset_rows}
 
     assets: list[dict] = []
@@ -13881,6 +13977,8 @@ def _build_subscription_architecture_payload(
                 parsed_json = json.loads(raw_json_text or "{}")
             except Exception:
                 parsed_json = {}
+            if not isinstance(parsed_json, dict):
+                parsed_json = {}
             
             # Check for managed identity
             has_managed_identity = False
@@ -13891,7 +13989,10 @@ def _build_subscription_architecture_payload(
                     has_managed_identity = "systemassigned" in identity_type or "userassigned" in identity_type
             
             # Check for logging (simplified - actual diagnostic settings would need separate query)
-            has_logging = bool(parsed_json.get("properties", {}).get("diagnosticSettings"))
+            props = parsed_json.get("properties") if isinstance(parsed_json, dict) else {}
+            if not isinstance(props, dict):
+                props = {}
+            has_logging = bool(props.get("diagnosticSettings"))
             
             # Check if this is a group node
             is_group_node = bool(asset.get("_is_group_node"))
@@ -13951,7 +14052,8 @@ def _build_subscription_architecture_payload(
                 "public": True,
                 "tier": "entry",
                 "iconPath": None,
-                "synthetic": True,
+               "iconClass": "",
+               "synthetic": True,
                "summaryNode": False,  # Make it clickable
                "resourceType": "external_endpoint",
                "hasManagedIdentity": False,
@@ -14561,6 +14663,8 @@ def _build_cloud_architecture_payload(conn, experiment_id: str, repo_name: str |
                         "public": bool(item.get("public")),
                         "synthetic": bool(item.get("_synthetic")),
                         "resourceType": item.get("resource_type") or "",
+                        "iconPath": _get_icon_path(item.get("resource_type") or ""),
+                        "iconClass": _get_icon_class(item.get("resource_type") or ""),
                     },
                     "style": {
                         "width": 290,
@@ -14885,18 +14989,31 @@ def api_cloud_resource_details():
 
 def _extract_tls_version(raw_json: dict) -> str | None:
     """Extract TLS/SSL version from resource configuration."""
-    props = raw_json.get("properties", {})
-    return props.get("minTlsVersion") or props.get("sslPolicy", {}).get("minProtocolVersion")
+    if not isinstance(raw_json, dict):
+        return None
+    props = raw_json.get("properties")
+    if not isinstance(props, dict):
+        return None
+    ssl_policy = props.get("sslPolicy")
+    if not isinstance(ssl_policy, dict):
+        ssl_policy = {}
+    return props.get("minTlsVersion") or ssl_policy.get("minProtocolVersion")
 
 
 def _extract_sku_tier(raw_json: dict) -> str | None:
     """Extract SKU tier from resource configuration."""
-    sku = raw_json.get("sku", {})
+    if not isinstance(raw_json, dict):
+        return None
+    sku = raw_json.get("sku")
+    if not isinstance(sku, dict):
+        return None
     return sku.get("tier")
 
 
 def _extract_managed_identity(raw_json: dict) -> bool:
     """Check if resource has managed identity enabled."""
+    if not isinstance(raw_json, dict):
+        return False
     identity = raw_json.get("identity") or {}
     if not isinstance(identity, dict):
         return False
@@ -14907,16 +15024,28 @@ def _extract_managed_identity(raw_json: dict) -> bool:
 def _has_diagnostic_logging(raw_json: dict) -> bool:
     """Check if diagnostic logging is enabled (simplified check)."""
     # This is a simplified check - actual diagnostic settings are stored separately
-    return bool(raw_json.get("properties", {}).get("diagnosticSettings"))
+    if not isinstance(raw_json, dict):
+        return False
+    props = raw_json.get("properties") or {}
+    if not isinstance(props, dict):
+        return False
+    return bool(props.get("diagnosticSettings"))
 
 
 def _extract_log_categories(raw_json: dict) -> list[str]:
     """Extract enabled log categories."""
-    diag_settings = raw_json.get("properties", {}).get("diagnosticSettings", {})
-    if isinstance(diag_settings, dict):
-        logs = diag_settings.get("logs", [])
-        return [log.get("category") for log in logs if log.get("enabled")]
-    return []
+    if not isinstance(raw_json, dict):
+        return []
+    props = raw_json.get("properties")
+    if not isinstance(props, dict):
+        return []
+    diag_settings = props.get("diagnosticSettings")
+    if not isinstance(diag_settings, dict):
+        return []
+    logs = diag_settings.get("logs")
+    if not isinstance(logs, list):
+        return []
+    return [log.get("category") for log in logs if isinstance(log, dict) and log.get("enabled")]
 
 
 def _extract_nsg_rules(conn, resource_id: str, subscription_id: str) -> list[dict]:
@@ -14927,8 +15056,14 @@ def _extract_nsg_rules(conn, resource_id: str, subscription_id: str) -> list[dic
 
 def _extract_firewall_rules(raw_json: dict) -> list[dict]:
     """Extract firewall rules from resource configuration."""
-    props = raw_json.get("properties", {})
-    firewall_rules = props.get("firewallRules", [])
+    if not isinstance(raw_json, dict):
+        return []
+    props = raw_json.get("properties")
+    if not isinstance(props, dict):
+        return []
+    firewall_rules = props.get("firewallRules")
+    if not isinstance(firewall_rules, list):
+        return []
     return [
         {
             "name": rule.get("name"),
@@ -14936,40 +15071,72 @@ def _extract_firewall_rules(raw_json: dict) -> list[dict]:
             "end_ip": rule.get("endIpAddress"),
         }
         for rule in firewall_rules
-    ] if isinstance(firewall_rules, list) else []
+        if isinstance(rule, dict)
+    ]
 
 
 def _extract_allowed_ips(raw_json: dict) -> list[str]:
     """Extract allowed IP ranges."""
-    props = raw_json.get("properties", {})
-    ip_rules = props.get("ipRules", []) or props.get("ipSecurityRestrictions", [])
+    if not isinstance(raw_json, dict):
+        return []
+    props = raw_json.get("properties")
+    if not isinstance(props, dict):
+        return []
+    ip_rules = props.get("ipRules")
+    if not isinstance(ip_rules, list) or not ip_rules:
+        ip_rules = props.get("ipSecurityRestrictions")
+    if not isinstance(ip_rules, list):
+        return []
     return [rule.get("value") or rule.get("ipAddress") for rule in ip_rules if isinstance(rule, dict)]
 
 
 def _extract_public_network_access(raw_json: dict) -> str | None:
     """Extract public network access setting."""
-    props = raw_json.get("properties", {})
+    if not isinstance(raw_json, dict):
+        return None
+    props = raw_json.get("properties")
+    if not isinstance(props, dict):
+        return None
     return props.get("publicNetworkAccess")
 
 
 def _extract_encryption_at_rest(raw_json: dict) -> bool:
     """Check if encryption at rest is enabled."""
-    props = raw_json.get("properties", {})
-    encryption = props.get("encryption", {})
+    if not isinstance(raw_json, dict):
+        return False
+    props = raw_json.get("properties")
+    if not isinstance(props, dict):
+        return False
+    encryption = props.get("encryption")
+    if not isinstance(encryption, dict):
+        return False
     return bool(encryption.get("keySource") or encryption.get("services"))
 
 
 def _extract_private_endpoints(raw_json: dict) -> list[str]:
     """Extract private endpoint connections."""
-    props = raw_json.get("properties", {})
-    pe_connections = props.get("privateEndpointConnections", [])
+    if not isinstance(raw_json, dict):
+        return []
+    props = raw_json.get("properties")
+    if not isinstance(props, dict):
+        return []
+    pe_connections = props.get("privateEndpointConnections")
+    if not isinstance(pe_connections, list):
+        return []
     return [pe.get("name") or pe.get("id") for pe in pe_connections if isinstance(pe, dict)]
 
 
 def _extract_vnet(raw_json: dict) -> str | None:
     """Extract VNet name/ID."""
-    props = raw_json.get("properties", {})
-    subnet_id = props.get("subnetId") or props.get("subnet", {}).get("id", "")
+    if not isinstance(raw_json, dict):
+        return None
+    props = raw_json.get("properties")
+    if not isinstance(props, dict):
+        return None
+    subnet = props.get("subnet")
+    if not isinstance(subnet, dict):
+        subnet = {}
+    subnet_id = props.get("subnetId") or subnet.get("id", "")
     if subnet_id and "/virtualNetworks/" in subnet_id:
         parts = subnet_id.split("/virtualNetworks/")
         if len(parts) > 1:
@@ -14979,8 +15146,15 @@ def _extract_vnet(raw_json: dict) -> str | None:
 
 def _extract_subnet(raw_json: dict) -> str | None:
     """Extract subnet name/ID."""
-    props = raw_json.get("properties", {})
-    subnet_id = props.get("subnetId") or props.get("subnet", {}).get("id", "")
+    if not isinstance(raw_json, dict):
+        return None
+    props = raw_json.get("properties")
+    if not isinstance(props, dict):
+        return None
+    subnet = props.get("subnet")
+    if not isinstance(subnet, dict):
+        subnet = {}
+    subnet_id = props.get("subnetId") or subnet.get("id", "")
     if subnet_id and "/subnets/" in subnet_id:
         return subnet_id.split("/subnets/")[-1]
     return None
@@ -14988,7 +15162,11 @@ def _extract_subnet(raw_json: dict) -> str | None:
 
 def _extract_public_ips(raw_json: dict) -> list[str]:
     """Extract public IP addresses."""
-    props = raw_json.get("properties", {})
+    if not isinstance(raw_json, dict):
+        return []
+    props = raw_json.get("properties")
+    if not isinstance(props, dict):
+        return []
     public_ips = []
     
     # Check for direct public IP
@@ -15001,10 +15179,17 @@ def _extract_public_ips(raw_json: dict) -> list[str]:
                 public_ips.append(ip_addr["ipAddress"])
     
     # Check for frontend IP configurations (App Gateway, Load Balancer)
-    frontend_ips = props.get("frontendIPConfigurations", [])
+    frontend_ips = props.get("frontendIPConfigurations")
+    if not isinstance(frontend_ips, list):
+        frontend_ips = []
     for fe in frontend_ips:
         if isinstance(fe, dict):
-            pip = fe.get("properties", {}).get("publicIPAddress", {})
+            fe_props = fe.get("properties")
+            if not isinstance(fe_props, dict):
+                fe_props = {}
+            pip = fe_props.get("publicIPAddress")
+            if not isinstance(pip, dict):
+                pip = {}
             if pip.get("ipAddress"):
                 public_ips.append(pip["ipAddress"])
     
@@ -15016,8 +15201,12 @@ def _extract_dns_names(raw_json: dict, fqdn: str | None) -> list[str]:
     names = []
     if fqdn:
         names.append(fqdn)
-    
-    props = raw_json.get("properties", {})
+    if not isinstance(raw_json, dict):
+        return list(set(names))
+
+    props = raw_json.get("properties")
+    if not isinstance(props, dict):
+        return list(set(names))
     
     # Check for additional DNS names
     if props.get("dnsName"):
@@ -15026,7 +15215,11 @@ def _extract_dns_names(raw_json: dict, fqdn: str | None) -> list[str]:
         names.append(props["fqdn"])
     
     # Check for custom domains
-    custom_domains = props.get("customDomainValidation", []) or props.get("hostNames", [])
+    custom_domains = props.get("customDomainValidation")
+    if not isinstance(custom_domains, list) or not custom_domains:
+        custom_domains = props.get("hostNames")
+    if not isinstance(custom_domains, list):
+        custom_domains = []
     for domain in custom_domains:
         if isinstance(domain, str):
             names.append(domain)
@@ -15038,6 +15231,8 @@ def _extract_dns_names(raw_json: dict, fqdn: str | None) -> list[str]:
 
 def _extract_keyvault_refs(raw_json: dict) -> list[str]:
     """Extract Key Vault references from configuration."""
+    if raw_json is None:
+        return []
     refs = []
     
     def _scan_for_keyvault(obj, path=""):
@@ -16476,6 +16671,30 @@ def _arm_id_name_and_rg(arm_id: str | None) -> tuple[str, str]:
     return rg, name
 
 
+def _arm_id_resource_type(arm_id: str | None) -> str:
+    """Extract the ARM resource type path from a full ARM resource ID."""
+    if not arm_id:
+        return ""
+
+    parts = [part for part in str(arm_id).rstrip("/").split("/") if part]
+    if not parts:
+        return ""
+
+    try:
+        provider_idx = next(idx for idx, part in enumerate(parts) if part.lower() == "providers")
+    except StopIteration:
+        return ""
+
+    type_parts: list[str] = []
+    idx = provider_idx + 1
+    while idx < len(parts):
+        type_parts.append(parts[idx])
+        idx += 2
+        if idx < len(parts) and parts[idx].lower() == "providers":
+            break
+    return "/".join(type_parts)
+
+
 def _cloud_asset_display_type(arm_type: str, kind: str | None = None) -> str:
     arm_type_lc = (arm_type or "").lower()
     # Keep both aliases to avoid regressions from mixed historical references.
@@ -16531,6 +16750,8 @@ def _get_icon_path(resource_type: str) -> str | None:
             "microsoft.network/applicationgatewaylisteners/http": "azurerm_app_gateway_listener_http",
             "microsoft.network/applicationgatewaylisteners/https": "azurerm_app_gateway_listener_https",
             "microsoft.network/frontdoors": "azurerm_front_door_and_cdn_profiles",
+            "microsoft.cdn/profiles": "azurerm_cdn_profile",
+            "microsoft.cdn/profiles/afdendpoints": "azurerm_cdn_frontdoor_endpoint",
             "microsoft.network/trafficmanagerprofiles": "azurerm_traffic_manager",
             "microsoft.network/azurefirewalls": "azurerm_firewall",
             "microsoft.network/firewallpolicies": "azurerm_firewall_policy",
@@ -16543,16 +16764,26 @@ def _get_icon_path(resource_type: str) -> str | None:
             "microsoft.web/sites": "azurerm_app_service",
             "microsoft.web/functionapps": "azurerm_function_app",
             "microsoft.web/serverfarms": "azurerm_app_service_plan",
+            "microsoft.web/certificates": "azurerm_app_service_certificate",
+            "microsoft.certificateregistration/certificateorders": "azurerm_app_service_certificate_order",
             "microsoft.web/hostingenvironments": "azurerm_app_service_environment",
             "microsoft.storage/storageaccounts/blobservices/containers": "azurerm_storage_container",
             "microsoft.sql/servers/databases": "azurerm_sql_database",
-            "microsoft.cdn/profiles": "azurerm_cdn_profile",
             "microsoft.network/virtualnetworks": "azurerm_virtual_network",
             "microsoft.network/networksecuritygroups": "azurerm_network_security_group",
+            "microsoft.network/routetables": "azurerm_route_table",
             "microsoft.network/publicipaddresses": "azurerm_public_ip",
+            "microsoft.network/loadbalancers": "azurerm_lb",
+            "microsoft.network/bastionhosts": "azurerm_bastion_host",
             "microsoft.cache/redis": "azurerm_redis",
             "microsoft.eventhub/namespaces": "azurerm_event_hub",
             "microsoft.servicebus/namespaces": "azurerm_service_bus",
+            "microsoft.managedidentity/userassignedidentities": "azurerm_user_assigned_identity",
+            "microsoft.compute/virtualmachinescalesets": "azurerm_virtual_machine_scale_set",
+            "microsoft.compute/images": "azurerm_image",
+            "microsoft.operationalinsights/workspaces": "azurerm_log_analytics_workspace",
+            "microsoft.insights/actiongroups": "azurerm_monitor_action_group",
+            "microsoft.insights/activitylogalerts": "azurerm_monitor_activity_log_alert",
             "microsoft.eventgrid/topics": "azurerm_eventgrid_topic",
             "microsoft.datafactory/factories": "azurerm_data_factories",
             "microsoft.cognitiveservices/accounts": "azurerm_cognitive_services",
@@ -16645,7 +16876,10 @@ def _get_icon_class(resource_type: str) -> str:
             "microsoft.network/applicationgatewaylisteners/http": "azurerm_app_gateway_listener_http",
             "microsoft.network/applicationgatewaylisteners/https": "azurerm_app_gateway_listener_https",
             "microsoft.network/frontdoors": "azurerm_front_door_and_cdn_profiles",
+            "microsoft.cdn/profiles": "azurerm_cdn_profile",
+            "microsoft.cdn/profiles/afdendpoints": "azurerm_cdn_frontdoor_endpoint",
             "microsoft.network/trafficmanagerprofiles": "azurerm_traffic_manager",
+            "microsoft.network/routetables": "azurerm_route_table",
             "microsoft.apimanagement/service": "azurerm_apim",
             "microsoft.containerservice/managedclusters": "azurerm_aks",
             "microsoft.storage/storageaccounts": "azurerm_storage_account",
@@ -16655,11 +16889,14 @@ def _get_icon_class(resource_type: str) -> str:
             "microsoft.web/sites": "azurerm_app_service",
             "microsoft.web/functionapps": "azurerm_function_app",
             "microsoft.web/serverfarms": "azurerm_app_service_plan",
+            "microsoft.web/certificates": "azurerm_app_service_certificate",
+            "microsoft.certificateregistration/certificateorders": "azurerm_app_service_certificate_order",
             "microsoft.web/hostingenvironments": "azurerm_app_service_environment",
-            "microsoft.cdn/profiles": "azurerm_cdn_profile",
             "microsoft.network/virtualnetworks": "azurerm_virtual_network",
             "microsoft.network/networksecuritygroups": "azurerm_network_security_group",
             "microsoft.network/publicipaddresses": "azurerm_public_ip",
+            "microsoft.network/loadbalancers": "azurerm_lb",
+            "microsoft.network/bastionhosts": "azurerm_bastion_host",
             "microsoft.cache/redis": "azurerm_redis",
             "microsoft.eventhub/namespaces": "azurerm_event_hub",
             "microsoft.servicebus/namespaces": "azurerm_service_bus",
@@ -16667,6 +16904,12 @@ def _get_icon_class(resource_type: str) -> str:
             "microsoft.datafactory/factories": "azurerm_data_factories",
             "microsoft.cognitiveservices/accounts": "azurerm_cognitive_services",
             "microsoft.containerregistry/registries": "azurerm_container_registries",
+            "microsoft.managedidentity/userassignedidentities": "azurerm_user_assigned_identity",
+            "microsoft.compute/virtualmachinescalesets": "azurerm_virtual_machine_scale_set",
+            "microsoft.compute/images": "azurerm_image",
+            "microsoft.operationalinsights/workspaces": "azurerm_log_analytics_workspace",
+            "microsoft.insights/actiongroups": "azurerm_monitor_action_group",
+            "microsoft.insights/activitylogalerts": "azurerm_monitor_activity_log_alert",
             "microsoft.servicefabric/clusters": "azurerm_service_fabric_clusters",
             "microsoft.appconfiguration/configurationstores": "azurerm_app_configuration",
             "microsoft.insights/components": "azurerm_app_insights",
@@ -17188,7 +17431,9 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     def _get_node_id(item):
         """Generate unique node ID from resource group and name."""
         rg = item.get('rg') or 'grp'
-        combined = f"{rg}_{item.get('name', 'resource')}"
+        name = item.get('name', 'resource')
+        variant = str(item.get("node_variant") or "").strip()
+        combined = f"{rg}_{variant}_{name}" if variant else f"{rg}_{name}"
         return _sanitise_node_id(combined)
 
     def _short_name(name: str, max_len: int = 28) -> str:
@@ -17434,7 +17679,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         # Classify for ingress flow
         if ("applicationgateway" in type_key or "frontdoor" in type_key
                 or "publicipaddress" in type_key
-                or "azurefirewalls" in type_key):
+                or "azurefirewalls" in type_key
+                or "bastionhost" in type_key):
             entry_points.append(item)
         elif "apimanagement" in type_key:
             api_layer.append(item)
@@ -17525,6 +17771,22 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     if _item.get("public") is None:
                         _item["public"] = True
 
+    bastion_keys = {
+        (str(item.get("rg") or "").strip().lower(), str(item.get("name") or "").strip().lower())
+        for item in entry_points
+        if "bastionhost" in (item.get("arm_type") or item.get("type") or "").lower()
+    }
+    bastion_children_by_key: dict[tuple[str, str], list[dict]] = _dd(list)
+    for item in entry_points:
+        type_key = (item.get("arm_type") or item.get("type") or "").lower()
+        if "publicipaddress" not in type_key:
+            continue
+        item_key = (str(item.get("rg") or "").strip().lower(), str(item.get("name") or "").strip().lower())
+        if item_key in bastion_keys:
+            item["parent_bastion_key"] = item_key
+            item["node_variant"] = "public_ip"
+            bastion_children_by_key[item_key].append(item)
+
     # Build simplified Mermaid diagram focusing on entry flow
     lines = [
         "graph LR",
@@ -17557,6 +17819,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 category = "Traffic Manager"
             elif "azurefirewalls" in type_key:
                 category = "Azure Firewall"
+            elif "bastionhost" in type_key:
+                category = "Bastion"
             elif "publicip" in type_key:
                 category = "Public IP"
             else:
@@ -17569,8 +17833,13 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             if len(items) <= NAME_THRESHOLD:
                 for item in items:
                     result.append({
+                        **item,
                         "name": item["name"],
-                        "label": f"{_short_name(item['name'])}{_node_security_suffix(item)}",
+                        "label": (
+                            f"Bastion<br/>{_short_name(item['name'])}"
+                            if "bastionhost" in (item.get("type") or "").lower()
+                            else f"{_short_name(item['name'])}{_node_security_suffix(item)}"
+                        ),
                         "count": 1,
                         "type": category,
                         "arm_type": item["type"],
@@ -17584,7 +17853,12 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                         "waf_mode": item.get("waf_mode"),
                         "listeners": item.get("listeners"),
                         "routing_targets": item.get("routing_targets"),
+                        "parent_bastion_key": item.get("parent_bastion_key"),
                     })
+                    if "bastionhost" in (item.get("type") or "").lower():
+                        result[-1]["bastion_key"] = (str(item.get("rg") or "").strip().lower(), str(item.get("name") or "").strip().lower())
+                        result[-1]["bastion_children"] = bastion_children_by_key.get(result[-1]["bastion_key"], [])
+                        result[-1]["node_variant"] = "bastion"
             else:
                 merged_targets = []
                 seen_targets = set()
@@ -17595,9 +17869,14 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                             continue
                         seen_targets.add(marker)
                         merged_targets.append(target)
-                result.append({
+                group_item = {
+                    **items[0],
                     "name": f"{category}_ep_group",
-                    "label": f"{category}{_node_security_suffix({'restriction_label': 'IP restricted' if any(i.get('is_restricted') for i in items) else None, 'auth_summary': next((i.get('auth_summary') for i in items if i.get('auth_summary')), None)})}",
+                    "label": (
+                        f"Bastion"
+                        if "bastionhost" in (items[0].get("type") or "").lower()
+                        else f"{category}{_node_security_suffix({'restriction_label': 'IP restricted' if any(i.get('is_restricted') for i in items) else None, 'auth_summary': next((i.get('auth_summary') for i in items if i.get('auth_summary')), None)})}"
+                    ),
                     "count": len(items),
                     "type": category,
                     "arm_type": items[0]["type"],
@@ -17611,7 +17890,13 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     "waf_mode": next((i.get("waf_mode") for i in items if i.get("waf_mode")), None),
                     "listeners": next((i.get("listeners") for i in items if i.get("listeners")), None),
                     "routing_targets": merged_targets,
-                })
+                    "parent_bastion_key": next((i.get("parent_bastion_key") for i in items if i.get("parent_bastion_key")), None),
+                }
+                if "bastionhost" in (items[0].get("type") or "").lower():
+                    group_item["bastion_key"] = (str(items[0].get("rg") or "").strip().lower(), str(items[0].get("name") or "").strip().lower())
+                    group_item["bastion_children"] = bastion_children_by_key.get(group_item["bastion_key"], [])
+                    group_item["node_variant"] = "bastion"
+                result.append(group_item)
         return result
     
     # Group API layer by TYPE + exposure
@@ -17938,6 +18223,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         return [{"rg": item.get("rg"), "name": item.get("name")}]
 
     node_by_resource: dict[tuple[str, str], str] = {}
+    node_by_resource_type: dict[tuple[str, str, str], str] = {}
     node_by_fqdn: dict[str, str] = {}
     # Name-only fallback: keyed by just the resource name, used when the
     # target_resource_id points to a resource type not in provisioned_assets
@@ -17949,8 +18235,11 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         for resource in _iter_item_resources(item):
             rg_key = str(resource.get("rg") or "").strip().lower()
             name_key = str(resource.get("name") or "").strip().lower()
+            type_key = str(item.get("arm_type") or item.get("type") or "").strip().lower()
             if rg_key or name_key:
                 node_by_resource.setdefault((rg_key, name_key), node_id)
+                if type_key:
+                    node_by_resource_type.setdefault((rg_key, name_key, type_key), node_id)
             if name_key:
                 node_by_name.setdefault(name_key, node_id)
         for fqdn_value in item.get("fqdns") or []:
@@ -17963,6 +18252,11 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         if target_resource_id:
             target_rg, target_name = _arm_id_name_and_rg(target_resource_id)
             if target_name:
+                target_type = _arm_id_resource_type(target_resource_id).strip().lower()
+                if target_type:
+                    node_id = node_by_resource_type.get((target_rg.strip().lower(), target_name.strip().lower(), target_type))
+                    if node_id:
+                        return node_id
                 node_id = node_by_resource.get((target_rg.strip().lower(), target_name.strip().lower()))
                 if node_id:
                     return node_id
@@ -18007,13 +18301,29 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     appgw_node_title_by_id: dict[str, str] = {}
 
     # Add nodes with icon classes
+    bastion_child_edges: list[tuple[str, str]] = []
     for item in shown_entry:
+        if item.get("parent_bastion_key"):
+            continue
         node_id = _get_node_id(item)
         arm_type = item.get("arm_type") or item["type"]
         label = item.get("label") or item.get("type") or _friendly_type(arm_type)
         if item.get("has_waf") or item.get("waf_mode") or item.get("is_restricted"):
             label = f"{label} 🛡️"
-        lines.append(_node_line(node_id, label, arm_type))
+        if item.get("bastion_key") and item.get("bastion_children"):
+            lines.append(f'    subgraph {node_id}_bastion["Bastion"]')
+            for child in item.get("bastion_children") or []:
+                child_node_id = _get_node_id(child)
+                child_arm_type = child.get("arm_type") or child.get("type") or "microsoft.network/publicipaddresses"
+                child_label = f"Public IP<br/>{_short_name(child.get('name') or item.get('name') or 'bastion')}"
+                lines.append(_node_line(child_node_id, child_label, child_arm_type))
+            lines.append(_node_line(node_id, label, arm_type))
+            for child in item.get("bastion_children") or []:
+                child_node_id = _get_node_id(child)
+                bastion_child_edges.append((child_node_id, node_id))
+            lines.append("    end")
+        else:
+            lines.append(_node_line(node_id, label, arm_type))
         if "applicationgateway" in (arm_type or "").lower():
             appgw_node_resources_by_id[node_id] = item.get("resources") or [{"rg": item.get("rg"), "name": item.get("name")}]
             appgw_node_title_by_id[node_id] = item.get("name") or item.get("label") or "App Gateway"
@@ -18236,6 +18546,9 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         link_styles.append((color, dasharray) if dasharray else color)
         lines.append(line)
 
+    for child_node_id, bastion_node_id in bastion_child_edges:
+        _add_link(f'    {child_node_id} -->|Bastion| {bastion_node_id}', "orange")
+
     # Track structural listener chain edges so we can safely add them from multiple
     # branches without creating duplicates.
     listener_chain_edges: set[tuple[str, str]] = set()
@@ -18423,6 +18736,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             return "Network Firewall 🔒", "#f97316"
         if "trafficmanager" in arm_t:
             return "DNS routing", "#f97316"
+        if "bastionhost" in arm_t:
+            return "Bastion", "#f97316"
 
         if has_waf and restricted:
             return "WAF + IP restricted", "#f97316"
@@ -18524,6 +18839,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     # Internet → Entry Points (orange — internet-reachable entry path, FQDN on arrow)
     if shown_entry:
         for item in shown_entry:
+            if item.get("parent_bastion_key") or "bastionhost" in (item.get("arm_type") or item.get("type") or "").lower():
+                continue
             # P0-D: skip Internet → node edge if DNS confirms this entry point is private
             if not item.get("public"):
                 continue
@@ -18579,6 +18896,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         api_nid = _get_node_id(shown_api[0])
         for entry in shown_entry:
             arm_type_low = (entry.get("arm_type") or entry.get("type") or "").lower()
+            if "bastionhost" in arm_type_low or entry.get("parent_bastion_key"):
+                continue
             if "trafficmanager" in arm_type_low:
                 continue
             # App Gateway routes are shown with explicit backend pool nodes below.
@@ -18605,6 +18924,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         first_backend_nid = _get_node_id(shown_backend[0])
         for entry in shown_entry:
             arm_type_low = (entry.get("arm_type") or entry.get("type") or "").lower()
+            if "bastionhost" in arm_type_low or entry.get("parent_bastion_key"):
+                continue
             if "trafficmanager" in arm_type_low:
                 continue
             # App Gateway routes are shown with explicit backend pool nodes below.
@@ -19180,7 +19501,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         "title": "Connectivity view",
         "description": "Shows normal ingress, gateway, backend, and data-tier connectivity across the subscription.",
         "legend": [
-            "Orange edges: WAF-protected entry point (Prevention mode)",
+            "Orange edges: protected entry point or routing hop",
             "Amber edges: WAF in Detection mode or IP-allowlisted access",
             "Red edges: directly public — no WAF or network restriction",
             "White edges: internal application or data flow",
@@ -20488,6 +20809,12 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
                 ORDER BY name""",
             [sub_id, arm_type_lc] + names,
         ).fetchall() if names else []
+        from collections import Counter
+        duplicate_name_counts = Counter(
+            str(r[0] or "").strip().lower()
+            for r in asset_rows
+            if str(r[0] or "").strip()
+        )
 
         # Build entry-point map: which App GWs / APIMs route to each resource
         entry_map: dict = {}
@@ -20530,8 +20857,11 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
         for name, rg, fqdn, is_public, is_restricted, _ep, _auth, sku, _type, ip_restrictions in asset_rows:
             entry_pts = sorted(entry_map.get(name, set()))
             display_fqdn = _resolved_asset_fqdn(name, _type or "", fqdn)
+            resource_name = name or "—"
+            if duplicate_name_counts.get(str(name or "").strip().lower(), 0) > 1:
+                resource_name = f"{resource_name} ({rg or 'no resource group'})"
             row = [
-                name,
+                resource_name,
                 rg or "—",
                 _friendly_type(_type or "") if _type else "—",
                 display_fqdn or "—",
