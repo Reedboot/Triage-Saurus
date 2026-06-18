@@ -191,6 +191,20 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
             "auth_methods": auth_methods,
         }
         if isinstance(parsed_raw, dict):
+            props = parsed_raw.get("properties")
+            if isinstance(props, dict):
+                for candidate in (
+                    props.get("publicIpAddress"),
+                    props.get("ipAddress"),
+                ):
+                    if isinstance(candidate, str) and candidate.strip():
+                        asset["public_ip"] = candidate.strip()
+                        break
+                    if isinstance(candidate, dict):
+                        ip_addr = candidate.get("ipAddress") or candidate.get("address")
+                        if isinstance(ip_addr, str) and ip_addr.strip():
+                            asset["public_ip"] = ip_addr.strip()
+                            break
             subnet_id = _extract_subnet_id(parsed_raw)
             if subnet_id:
                 asset["subnet_id"] = subnet_id
@@ -302,6 +316,8 @@ def subscription_apply_plan_hierarchy(assets: list[dict], plan_links: list | Non
 
         merged["public"] = bool(merged.get("public") or extra.get("public"))
         merged["is_restricted"] = bool(merged.get("is_restricted") or extra.get("is_restricted"))
+        if not merged.get("public_ip") and extra.get("public_ip"):
+            merged["public_ip"] = extra.get("public_ip")
 
         if base is not extra and (_is_plan_type(base) or _is_plan_type(extra)) and (_is_site_type(base) or _is_site_type(extra)):
             merged["hosted_site_count"] = max(int(merged.get("hosted_site_count") or 0), int(extra.get("hosted_site_count") or 0), 1)
@@ -475,6 +491,9 @@ def subscription_asset_label(asset: dict, include_badges: bool = False, include_
     fqdn = subscription_primary_fqdn(asset)
     if include_fqdn and fqdn:
         parts.append(fqdn if len(fqdn) <= 42 else fqdn[:40] + "...")
+    public_ip = str(asset.get("public_ip") or "").strip()
+    if public_ip and "publicipaddress" in (asset.get("arm_type") or "").lower():
+        parts.append(public_ip if len(public_ip) <= 42 else public_ip[:40] + "...")
     hosted_site_count = asset.get("hosted_site_count")
     if hosted_site_count:
         parts.append(f"{hosted_site_count} app{'s' if hosted_site_count != 1 else ''}")

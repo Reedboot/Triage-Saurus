@@ -13318,6 +13318,9 @@ def _build_subscription_architecture_payload(
             parsed = json.loads(raw_json) if isinstance(raw_json, str) else (raw_json or {})
         except Exception:
             parsed = {}
+        # Use the shared helper so all extraction paths stay consistent
+        extracted_ips = _extract_public_ips(parsed) if isinstance(parsed, dict) else []
+        public_ip = extracted_ips[0] if extracted_ips else ""
         asset = {
             "id": row["id"],
             "name": row["name"],
@@ -13352,6 +13355,8 @@ def _build_subscription_architecture_payload(
             "provider_label": "Azure",
             "tier": _shared_subscription_asset_tier(row["type"], row["name"]),
         }
+        if public_ip:
+            asset["public_ip"] = public_ip
         assets.append(asset)
 
     # Add App Gateway listeners as virtual assets so the graph exposes public ingress.
@@ -14748,10 +14753,10 @@ def api_cloud_resource_details():
             
             sub_id = sub_row["id"]
             
-            # Get all public assets
+            # Get all public assets (include raw_json to extract actual IP addresses)
             public_assets = conn.execute(
                 """
-                SELECT id, name, type, fqdn, sku, waf_mode, is_restricted, resource_group
+                SELECT id, name, type, fqdn, sku, waf_mode, is_restricted, resource_group, raw_json
                 FROM provisioned_assets
                 WHERE subscription_id = ? AND is_public = 1
                 ORDER BY type, name
@@ -14780,26 +14785,45 @@ def api_cloud_resource_details():
             
             for asset in public_assets:
                 asset_type = (asset["type"] or "").lower()
-                
-                # Extract public IPs
+
+                # Parse raw_json once to extract IP addresses
+                try:
+                    asset_raw = json.loads(asset["raw_json"] or "{}") if isinstance(asset["raw_json"], str) else (asset["raw_json"] or {})
+                except Exception:
+                    asset_raw = {}
+                asset_public_ips = _extract_public_ips(asset_raw)
+
+                # Collect DNS names from fqdn column
                 if asset["fqdn"]:
                     dns_names.add(asset["fqdn"])
-                
-                # Determine protocol based on type
+
+                # Determine protocol based on type and collect public IPs
                 if "applicationgateways" in asset_type:
                     protocols.add("HTTPS:443")
                     protocols.add("HTTP:80")
+                    for ip in asset_public_ips:
+                        public_ips.add(ip)
                 elif "publicipaddresses" in asset_type:
-                    # This is an IP itself
-                    if asset["name"]:
+                    # Use the actual IP address; fall back to resource name if not yet allocated
+                    if asset_public_ips:
+                        for ip in asset_public_ips:
+                            public_ips.add(ip)
+                    elif asset["name"]:
                         public_ips.add(asset["name"])
                 elif "sites" in asset_type or "webapp" in asset_type:
                     protocols.add("HTTPS:443")
-                
+                    for ip in asset_public_ips:
+                        public_ips.add(ip)
+                else:
+                    for ip in asset_public_ips:
+                        public_ips.add(ip)
+
+                entry_point_public_ip = asset_public_ips[0] if asset_public_ips else None
                 entry_points.append({
                     "name": asset["name"],
                     "type": _friendly_type(asset["type"]),
                     "fqdn": asset["fqdn"],
+                    "public_ip": entry_point_public_ip,
                     "waf_protected": bool(asset["waf_mode"]),
                     "waf_mode": asset["waf_mode"],
                     "is_restricted": bool(asset["is_restricted"]),
@@ -14868,6 +14892,16 @@ def api_cloud_resource_details():
                 ).fetchone()
                 
                 gateway_raw_json = json.loads(gateway_row["raw_json"] or "{}") if gateway_row else {}
+                parent_resource = None
+                if gateway_row:
+                    parent_resource = {
+                        "id": gateway_row["id"],
+                        "name": gateway_row["name"],
+                        "type": gateway_row["type"],
+                        "type_label": _friendly_type(gateway_row["type"]),
+                        "resource_group": listener_row["resource_group"],
+                        "icon_path": _resource_icon_path(gateway_row["type"] or ""),
+                    }
                 
                 # Determine frontend port from protocol
                 frontend_port = "443" if (listener_row["protocol"] or "").upper() == "HTTPS" else "80"
@@ -14908,6 +14942,7 @@ def api_cloud_resource_details():
                         "public_ips": _extract_public_ips(gateway_raw_json),
                         "dns_names": [listener_row["hostname"]],
                     },
+                    "parent_resource": parent_resource,
                 })
         
         # Regular provisioned asset
@@ -14929,6 +14964,7 @@ def api_cloud_resource_details():
             return jsonify({"error": "Resource not found"}), 404
         
         raw_json = json.loads(asset_row["raw_json"] or "{}") if asset_row["raw_json"] else {}
+        parent_row = _resolve_parent_resource(conn, asset_row)
         
         # Extract security settings from raw JSON
         details = {
@@ -14936,6 +14972,7 @@ def api_cloud_resource_details():
             "name": asset_row["name"],
             "type": asset_row["type"],
             "type_label": _friendly_type(asset_row["type"]),
+            "icon_path": _resource_icon_path(asset_row["type"] or ""),
             "resource_group": asset_row["resource_group"],
             "location": asset_row["location"],
             "sku": asset_row["sku"],
@@ -14981,6 +15018,16 @@ def api_cloud_resource_details():
                 "references": _extract_keyvault_refs(raw_json),
             },
         }
+        if parent_row:
+            parent_type = str(parent_row["type"] or "")
+            details["parent_resource"] = {
+                "id": parent_row["id"],
+                "name": parent_row["name"],
+                "type": parent_type,
+                "type_label": _friendly_type(parent_type),
+                "resource_group": parent_row["resource_group"],
+                "icon_path": _resource_icon_path(parent_type),
+            }
         
         return jsonify(details)
     finally:
@@ -15161,39 +15208,142 @@ def _extract_subnet(raw_json: dict) -> str | None:
 
 
 def _extract_public_ips(raw_json: dict) -> list[str]:
-    """Extract public IP addresses."""
+    """Extract public IP addresses from a raw Azure resource JSON blob.
+
+    Checks, in order:
+    1. ``_extra.ip_address`` — written by the public_ip harvest module.
+    2. ``properties.ipAddress`` — present on PublicIPAddress ARM objects.
+    3. ``properties.publicIpAddress`` — an expanded ARM reference dict.
+    4. ``properties.frontendIPConfigurations`` — App Gateway / Load Balancer.
+    """
     if not isinstance(raw_json, dict):
         return []
+
+    seen: set[str] = set()
+    public_ips: list[str] = []
+
+    def _add(ip: str) -> None:
+        v = ip.strip()
+        if v and v not in seen:
+            seen.add(v)
+            public_ips.append(v)
+
+    # 1. Harvest-level extra (most reliable for publicIPAddresses resources)
+    extra = raw_json.get("_extra")
+    if isinstance(extra, dict):
+        v = extra.get("ip_address")
+        if isinstance(v, str):
+            _add(v)
+
     props = raw_json.get("properties")
     if not isinstance(props, dict):
-        return []
-    public_ips = []
-    
-    # Check for direct public IP
-    if props.get("publicIpAddress"):
-        ip_addr = props["publicIpAddress"]
-        if isinstance(ip_addr, str):
-            public_ips.append(ip_addr)
-        elif isinstance(ip_addr, dict):
-            if ip_addr.get("ipAddress"):
-                public_ips.append(ip_addr["ipAddress"])
-    
-    # Check for frontend IP configurations (App Gateway, Load Balancer)
+        return public_ips
+
+    # 2. properties.ipAddress (PublicIPAddress resource itself)
+    ip_addr = props.get("ipAddress")
+    if isinstance(ip_addr, str):
+        _add(ip_addr)
+    elif isinstance(ip_addr, dict):
+        v = ip_addr.get("ipAddress") or ip_addr.get("address")
+        if isinstance(v, str):
+            _add(v)
+
+    # 3. properties.publicIpAddress (expanded ARM reference on NIC / Firewall)
+    pip_ref = props.get("publicIpAddress")
+    if isinstance(pip_ref, str):
+        _add(pip_ref)
+    elif isinstance(pip_ref, dict):
+        v = pip_ref.get("ipAddress") or pip_ref.get("address")
+        if isinstance(v, str):
+            _add(v)
+
+    # 4. frontendIPConfigurations (App Gateway, Load Balancer)
     frontend_ips = props.get("frontendIPConfigurations")
-    if not isinstance(frontend_ips, list):
-        frontend_ips = []
-    for fe in frontend_ips:
-        if isinstance(fe, dict):
-            fe_props = fe.get("properties")
-            if not isinstance(fe_props, dict):
-                fe_props = {}
+    if isinstance(frontend_ips, list):
+        for fe in frontend_ips:
+            if not isinstance(fe, dict):
+                continue
+            fe_props = fe.get("properties") or {}
             pip = fe_props.get("publicIPAddress")
-            if not isinstance(pip, dict):
-                pip = {}
-            if pip.get("ipAddress"):
-                public_ips.append(pip["ipAddress"])
-    
+            if isinstance(pip, dict):
+                v = pip.get("ipAddress")
+                if isinstance(v, str):
+                    _add(v)
+
     return public_ips
+
+
+def _resolve_parent_resource(conn, asset_row: sqlite3.Row) -> dict | None:
+    """Best-effort parent lookup for popup context."""
+    asset_id = str(asset_row["id"] or "").strip()
+    asset_name = str(asset_row["name"] or "").strip()
+    asset_type = str(asset_row["type"] or "").strip().lower()
+    subscription_id = str(asset_row["subscription_id"] or "").strip()
+
+    if not subscription_id or not asset_id or not asset_name:
+        return None
+
+    candidate_rows = conn.execute(
+        """
+        SELECT id, name, type, resource_group, fqdn, raw_json
+        FROM provisioned_assets
+        WHERE subscription_id = ? AND id != ?
+        ORDER BY is_public DESC, type, name
+        """,
+        (subscription_id, asset_id),
+    ).fetchall()
+
+    preferred_types = (
+        "bastionhosts",
+        "applicationgateways",
+        "loadbalancers",
+        "firewall",
+        "virtualmachines",
+        "sites",
+        "serverfarms",
+    )
+
+    def _same_type_group(candidate_type: str) -> bool:
+        return bool(candidate_type and candidate_type == asset_type)
+
+    needles = [asset_id.lower(), asset_name.lower()]
+    if asset_name:
+        needles.append(f"/{asset_name.lower()}")
+        needles.append(f'"name":"{asset_name.lower()}"')
+
+    best_match: dict | None = None
+    for row in candidate_rows:
+        candidate_type = str(row["type"] or "").strip().lower()
+        if _same_type_group(candidate_type):
+            continue
+
+        haystack = " ".join(
+            str(part or "")
+            for part in (row["id"], row["name"], row["type"], row["resource_group"], row["fqdn"], row["raw_json"])
+        ).lower()
+        if not any(needle in haystack for needle in needles):
+            continue
+
+        candidate = dict(row)
+        if any(token in candidate_type for token in preferred_types):
+            return candidate
+        if best_match is None:
+            best_match = candidate
+
+    return best_match
+
+
+def _resource_icon_path(resource_type: str | None) -> str | None:
+    """Resolve a resource icon path with a few explicit fallbacks."""
+    icon_path = _get_icon_path(resource_type or "")
+    if icon_path:
+        return icon_path
+    type_key = (resource_type or "").lower()
+    if "bastionhost" in type_key:
+        return "/static/assets/icons/azure/networking/bastions.svg"
+    if "publicipaddress" in type_key:
+        return "/static/assets/icons/azure/networking/public-ip.svg"
+    return None
 
 
 def _extract_dns_names(raw_json: dict, fqdn: str | None) -> list[str]:
@@ -15213,6 +15363,12 @@ def _extract_dns_names(raw_json: dict, fqdn: str | None) -> list[str]:
         names.append(props["dnsName"])
     if props.get("fqdn"):
         names.append(props["fqdn"])
+    dns_settings = props.get("dnsSettings")
+    if isinstance(dns_settings, dict):
+        if dns_settings.get("fqdn"):
+            names.append(dns_settings["fqdn"])
+        if dns_settings.get("domainNameLabel"):
+            names.append(dns_settings["domainNameLabel"])
     
     # Check for custom domains
     custom_domains = props.get("customDomainValidation")
@@ -17012,6 +17168,43 @@ def _subscription_assets_from_rows(rows: list) -> list[dict]:
         listeners = row[8] if len(row) > 8 else None
         is_restricted = bool(row[9]) if len(row) > 9 else False
         waf_mode = row[10] if len(row) > 10 else None
+        routing_targets = row[11] if len(row) > 11 else None
+        raw_json = row[12] if len(row) > 12 else None
+        auth_methods_raw = row[13] if len(row) > 13 else None
+        public_ip = ""
+        try:
+            parsed_raw = json.loads(raw_json) if isinstance(raw_json, str) and raw_json.strip() else raw_json
+        except Exception:
+            parsed_raw = None
+        if isinstance(parsed_raw, dict):
+            props = parsed_raw.get("properties")
+            if isinstance(props, dict):
+                candidate = props.get("publicIpAddress")
+                if isinstance(candidate, str) and candidate.strip():
+                    public_ip = candidate.strip()
+                elif isinstance(candidate, dict):
+                    ip_addr = candidate.get("ipAddress") or candidate.get("address")
+                    if isinstance(ip_addr, str) and ip_addr.strip():
+                        public_ip = ip_addr.strip()
+                if not public_ip:
+                    candidate = props.get("ipAddress")
+                    if isinstance(candidate, str) and candidate.strip():
+                        public_ip = candidate.strip()
+                    elif isinstance(candidate, dict):
+                        ip_addr = candidate.get("ipAddress") or candidate.get("address")
+                        if isinstance(ip_addr, str) and ip_addr.strip():
+                            public_ip = ip_addr.strip()
+        if isinstance(auth_methods_raw, str):
+            try:
+                auth_methods = json.loads(auth_methods_raw)
+                if not isinstance(auth_methods, list):
+                    auth_methods = []
+            except Exception:
+                auth_methods = []
+        elif isinstance(auth_methods_raw, list):
+            auth_methods = auth_methods_raw
+        else:
+            auth_methods = []
         asset = {
             "name": name,
             "arm_type": rtype,
@@ -17024,11 +17217,15 @@ def _subscription_assets_from_rows(rows: list) -> list[dict]:
             "has_waf": has_waf,
             "waf_mode": waf_mode,
             "listeners": listeners,
+            "routing_targets": routing_targets,
             "is_restricted": is_restricted,
             "tier": _subscription_asset_tier(rtype, name),
             "friendly_type": _friendly_type(rtype),
             "short_name": _subscription_short_name(name or "resource"),
+            "auth_methods": auth_methods,
         }
+        if public_ip:
+            asset["public_ip"] = public_ip
         assets.append(asset)
     return assets
 
@@ -17082,6 +17279,9 @@ def _subscription_asset_label(asset: dict, include_badges: bool = False, include
     fqdn = _subscription_primary_fqdn(asset)
     if include_fqdn and fqdn:
         parts.append(fqdn if len(fqdn) <= 42 else fqdn[:40] + "…")
+    public_ip = str(asset.get("public_ip") or "").strip()
+    if public_ip and "publicipaddress" in (asset.get("arm_type") or "").lower():
+        parts.append(public_ip if len(public_ip) <= 42 else public_ip[:40] + "…")
     badges = _subscription_attack_badges(asset) if include_badges else []
     if badges:
         parts.append(" · ".join(badges))

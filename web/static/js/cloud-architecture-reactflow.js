@@ -828,6 +828,150 @@ function applyHierarchyVisibility(nodes, edges, expandedNodes) {
   return { nodes: nextNodes, edges: nextEdges };
 }
 
+function reflowVisibleTree(nodes, expandedNodes) {
+  const hierarchy = buildHierarchyContext(nodes);
+  const expandedSet = expandedNodes instanceof Set ? expandedNodes : new Set(expandedNodes || []);
+  const nodeById = new Map(nodes.map((node) => [String(node?.id || ""), node]));
+  const visibleIds = new Set(nodes.filter((node) => !node.hidden).map((node) => String(node?.id || "")));
+  const sizeById = new Map();
+  const subtreeSizeById = new Map();
+  const gapX = 80;
+  const gapY = 28;
+
+  for (const node of nodes) {
+    const id = String(node?.id || "").trim();
+    if (!id) continue;
+    sizeById.set(id, {
+      width: Number(node?.style?.width || 340),
+      height: Number(node?.style?.minHeight || node?.style?.height || 132),
+    });
+  }
+
+  const subtreeSize = (id) => {
+    if (subtreeSizeById.has(id)) {
+      return subtreeSizeById.get(id);
+    }
+
+    const node = nodeById.get(id);
+    if (!node) {
+      const fallback = { width: 0, height: 0 };
+      subtreeSizeById.set(id, fallback);
+      return fallback;
+    }
+
+    const size = sizeById.get(id) || { width: 340, height: 132 };
+    const childIds = (hierarchy.childrenByParent.get(id) || []).filter((childId) => visibleIds.has(childId));
+    const shouldExpand = expandedSet.has(id) && childIds.length > 0;
+
+    if (!shouldExpand) {
+      subtreeSizeById.set(id, size);
+      return size;
+    }
+
+    const childSizes = childIds.map((childId) => subtreeSize(childId));
+    const totalChildHeight = childSizes.reduce((sum, childSize) => sum + childSize.height, 0) + gapY * Math.max(0, childSizes.length - 1);
+    const maxChildWidth = childSizes.reduce((max, childSize) => Math.max(max, childSize.width), 0);
+    const result = {
+      width: size.width + gapX + maxChildWidth,
+      height: Math.max(size.height, totalChildHeight),
+    };
+    subtreeSizeById.set(id, result);
+    return result;
+  };
+
+  const nextNodes = nodes.map((node) => ({
+    ...node,
+    position: {
+      x: Number(node?.position?.x || 0),
+      y: Number(node?.position?.y || 0),
+    },
+  }));
+  const nextNodeById = new Map(nextNodes.map((node) => [String(node?.id || ""), node]));
+  const placedIds = new Set();
+
+  const placeNode = (id, parentAbs = null, absPos = null) => {
+    const node = nextNodeById.get(id);
+    if (!node) return;
+
+    const nodeSize = sizeById.get(id) || { width: 340, height: 132 };
+    const childIds = (hierarchy.childrenByParent.get(id) || []).filter((childId) => visibleIds.has(childId));
+    const shouldExpand = expandedSet.has(id) && childIds.length > 0;
+    const currentAbs = absPos || (parentAbs ? {
+      x: parentAbs.x + Number(node.position?.x || 0),
+      y: parentAbs.y + Number(node.position?.y || 0),
+    } : {
+      x: Number(node.position?.x || 0),
+      y: Number(node.position?.y || 0),
+    });
+
+    if (parentAbs) {
+      node.position = {
+        x: Math.round(currentAbs.x - parentAbs.x),
+        y: Math.round(currentAbs.y - parentAbs.y),
+      };
+      node.parentNode = String(nodeById.get(id)?.parentNode || nodeById.get(id)?.data?.parentNodeId || "") || undefined;
+      node.extent = node.parentNode ? "parent" : undefined;
+    } else {
+      node.position = {
+        x: Math.round(currentAbs.x),
+        y: Math.round(currentAbs.y),
+      };
+      node.parentNode = undefined;
+      node.extent = undefined;
+    }
+    placedIds.add(id);
+
+    if (!shouldExpand) {
+      return;
+    }
+
+    const childSizes = childIds.map((childId) => subtreeSize(childId));
+    const totalChildHeight = childSizes.reduce((sum, childSize) => sum + childSize.height, 0) + gapY * Math.max(0, childSizes.length - 1);
+    const childX = currentAbs.x + nodeSize.width + gapX;
+    let nextY = currentAbs.y + Math.max(0, Math.round((nodeSize.height - totalChildHeight) / 2));
+
+    childIds.forEach((childId, index) => {
+      const childSize = childSizes[index];
+      const childAbs = { x: childX, y: nextY };
+      const childNode = nextNodeById.get(childId);
+      if (childNode) {
+        childNode.parentNode = id;
+        childNode.extent = "parent";
+        childNode.position = {
+          x: Math.round(childAbs.x - currentAbs.x),
+          y: Math.round(childAbs.y - currentAbs.y),
+        };
+        childNode.data = {
+          ...(childNode.data || {}),
+          parentNodeId: id,
+        };
+      }
+      placeNode(childId, currentAbs, childAbs);
+      nextY += childSize.height + gapY;
+    });
+  };
+
+  for (const rootId of hierarchy.roots) {
+    const rootNode = nextNodeById.get(rootId);
+    if (!rootNode) continue;
+    placeNode(rootId, null, {
+      x: Number(rootNode.position?.x || 0),
+      y: Number(rootNode.position?.y || 0),
+    });
+  }
+
+  for (const node of nextNodes) {
+    const id = String(node?.id || "").trim();
+    if (!id || placedIds.has(id) || !visibleIds.has(id)) continue;
+    placeNode(id, null, {
+      x: Number(node.position?.x || 0),
+      y: Number(node.position?.y || 0),
+    });
+  }
+
+  return nextNodes;
+}
+
 // Modal management
 const modalOverlay = document.getElementById("cloud-arch-modal-overlay");
 const modalTitle = document.getElementById("modal-title");
@@ -835,8 +979,42 @@ const modalSubtitle = document.getElementById("modal-subtitle");
 const modalBody = document.getElementById("modal-body");
 const modalIcon = document.getElementById("modal-icon");
 const modalCloseBtn = document.getElementById("modal-close-btn");
+let activeModalRequest = null;
+let activeModalTimeout = null;
+
+function resetModalRequestState() {
+  if (activeModalTimeout) {
+    clearTimeout(activeModalTimeout);
+    activeModalTimeout = null;
+  }
+  activeModalRequest = null;
+}
+
+function startModalRequest() {
+  if (activeModalRequest) {
+    activeModalRequest.abort();
+  }
+  resetModalRequestState();
+  const controller = new AbortController();
+  activeModalRequest = controller;
+  activeModalTimeout = setTimeout(() => {
+    if (activeModalRequest !== controller) return;
+    controller.abort();
+    resetModalRequestState();
+    if (errorCardEl && errorEl) {
+      errorEl.textContent = "Timed out loading cloud details. Please try again.";
+      errorCardEl.hidden = false;
+    }
+    closeModal();
+  }, 20000);
+  return controller;
+}
 
 function closeModal() {
+  if (activeModalRequest) {
+    activeModalRequest.abort();
+  }
+  resetModalRequestState();
   if (modalOverlay) {
     modalOverlay.hidden = true;
   }
@@ -855,6 +1033,7 @@ function openModal(resourceId, nodeData) {
   modalIcon.style.background = theme.background;
   modalIcon.style.color = theme.border;
   modalIcon.textContent = "☁";
+  const controller = startModalRequest();
   
   // Fetch resource details
   const url = new URL("/api/cloud/resource-details", window.location.origin);
@@ -868,8 +1047,9 @@ function openModal(resourceId, nodeData) {
     }
   }
   
-  fetch(url.toString(), { headers: { Accept: "application/json" } })
+  fetch(url.toString(), { headers: { Accept: "application/json" }, signal: controller.signal })
     .then(async (resp) => {
+      if (controller.signal.aborted) return;
       const data = await readJsonResponse(resp);
       if (!resp.ok) {
         throw new Error(data?.error || `Request failed with status ${resp.status}`);
@@ -877,9 +1057,11 @@ function openModal(resourceId, nodeData) {
       if (data?.error) {
         throw new Error(data.error);
       }
+      if (controller.signal.aborted || modalOverlay?.hidden) return;
       renderModalContent(data);
     })
     .catch(err => {
+      if (err?.name === "AbortError") return;
       modalBody.innerHTML = `<div class="cloud-arch-modal-empty">❌ Error loading details: ${escapeHtml(err.message)}</div>`;
     });
 }
@@ -904,14 +1086,17 @@ function openDrilldownModal(entry, subId) {
   modalIcon.style.background = theme.background;
   modalIcon.style.color = theme.border;
   modalIcon.textContent = "☁";
+  const controller = startModalRequest();
 
   const url = new URL(`/api/subscriptions/${encodeURIComponent(subId)}/drilldown`, window.location.origin);
   fetch(url.toString(), {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({ arm_type: entry.arm_type, resources: entry.resources }),
+    signal: controller.signal,
   })
     .then(async (resp) => {
+      if (controller.signal.aborted) return;
       const data = await readJsonResponse(resp);
       if (!resp.ok) {
         throw new Error(data?.error || `Request failed with status ${resp.status}`);
@@ -919,9 +1104,11 @@ function openDrilldownModal(entry, subId) {
       if (data?.error) {
         throw new Error(data.error);
       }
+      if (controller.signal.aborted || modalOverlay?.hidden) return;
       renderModalContent(data);
     })
     .catch((err) => {
+      if (err?.name === "AbortError") return;
       modalBody.innerHTML = `<div class="cloud-arch-modal-empty">❌ Error loading drilldown: ${escapeHtml(err.message)}</div>`;
     });
 }
@@ -929,6 +1116,26 @@ function openDrilldownModal(entry, subId) {
 function renderModalContent(data) {
   modalTitle.textContent = data.title || data.name || "Details";
   modalSubtitle.textContent = data.type_label ? `${data.type_label}${data.resource_group ? " • " + data.resource_group : ""}` : (data.resource_group || "");
+  setModalHeaderIcon(data.icon_path || data.parent_resource?.icon_path || "", "☁");
+
+  const dataTypeKey = normalizeResourceTypeKey(data.type || data.resourceType || data.type_label);
+  const parentTypeKey = normalizeResourceTypeKey(data.parent_resource?.type || data.parent_resource?.type_label);
+  const hasDistinctParent = data.parent_resource && data.parent_resource.name && data.parent_resource.type_label && dataTypeKey && parentTypeKey && dataTypeKey !== parentTypeKey;
+  const sections = [];
+
+  if (hasDistinctParent) {
+    sections.push({
+      title: "Parent Resource",
+      icon: data.parent_resource.icon_path
+        ? `<img src="${escapeHtml(data.parent_resource.icon_path)}" alt="" aria-hidden="true" style="width:18px;height:18px;object-fit:contain;vertical-align:middle;" />`
+        : "🔗",
+      fields: [
+        { label: "Name", value: data.parent_resource.name },
+        { label: "Type", value: data.parent_resource.type_label || data.parent_resource.type },
+        { label: "Resource Group", value: data.parent_resource.resource_group || "—" },
+      ],
+    });
+  }
 
   if ((data.view_type === "table" || data.view_type === "tree_table") && Array.isArray(data.columns)) {
     const rows = Array.isArray(data.rows) ? data.rows : [];
@@ -1006,8 +1213,6 @@ function renderModalContent(data) {
     return;
   }
 
-  const sections = [];
-  
   // Special handling for Internet node (attack surface)
   if (data.attack_surface) {
     const surface = data.attack_surface;
@@ -1323,6 +1528,19 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+function normalizeResourceTypeKey(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function setModalHeaderIcon(iconPath, fallbackText = "☁") {
+  if (!modalIcon) return;
+  if (iconPath) {
+    modalIcon.innerHTML = `<img src="${escapeHtml(iconPath)}" alt="" aria-hidden="true" style="width:28px;height:28px;object-fit:contain;" />`;
+    return;
+  }
+  modalIcon.textContent = fallbackText;
+}
+
 function isBastionResource(data) {
   const haystack = [
     data?.id,
@@ -1421,7 +1639,7 @@ function App() {
     }
 
     const visibility = applyHierarchyVisibility(nodes, edges, nextExpanded);
-    setNodes(visibility.nodes);
+    setNodes(reflowVisibleTree(visibility.nodes, nextExpanded));
     setEdges(visibility.edges);
     setExpandedNodes(nextExpanded);
   }, [expandedNodes, nodes, edges]);
@@ -1684,7 +1902,7 @@ function App() {
       });
 
       const visibility = applyHierarchyVisibility(preparedNodes, deduplicatedEdges, initialExpandedNodes);
-      setNodes(visibility.nodes);
+      setNodes(reflowVisibleTree(visibility.nodes, initialExpandedNodes));
       setEdges(visibility.edges);
       setExpandedNodes(initialExpandedNodes);
       setGraphKey(`${payload.subscription_id || sub || "latest"}:${payload?.summary?.layout_mode || mode}:${preparedNodes.length}:${deduplicatedEdges.length}`);
