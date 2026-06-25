@@ -2895,6 +2895,10 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
   z-index: 10000;
 }
 
+.modal[hidden] {
+  display: none !important;
+}
+
 .modal-content {
   background: #0d1117;
   border: 1px solid #30363d;

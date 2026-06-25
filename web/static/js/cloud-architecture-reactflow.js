@@ -1,13 +1,12 @@
 import {
-  sanitizeMermaidSource,
-  stampSvgDimensions,
-} from "./diagram-shared.js";
-import {
-  patchForeignObjectLabels,
-  enhancePlaceholderGlyphs,
-  applyEmojiIconFallback,
-} from "./diagram-base.js";
-import { renderMermaidDiagram } from "./subscription-diagrams.js";
+  CONFIG,
+  PROVIDER_THEMES,
+  normalizeViewMode,
+  viewModeLabel,
+  themeFor,
+  readJsonResponse,
+  escapeHtml,
+} from "./cloud-architecture-shared.js";
 
 const React = window.React;
 const { createRoot } = window.ReactDOM;
@@ -15,7 +14,6 @@ const { Background, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow }
 const { useCallback, useEffect, useState } = React;
 
 const h = React.createElement;
-const CONFIG = window.__TRIAGE_CLOUD_ARCH__ || {};
 const rootEl = document.getElementById("cloud-arch-root");
 const emptyEl = document.getElementById("cloud-arch-empty");
 const summaryLineEl = document.getElementById("cloud-arch-summary-line");
@@ -28,162 +26,11 @@ const mermaidViewEl = document.getElementById("cloud-arch-mermaid-view");
 const mermaidRootEl = document.getElementById("cloud-arch-mermaid-root");
 const viewButtons = Array.from(document.querySelectorAll("[data-cloud-arch-view]"));
 const INITIAL_VIEW_MODE = (CONFIG.initialViewMode || "mermaid").toLowerCase();
-const MERMAID_STYLE_ID = "cloud-arch-mermaid-style";
-let mermaidNodeDataById = new Map();
-let mermaidClickHandler = null;
-let currentMermaidSubscriptionId = "";
-
-function normalizeViewMode(value) {
-  const mode = (value || "").trim().toLowerCase();
-  if (mode === "reactflow" || mode === "full") {
-    return "reactflow";
-  }
-  return "mermaid";
-}
-
-function viewModeLabel(mode) {
-  return normalizeViewMode(mode) === "reactflow" ? "React Flow" : "Mermaid";
-}
 
 let activeViewMode = normalizeViewMode(INITIAL_VIEW_MODE);
+let currentMermaidSubscriptionId = "";
 if (rootEl) {
   rootEl.hidden = activeViewMode === "mermaid";
-}
-if (mermaidViewEl) {
-  mermaidViewEl.hidden = activeViewMode !== "mermaid";
-}
-
-const PROVIDER_THEMES = {
-  azure: { label: "Azure", iconPath: "/static/assets/icons/azure/compute/aks.svg", border: "#0078d4", background: "rgba(0, 120, 212, 0.14)" },
-  aws: { label: "AWS", abbr: "AWS", border: "#ff9900", background: "rgba(255, 153, 0, 0.14)" },
-  gcp: { label: "Google Cloud", iconPath: "/static/vendor/cloud-icons/gcp.svg", border: "#4285f4", background: "rgba(66, 133, 244, 0.14)" },
-  oci: { label: "Oracle Cloud", abbr: "OCI", border: "#f80000", background: "rgba(248, 0, 0, 0.14)" },
-  alicloud: { label: "Alibaba Cloud", iconPath: "/static/vendor/cloud-icons/alibaba.svg", border: "#ff6a00", background: "rgba(255, 106, 0, 0.14)" },
-  tencentcloud: { label: "Tencent Cloud", abbr: "TC", border: "#0052d9", background: "rgba(0, 82, 217, 0.14)" },
-  huaweicloud: { label: "Huawei Cloud", iconPath: "/static/vendor/cloud-icons/huawei.svg", border: "#ff3b30", background: "rgba(255, 59, 48, 0.14)" },
-  digitalocean: { label: "DigitalOcean", iconPath: "/static/vendor/cloud-icons/digitalocean.svg", border: "#0080ff", background: "rgba(0, 128, 255, 0.14)" },
-  openstack: { label: "OpenStack", iconPath: "/static/vendor/cloud-icons/openstack.svg", border: "#ed1944", background: "rgba(237, 25, 68, 0.14)" },
-  unknown: { label: "Unknown", abbr: "?", border: "#64748b", background: "rgba(100, 116, 139, 0.14)" },
-  external: { label: "External", iconPath: "/static/vendor/cloud-icons/external.svg", border: "#475569", background: "rgba(71, 85, 105, 0.14)" },
-};
-
-function themeFor(key) {
-  return PROVIDER_THEMES[key] || PROVIDER_THEMES.unknown;
-}
-
-function applyMermaidCss(cssText) {
-  let styleEl = document.getElementById(MERMAID_STYLE_ID);
-  const css = String(cssText || "").trim();
-  if (!css) {
-    if (styleEl) {
-      styleEl.remove();
-    }
-    return;
-  }
-  if (!styleEl) {
-    styleEl = document.createElement("style");
-    styleEl.id = MERMAID_STYLE_ID;
-    document.head.appendChild(styleEl);
-  }
-  styleEl.textContent = css;
-}
-
-function normalizeMermaidNodeId(rawId) {
-  return String(rawId || "")
-    .replace(/^.*?flowchart-/, "")
-    .replace(/^mermaid-\d+-/, "")
-    .replace(/-\d+$/, "");
-}
-
-function attachMermaidDrilldownHandlers(svg) {
-  if (!svg) return;
-
-  svg.querySelectorAll("g.node[id]").forEach((el) => {
-    const rawId = el.getAttribute("id") || "";
-    const nodeId = normalizeMermaidNodeId(rawId);
-    const nodeData = mermaidNodeDataById.get(nodeId);
-    if (!nodeData || nodeData.summaryNode) return;
-    el.classList.add("node-drillable");
-    el.style.cursor = "pointer";
-    el.setAttribute("title", `Click to explore ${nodeData.title || nodeId}`);
-    el.setAttribute("tabindex", "0");
-    el.addEventListener("click", (evt) => {
-      evt.stopPropagation();
-      evt.preventDefault();
-      openNodePopup(nodeId, nodeData);
-    });
-    el.addEventListener("keydown", (evt) => {
-      if (evt.key === "Enter") {
-        openNodePopup(nodeId, nodeData);
-      }
-    });
-  });
-}
-
-function ensureMermaidClickHandler(svg) {
-  if (mermaidClickHandler || !svg) {
-    return;
-  }
-
-  mermaidClickHandler = (event) => {
-    const target = event.target instanceof Element ? event.target : null;
-    let nodeGroup = null;
-
-    if (event.composedPath) {
-      for (const el of event.composedPath()) {
-        if (el === svg) break;
-        if (el?.tagName === "g" && el.classList && (el.classList.contains("node") || el.classList.contains("cluster")) && el.id) {
-          nodeGroup = el;
-          break;
-        }
-      }
-    }
-
-    if (!nodeGroup && target?.closest) {
-      const candidate = target.closest("g.node[id], g.cluster[id]");
-      if (candidate && svg.contains(candidate)) {
-        nodeGroup = candidate;
-      }
-    }
-
-    if (!nodeGroup) {
-      let el = target;
-      while (el && el !== svg) {
-        if (el.tagName === "g" && el.classList && (el.classList.contains("node") || el.classList.contains("cluster")) && el.id) {
-          nodeGroup = el;
-          break;
-        }
-        el = el.parentElement || el.parentNode;
-      }
-    }
-
-    if (!nodeGroup) return;
-
-    const nodeId = normalizeMermaidNodeId(nodeGroup.getAttribute("id") || "");
-    const nodeData = mermaidNodeDataById.get(nodeId);
-    if (!nodeData || nodeData.summaryNode) return;
-    openNodePopup(nodeId, nodeData);
-  };
-  svg.addEventListener("click", mermaidClickHandler);
-}
-
-async function readJsonResponse(resp) {
-  const contentType = (resp.headers.get("content-type") || "").toLowerCase();
-  const bodyText = await resp.text();
-
-  if (!bodyText) {
-    return null;
-  }
-
-  if (contentType.includes("application/json") || bodyText.trim().startsWith("{") || bodyText.trim().startsWith("[")) {
-    try {
-      return JSON.parse(bodyText);
-    } catch (err) {
-      throw new Error(`Invalid JSON response: ${err.message}`);
-    }
-  }
-
-  throw new Error(bodyText.trim().slice(0, 300) || `Unexpected ${resp.status} response`);
 }
 
 function escapeMermaidText(value) {
@@ -293,245 +140,7 @@ function buildHierarchyContext(nodes) {
   };
 }
 
-const ARM_TO_ICON_CLASS = {
-  "microsoft.network/applicationgateways": "azurerm_app_gateway",
-  "microsoft.network/applicationgatewaybackendpools": "azurerm_app_gateway_backend_pool",
-  "microsoft.network/applicationgatewaylisteners/http": "azurerm_app_gateway_listener_http",
-  "microsoft.network/applicationgatewaylisteners/https": "azurerm_app_gateway_listener_https",
-  "microsoft.network/frontdoors": "azurerm_front_door_and_cdn_profiles",
-  "microsoft.cdn/profiles": "azurerm_cdn_profile",
-  "microsoft.cdn/profiles/afdendpoints": "azurerm_cdn_frontdoor_endpoint",
-  "microsoft.network/trafficmanagerprofiles": "azurerm_traffic_manager",
-  "microsoft.network/azurefirewalls": "azurerm_firewall",
-  "microsoft.network/firewallpolicies": "azurerm_firewall_policy",
-  "microsoft.network/virtualnetworks": "azurerm_virtual_network",
-  "microsoft.network/networksecuritygroups": "azurerm_network_security_group",
-  "microsoft.network/routetables": "azurerm_route_table",
-  "microsoft.network/publicipaddresses": "azurerm_public_ip",
-  "microsoft.network/loadbalancers": "azurerm_lb",
-  "microsoft.network/bastionhosts": "azurerm_bastion_host",
-  "microsoft.apimanagement/service": "azurerm_apim",
-  "microsoft.containerservice/managedclusters": "azurerm_aks",
-  "microsoft.storage/storageaccounts": "azurerm_storage_account",
-  "microsoft.keyvault/vaults": "azurerm_key_vault",
-  "microsoft.sql/servers": "azurerm_sql_server",
-  "microsoft.sql/servers/databases": "azurerm_sql_database",
-  "microsoft.documentdb/databaseaccounts": "azurerm_cosmos_db",
-  "microsoft.web/sites": "azurerm_app_service",
-  "microsoft.web/functionapps": "azurerm_function_app",
-  "microsoft.web/serverfarms": "azurerm_app_service_plan",
-  "microsoft.web/certificates": "azurerm_app_service_certificate",
-  "microsoft.certificateregistration/certificateorders": "azurerm_app_service_certificate_order",
-  "microsoft.web/hostingenvironments": "azurerm_app_service_environment",
-  "microsoft.cache/redis": "azurerm_redis",
-  "microsoft.eventhub/namespaces": "azurerm_event_hub",
-  "microsoft.servicebus/namespaces": "azurerm_service_bus",
-  "microsoft.managedidentity/userassignedidentities": "azurerm_user_assigned_identity",
-  "microsoft.compute/virtualmachinescalesets": "azurerm_virtual_machine_scale_set",
-  "microsoft.compute/images": "azurerm_image",
-  "microsoft.operationalinsights/workspaces": "azurerm_log_analytics_workspace",
-  "microsoft.insights/actiongroups": "azurerm_monitor_action_group",
-  "microsoft.insights/activitylogalerts": "azurerm_monitor_activity_log_alert",
-  "microsoft.appconfiguration/configurationstores": "azurerm_app_configuration",
-  "microsoft.insights/components": "azurerm_app_insights",
-  "microsoft.containerregistry/registries": "azurerm_container_registries",
-  "microsoft.servicefabric/clusters": "azurerm_service_fabric_clusters",
-  "microsoft.search/searchservices": "azurerm_search",
-};
 
-function normalizeIconClass(resourceType, providerKey = "azure") {
-  const rawType = String(resourceType || "").trim().toLowerCase();
-  if (!rawType || rawType === "external_endpoint") {
-    return "";
-  }
-
-  if (
-    rawType.startsWith("azurerm_") ||
-    rawType.startsWith("aws_") ||
-    rawType.startsWith("google_") ||
-    rawType.startsWith("kubernetes_") ||
-    rawType.startsWith("oci_") ||
-    rawType.startsWith("alicloud_")
-  ) {
-    return `icon-${rawType.replace(/_/g, "-")}`;
-  }
-
-  let normalized = rawType;
-  if (ARM_TO_ICON_CLASS[rawType]) {
-    normalized = ARM_TO_ICON_CLASS[rawType];
-  } else if (rawType.startsWith("microsoft.")) {
-    const parts = rawType.split("/");
-    const leaf = (parts[parts.length - 1] || "").replace(/[^a-z0-9]+/g, "_");
-    const singular = leaf.endsWith("ies")
-      ? `${leaf.slice(0, -3)}y`
-      : (leaf.endsWith("s") && !leaf.endsWith("ss") ? leaf.slice(0, -1) : leaf);
-    normalized = `azurerm_${singular}`;
-  } else if (providerKey === "azure") {
-    normalized = rawType.replace(/[^a-z0-9_]+/g, "_");
-  }
-
-  return normalized ? `icon-${normalized.replace(/_/g, "-")}` : "";
-}
-
-function buildMermaidGraph(payload, subscriptionName) {
-  const nodes = Array.isArray(payload?.nodes) ? payload.nodes : [];
-  const edges = Array.isArray(payload?.edges) ? payload.edges : [];
-  const nodeIdMap = new Map();
-  const nodeClassAssignments = [];
-  const providerOrder = Object.keys(PROVIDER_THEMES);
-  const providerGroups = new Map();
-  const hierarchy = buildHierarchyContext(nodes);
-  let autoIndex = 0;
-
-  for (const node of nodes) {
-    const providerKey = node?.data?.providerKey || "unknown";
-    if (!providerGroups.has(providerKey)) {
-      providerGroups.set(providerKey, []);
-    }
-    providerGroups.get(providerKey).push(node);
-  }
-
-  const orderedProviders = [
-    ...providerOrder,
-    ...Array.from(providerGroups.keys()).filter((key) => !providerOrder.includes(key)).sort(),
-  ];
-
-  for (const providerKey of orderedProviders) {
-    if (!providerGroups.has(providerKey)) continue;
-    providerGroups.get(providerKey).sort((a, b) => {
-      const aLabel = String(a?.data?.label || a?.id || "");
-      const bLabel = String(b?.data?.label || b?.id || "");
-      return aLabel.localeCompare(bLabel);
-    });
-  }
-
-  const lines = ["flowchart TB"];
-  const rootLabel = escapeMermaidText(subscriptionName || "Cloud Architecture");
-  lines.push(`  subgraph ARCH["${rootLabel}"]`);
-
-  function renderNode(node, indent = "    ") {
-    const mermaidId = sanitizeMermaidId(node?.id, `node_${autoIndex++}`);
-    nodeIdMap.set(String(node?.id), mermaidId);
-
-    const title = node?.data?.label || node?.data?.providerLabel || node?.id || "Node";
-    const typeLabel = node?.data?.typeLabel || "";
-    const repoLabel = node?.data?.repoName || "";
-    const nodeLabel = buildNodeLabel(title, typeLabel, repoLabel);
-
-    lines.push(`${indent}${mermaidId}["${nodeLabel}"]`);
-
-    const iconClass = String(node?.data?.iconClass || "").trim() || normalizeIconClass(node?.data?.resourceType || "", node?.data?.providerKey || "azure");
-    if (iconClass) {
-      const mermaidSafeIconClass = iconClass.replace(/-/g, "_");
-      nodeClassAssignments.push(`    class ${mermaidId} ${mermaidSafeIconClass};`);
-    }
-
-    const children = hierarchy.childrenByParent.get(String(node?.id)) || [];
-    if (children.length) {
-      const nestedLabel = escapeMermaidText(
-        node?.data?.isGroupNode
-          ? `${title} (${children.length})`
-          : `${title} nested resources`
-      );
-      const nestedId = `grp_${sanitizeMermaidId(node?.id, `node_${autoIndex++}`)}_nested`;
-      lines.push(`${indent}subgraph ${nestedId}["${nestedLabel}"]`);
-      for (const child of children) {
-        renderNode(child, `${indent}  `);
-      }
-      lines.push(`${indent}end`);
-    }
-  }
-
-  for (const providerKey of orderedProviders) {
-    const bucket = providerGroups.get(providerKey);
-    if (!bucket || bucket.length === 0) continue;
-    const theme = themeFor(providerKey);
-    const groupId = `grp_${sanitizeMermaidId(providerKey, "provider")}`;
-    lines.push(`    subgraph ${groupId}["${escapeMermaidText(theme.label)}"]`);
-    const rootNodes = bucket.filter((node) => {
-      const parentId = node?.data?.parentNodeId ? String(node.data.parentNodeId) : "";
-      if (!parentId) return true;
-      const parent = hierarchy.nodeById.get(parentId);
-      return !parent || (parent?.data?.providerKey || "unknown") !== providerKey;
-    });
-    for (const node of rootNodes) {
-      renderNode(node, "      ");
-    }
-    lines.push("    end");
-  }
-
-  if (nodeClassAssignments.length) {
-    lines.push("");
-    lines.push(...nodeClassAssignments);
-  }
-
-  lines.push("");
-  lines.push("    classDef cloudSummary fill:#111827,stroke:#94a3b8,stroke-width:2px,stroke-dasharray:4 3,color:#e2e8f0;");
-
-  const seenEdges = new Set();
-  for (const edge of edges) {
-    const sourceId = nodeIdMap.get(String(edge?.source));
-    const targetId = nodeIdMap.get(String(edge?.target));
-    if (!sourceId || !targetId) continue;
-    const rawLabel = String(edge?.label || "").trim();
-    const label = rawLabel ? `|${escapeMermaidText(rawLabel)}|` : "";
-    const edgeKey = `${sourceId}->${targetId}->${label}`;
-    if (seenEdges.has(edgeKey)) continue;
-    seenEdges.add(edgeKey);
-    lines.push(`    ${sourceId} -->${label} ${targetId}`);
-  }
-
-  lines.push("  end");
-  return lines.join("\n");
-}
-
-async function renderMermaidGraph(payload, subscriptionName) {
-  if (!mermaidViewEl || !mermaidRootEl) {
-    return;
-  }
-
-  const directDiagram = String(payload?.mermaid || "").trim();
-  const mermaidSource = sanitizeMermaidSource(directDiagram || buildMermaidGraph(payload, subscriptionName));
-  if (directDiagram) {
-    mermaidNodeDataById = new Map(
-      Object.entries(payload?.node_drilldown_map || {})
-        .map(([id, data]) => [String(id || ""), data || null])
-        .filter(([id, data]) => id && data)
-    );
-  } else {
-    mermaidNodeDataById = new Map(
-      (Array.isArray(payload?.nodes) ? payload.nodes : [])
-        .map((node) => [String(node?.id || ""), node?.data || null])
-        .filter(([id, data]) => id && data)
-    );
-  }
-  applyMermaidCss(payload?.css_code || "");
-  try {
-    const svg = await renderMermaidDiagram({
-      source: mermaidSource,
-      rootEl: mermaidRootEl,
-      onRendered: async (svgEl) => {
-        stampSvgDimensions(svgEl);
-        patchForeignObjectLabels(svgEl);
-        enhancePlaceholderGlyphs(svgEl);
-        applyEmojiIconFallback(svgEl);
-        attachMermaidDrilldownHandlers(svgEl);
-        ensureMermaidClickHandler(svgEl);
-        if (window.MermaidIconInjector) {
-          const iconDataUrl = "/api/icon-mappings?provider=all";
-          [0, 250, 700].forEach((delay) => {
-            setTimeout(() => window.MermaidIconInjector.processAllDiagrams({ iconDataUrl }), delay);
-          });
-        }
-      },
-    });
-    return Boolean(svg);
-  } catch (err) {
-    console.error("[cloud-architecture] Mermaid render failed:", err);
-    mermaidRootEl.innerHTML = `<pre style="color: var(--red); white-space: pre-wrap;">${escapeHtml(err.message || String(err))}</pre>`;
-    return false;
-  }
-}
 
 function syncViewButtons() {
   for (const button of viewButtons) {
@@ -1001,11 +610,7 @@ function startModalRequest() {
     if (activeModalRequest !== controller) return;
     controller.abort();
     resetModalRequestState();
-    if (errorCardEl && errorEl) {
-      errorEl.textContent = "Timed out loading cloud details. Please try again.";
-      errorCardEl.hidden = false;
-    }
-    closeModal();
+    showModalError("Timed out loading cloud details. Please try again.");
   }, 20000);
   return controller;
 }
@@ -1020,24 +625,31 @@ function closeModal() {
   }
 }
 
-function openModal(resourceId, nodeData) {
-  if (!modalOverlay) return;
-  
-  modalOverlay.hidden = false;
-  modalTitle.textContent = "Loading...";
+function showModalError(message) {
+  if (!modalOverlay || !modalBody) return;
+  modalTitle.textContent = "Unable to load details";
   modalSubtitle.textContent = "";
-  modalBody.innerHTML = '<div class="cloud-arch-modal-loading">Loading resource details...</div>';
-  
-  // Set icon
-  const theme = themeFor(nodeData.providerKey);
-  modalIcon.style.background = theme.background;
-  modalIcon.style.color = theme.border;
-  modalIcon.textContent = "☁";
+  setModalHeaderIcon("", "⚠");
+  modalBody.innerHTML = `<div class="cloud-arch-modal-empty">${escapeHtml(message)}</div>`;
+  modalOverlay.hidden = false;
+}
+
+function openModal(resourceId, nodeData, lookup = {}) {
+  if (!modalOverlay) return;
   const controller = startModalRequest();
-  
-  // Fetch resource details
   const url = new URL("/api/cloud/resource-details", window.location.origin);
-  url.searchParams.set("id", resourceId);
+  const resolvedResourceId = String(lookup.id || lookup.resourceId || resourceId || "").trim();
+  if (resolvedResourceId) {
+    url.searchParams.set("id", resolvedResourceId);
+  }
+  const name = String(lookup.name || lookup.resourceName || lookup.label || "").trim();
+  const resourceGroup = String(lookup.resourceGroup || lookup.rg || "").trim();
+  const type = String(lookup.type || lookup.armType || lookup.resourceType || "").trim();
+  const subscription = String(lookup.subscription || lookup.sub || "").trim();
+  if (name) url.searchParams.set("name", name);
+  if (resourceGroup) url.searchParams.set("resource_group", resourceGroup);
+  if (type) url.searchParams.set("type", type);
+  if (subscription) url.searchParams.set("sub", subscription);
   
   // Add subscription for Internet node
   if (resourceId.toLowerCase() === "internet") {
@@ -1057,18 +669,36 @@ function openModal(resourceId, nodeData) {
       if (data?.error) {
         throw new Error(data.error);
       }
-      if (controller.signal.aborted || modalOverlay?.hidden) return;
-      renderModalContent(data);
+      if (controller.signal.aborted) return;
+      try {
+        renderModalContent(data);
+      } catch (err) {
+        showModalError(`Error rendering details: ${err.message}`);
+      }
     })
     .catch(err => {
       if (err?.name === "AbortError") return;
-      modalBody.innerHTML = `<div class="cloud-arch-modal-empty">❌ Error loading details: ${escapeHtml(err.message)}</div>`;
+      showModalError(`Error loading details: ${err.message}`);
     });
 }
 
 function openNodePopup(resourceId, nodeData) {
-  if (nodeData?.resources?.length && currentMermaidSubscriptionId) {
-    openDrilldownModal(nodeData, currentMermaidSubscriptionId);
+  const resources = Array.isArray(nodeData?.resources) ? nodeData.resources.filter(Boolean) : [];
+  const isGroupedNode = Boolean(nodeData?.is_group || nodeData?.isGroupNode || nodeData?.summaryNode || nodeData?.groupType);
+  if (resources.length > 1 || (isGroupedNode && resources.length > 0)) {
+    if (currentMermaidSubscriptionId) {
+      openDrilldownModal(nodeData, currentMermaidSubscriptionId);
+      return;
+    }
+  } else if (resources.length === 1) {
+    const resource = resources[0] || {};
+    openModal(resourceId, nodeData, {
+      id: resource.id,
+      name: resource.name,
+      resourceGroup: resource.rg,
+      type: nodeData?.arm_type || nodeData?.type || nodeData?.resourceType || "",
+      subscription: currentMermaidSubscriptionId,
+    });
     return;
   }
   openModal(resourceId, nodeData);
@@ -1076,16 +706,6 @@ function openNodePopup(resourceId, nodeData) {
 
 function openDrilldownModal(entry, subId) {
   if (!modalOverlay || !subId) return;
-
-  modalOverlay.hidden = false;
-  modalTitle.textContent = "Loading...";
-  modalSubtitle.textContent = "";
-  modalBody.innerHTML = '<div class="cloud-arch-modal-loading">Loading drilldown data...</div>';
-
-  const theme = themeFor(entry.providerKey);
-  modalIcon.style.background = theme.background;
-  modalIcon.style.color = theme.border;
-  modalIcon.textContent = "☁";
   const controller = startModalRequest();
 
   const url = new URL(`/api/subscriptions/${encodeURIComponent(subId)}/drilldown`, window.location.origin);
@@ -1104,16 +724,23 @@ function openDrilldownModal(entry, subId) {
       if (data?.error) {
         throw new Error(data.error);
       }
-      if (controller.signal.aborted || modalOverlay?.hidden) return;
-      renderModalContent(data);
+      if (controller.signal.aborted) return;
+      try {
+        renderModalContent(data);
+      } catch (err) {
+        showModalError(`Error rendering details: ${err.message}`);
+      }
     })
     .catch((err) => {
       if (err?.name === "AbortError") return;
-      modalBody.innerHTML = `<div class="cloud-arch-modal-empty">❌ Error loading drilldown: ${escapeHtml(err.message)}</div>`;
+      showModalError(`Error loading drilldown: ${err.message}`);
     });
 }
 
 function renderModalContent(data) {
+  if (modalOverlay) {
+    modalOverlay.hidden = false;
+  }
   modalTitle.textContent = data.title || data.name || "Details";
   modalSubtitle.textContent = data.type_label ? `${data.type_label}${data.resource_group ? " • " + data.resource_group : ""}` : (data.resource_group || "");
   setModalHeaderIcon(data.icon_path || data.parent_resource?.icon_path || "", "☁");
@@ -1321,6 +948,37 @@ function renderModalContent(data) {
   }
   
   // Configuration Section (regular resources)
+  if (data.name || data.type_label || data.type || data.sku || data.fqdn) {
+    const summaryFields = [];
+    if (data.name) summaryFields.push({ label: "Asset Name", value: data.name });
+    if (data.type_label || data.typeLabel) summaryFields.push({ label: "Service Type", value: data.type_label || data.typeLabel });
+    if (data.type) summaryFields.push({ label: "Resource Type", value: data.type });
+    if (data.sku || data.configuration?.sku_name) summaryFields.push({ label: "SKU", value: data.sku || data.configuration?.sku_name });
+    if (data.security && typeof data.security.is_public === "boolean") {
+      summaryFields.push({
+        label: "Public",
+        value: data.security.is_public
+          ? '<span class="cloud-arch-modal-badge cloud-arch-modal-badge--danger">🌐 Public</span>'
+          : '<span class="cloud-arch-modal-badge cloud-arch-modal-badge--success">🔒 Private</span>',
+        isHtml: true,
+      });
+    } else if (typeof data.public === "boolean") {
+      summaryFields.push({
+        label: "Public",
+        value: data.public
+          ? '<span class="cloud-arch-modal-badge cloud-arch-modal-badge--danger">🌐 Public</span>'
+          : '<span class="cloud-arch-modal-badge cloud-arch-modal-badge--success">🔒 Private</span>',
+        isHtml: true,
+      });
+    }
+    if (data.fqdn) summaryFields.push({ label: "FQDN", value: data.fqdn });
+    if (data.resource_group) summaryFields.push({ label: "Resource Group", value: data.resource_group });
+    if (data.location) summaryFields.push({ label: "Location", value: data.location });
+    if (summaryFields.length > 0) {
+      sections.push({ title: "Asset Overview", icon: "🧩", fields: summaryFields });
+    }
+  }
+
   if (data.configuration) {
     const configFields = [];
     if (data.configuration.sku_name) configFields.push({ label: "SKU", value: data.configuration.sku_name });
@@ -1522,12 +1180,6 @@ function renderModalContent(data) {
   }).join('');
 }
 
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
-
 function normalizeResourceTypeKey(value) {
   return String(value || "").trim().toLowerCase();
 }
@@ -1696,7 +1348,7 @@ function App() {
     if (connectionLegendEl && connectionCount > 0) {
       connectionLegendEl.style.display = "block";
       connectionLegendEl.innerHTML = `
-        <div style="font-weight: 700; margin-bottom: 8px; color: var(--text);">Connection Legend</div>
+        <div style="font-weight: 700; margin-bottom: 8px; color: var(--text);">Arrow Colour Key</div>
         <div style="display: flex; flex-direction: column; gap: 6px;">
           <div style="display: flex; align-items: center; gap: 8px;">
             <svg width="32" height="3" style="flex-shrink: 0;"><line x1="0" y1="1.5" x2="32" y2="1.5" stroke="#f97316" stroke-width="3" /></svg>
@@ -1922,41 +1574,8 @@ function App() {
         if (mode) query.set("view", mode);
         window.history.replaceState(null, "", `${window.location.pathname}${query.toString() ? `?${query}` : ""}`);
         if (mode === "mermaid") {
-          let rendered = false;
-          if (payload.subscription_id) {
-            try {
-              const diagResp = await fetch(`/api/subscriptions/${encodeURIComponent(payload.subscription_id)}/diagram`, { headers: { Accept: "application/json" } });
-              const diagPayload = await readJsonResponse(diagResp);
-              if (diagResp.ok && diagPayload?.ingress_diagram) {
-                rendered = await renderMermaidDiagram({
-                  source: sanitizeMermaidSource(String(diagPayload.ingress_diagram?.views?.connectivity?.mermaid || diagPayload.ingress_diagram?.mermaid || "")),
-                  rootEl: mermaidRootEl,
-                  onRendered: async (svgEl) => {
-                    mermaidNodeDataById = new Map(
-                      Object.entries(diagPayload.ingress_diagram?.views?.connectivity?.node_drilldown_map || diagPayload.ingress_diagram?.node_drilldown_map || {})
-                        .map(([id, data]) => [String(id || ""), data || null])
-                        .filter(([id, data]) => id && data)
-                    );
-                    currentMermaidSubscriptionId = String(diagPayload.ingress_diagram?.subscription_id || payload.subscription_id || currentMermaidSubscriptionId || "");
-                    applyMermaidCss(diagPayload.ingress_diagram?.views?.connectivity?.css_code || diagPayload.ingress_diagram?.css_code || "");
-                    stampSvgDimensions(svgEl);
-                    patchForeignObjectLabels(svgEl);
-                    enhancePlaceholderGlyphs(svgEl);
-                    applyEmojiIconFallback(svgEl);
-                    attachMermaidDrilldownHandlers(svgEl);
-                    ensureMermaidClickHandler(svgEl);
-                    if (window.MermaidIconInjector && diagPayload.ingress_diagram?.views?.connectivity?.icon_map) {
-                      await window.MermaidIconInjector.injectIcons(svgEl, diagPayload.ingress_diagram.views.connectivity.icon_map);
-                    }
-                  },
-                });
-              }
-            } catch (_) {
-              rendered = false;
-            }
-          }
-          if (!rendered) {
-            await renderMermaidGraph(payload, payload.subscription_name || sub || "subscription-production");
+          if (typeof window.__triageCloudArchLoadMermaid === "function") {
+         await window.__triageCloudArchLoadMermaid(payload.subscription_name || sub || "subscription-production");
           }
         }
       }
@@ -2043,7 +1662,15 @@ for (const button of viewButtons) {
     }
     activeViewMode = mode;
     syncViewButtons();
-    if (typeof window.__triageCloudArchLoad === "function") {
+    
+    // Load Mermaid support when switching to mermaid mode
+    if (mode === "mermaid" && !window.__triageCloudArchLoadMermaid) {
+      import("./cloud-architecture-mermaid.js").then(() => {
+        if (typeof window.__triageCloudArchLoad === "function") {
+          window.__triageCloudArchLoad((subscriptionInput.value || "").trim(), activeViewMode);
+        }
+      });
+    } else if (typeof window.__triageCloudArchLoad === "function") {
       window.__triageCloudArchLoad((subscriptionInput.value || "").trim(), activeViewMode);
     }
   });

@@ -28,7 +28,7 @@ import {
 
 // ── Scale & transform helpers ─────────────────────────────────────────────────
 
-function postProcessSvg(svgEl) {
+export function postProcessSvg(svgEl) {
   if (!svgEl) return;
   patchForeignObjectLabels(svgEl);
   stampSvgDimensions(svgEl);
