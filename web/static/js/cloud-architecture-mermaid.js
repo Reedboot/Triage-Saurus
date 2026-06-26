@@ -1,11 +1,12 @@
 import {
   sanitizeMermaidSource,
-} from "./diagram-shared.js";
+  injectDiagramIconsIntoSvg,
+} from "./diagram-shared.js?v=2";
 import {
   enhancePlaceholderGlyphs,
   applyEmojiIconFallback,
-} from "./diagram-base.js";
-import { renderMermaidDiagram, postProcessSvg } from "./subscription-diagrams.js";
+} from "./diagram-base.js?v=2";
+import { renderMermaidDiagram, postProcessSvg } from "./subscription-diagrams.js?v=2";
 import {
   CONFIG,
   PROVIDER_THEMES,
@@ -14,7 +15,7 @@ import {
   themeFor,
   readJsonResponse,
   escapeHtml,
-} from "./cloud-architecture-shared.js";
+} from "./cloud-architecture-shared.js?v=2";
 
 const MERMAID_STYLE_ID = "cloud-arch-mermaid-style";
 let mermaidNodeDataById = new Map();
@@ -30,6 +31,122 @@ const subscriptionInput = document.getElementById("subscription-input");
 const viewButtons = Array.from(document.querySelectorAll("[data-cloud-arch-view]"));
 
 let activeViewMode = normalizeViewMode(CONFIG.initialViewMode || "mermaid");
+const isFirefox = /firefox/i.test(navigator.userAgent || "");
+let firefoxOverlayRaf = null;
+let firefoxOverlayTimeout = null;
+let firefoxOverlayResizeObserver = null;
+
+function renderFirefoxIconOverlay(svgEl) {
+  if (!isFirefox || !mermaidRootEl || !svgEl) return;
+
+  let overlay = mermaidRootEl.querySelector(":scope > .cloud-arch-firefox-icon-overlay");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.className = "cloud-arch-firefox-icon-overlay";
+    overlay.style.cssText = [
+      "position:absolute",
+      "inset:0",
+      "pointer-events:none",
+      "z-index:3",
+    ].join(";");
+    mermaidRootEl.style.position = "relative";
+    mermaidRootEl.appendChild(overlay);
+  }
+
+  overlay.innerHTML = "";
+  const svgRect = svgEl.getBoundingClientRect();
+
+  svgEl.querySelectorAll("g.node img.ni").forEach((img) => {
+    const src = img.getAttribute("src");
+    if (!src) return;
+    const rect = img.getBoundingClientRect();
+    const nodeEl = img.closest("g.node");
+    const labelEl = nodeEl?.querySelector(".nl");
+    const labelRect = labelEl?.getBoundingClientRect();
+    const labelText =
+      (labelEl?.innerText || nodeEl?.querySelector(".nodeLabel")?.textContent || "").trim();
+
+    const overlayImg = document.createElement("img");
+    overlayImg.src = src;
+    overlayImg.alt = "";
+    overlayImg.setAttribute("aria-hidden", "true");
+    overlayImg.style.cssText = [
+      `width:${Math.max(0, rect.width)}px`,
+      `height:${Math.max(0, rect.height)}px`,
+      "object-fit:contain",
+      "pointer-events:none",
+      "user-select:none",
+      "position:absolute",
+      `left:${Math.max(0, rect.left - svgRect.left)}px`,
+      `top:${Math.max(0, rect.top - svgRect.top)}px`,
+    ].join(";");
+    overlay.appendChild(overlayImg);
+
+    if (labelText && labelRect) {
+      const labelStyles = window.getComputedStyle(labelEl);
+      const overlayLabel = document.createElement("div");
+      overlayLabel.textContent = labelText;
+      overlayLabel.style.cssText = [
+        "position:absolute",
+        `left:${Math.max(0, labelRect.left - svgRect.left)}px`,
+        `top:${Math.max(0, labelRect.top - svgRect.top)}px`,
+        `width:${Math.max(0, labelRect.width)}px`,
+        `height:${Math.max(0, labelRect.height)}px`,
+        `font-size:${labelStyles.fontSize || "11px"}`,
+        `line-height:${labelStyles.lineHeight || "1.15"}`,
+        `font-weight:${labelStyles.fontWeight || "500"}`,
+        "font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
+        "color:#e2e8f0",
+        "text-shadow:0 1px 1px rgba(0,0,0,0.75)",
+        "white-space:pre-wrap",
+        "word-break:break-word",
+        "display:flex",
+        "align-items:center",
+        "justify-content:center",
+        "text-align:center",
+        "pointer-events:none",
+      ].join(";");
+      overlay.appendChild(overlayLabel);
+      labelEl.style.visibility = "hidden";
+    }
+    // Keep layout metrics intact for future refreshes.
+    img.style.visibility = "hidden";
+    img.style.opacity = "0";
+  });
+}
+
+function refreshFirefoxOverlay() {
+  if (!isFirefox || !mermaidRootEl) return;
+  const svgEl = mermaidRootEl.querySelector("svg");
+  if (!svgEl) return;
+  renderFirefoxIconOverlay(svgEl);
+}
+
+function scheduleFirefoxOverlayRefresh() {
+  if (!isFirefox) return;
+  if (firefoxOverlayRaf) cancelAnimationFrame(firefoxOverlayRaf);
+  if (firefoxOverlayTimeout) clearTimeout(firefoxOverlayTimeout);
+  firefoxOverlayRaf = requestAnimationFrame(() => {
+    refreshFirefoxOverlay();
+    // One extra delayed pass after layout settles during zoom/fit.
+    firefoxOverlayTimeout = setTimeout(() => refreshFirefoxOverlay(), 60);
+  });
+}
+
+function bindFirefoxOverlaySync(svgEl) {
+  if (!isFirefox || !svgEl) return;
+  if (firefoxOverlayResizeObserver) {
+    firefoxOverlayResizeObserver.disconnect();
+    firefoxOverlayResizeObserver = null;
+  }
+  if (typeof ResizeObserver !== "undefined") {
+    firefoxOverlayResizeObserver = new ResizeObserver(() => {
+      scheduleFirefoxOverlayRefresh();
+    });
+    firefoxOverlayResizeObserver.observe(svgEl);
+    firefoxOverlayResizeObserver.observe(mermaidRootEl);
+  }
+}
 
 function applyMermaidCss(cssText) {
   let styleEl = document.getElementById(MERMAID_STYLE_ID);
@@ -461,12 +578,10 @@ async function renderMermaidGraph(payload, subscriptionName) {
         applyEmojiIconFallback(svgEl);
         attachMermaidDrilldownHandlers(svgEl);
         ensureMermaidClickHandler(svgEl);
-        if (window.MermaidIconInjector) {
-          const iconDataUrl = "/api/icon-mappings?provider=all";
-          [0, 250, 700].forEach((delay) => {
-            setTimeout(() => window.MermaidIconInjector.processAllDiagrams({ iconDataUrl }), delay);
-          });
-        }
+        renderFirefoxIconOverlay(svgEl);
+        bindFirefoxOverlaySync(svgEl);
+        await injectDiagramIconsIntoSvg(svgEl, "all");
+        scheduleFirefoxOverlayRefresh();
       },
     });
     return Boolean(svg);
@@ -654,10 +769,26 @@ for (const button of viewButtons) {
       if (container && window.applyDiagramScale) {
         const current = parseFloat(container.dataset.diagramScale || "1") || 1;
         window.applyDiagramScale(container, current * (e.deltaY > 0 ? 0.9 : 1.1));
+        scheduleFirefoxOverlayRefresh();
       }
     }
   }, { passive: false });
 })();
+
+if (isFirefox) {
+  document.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!target || !target.closest) return;
+    if (
+      target.closest('[data-diagram-zoom-in="cloud-arch-mermaid-root"]') ||
+      target.closest('[data-diagram-zoom-out="cloud-arch-mermaid-root"]') ||
+      target.closest('[data-diagram-fit="cloud-arch-mermaid-root"]')
+    ) {
+      setTimeout(() => scheduleFirefoxOverlayRefresh(), 0);
+      setTimeout(() => scheduleFirefoxOverlayRefresh(), 80);
+    }
+  });
+}
 
 if (mermaidViewEl) {
   mermaidViewEl.hidden = activeViewMode !== "mermaid";

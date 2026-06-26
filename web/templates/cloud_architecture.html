@@ -161,46 +161,19 @@
 
     .cloud-arch-mermaid-controls {
       position: absolute;
-      top: 12px;
-      right: 16px;
-      display: flex;
-      align-items: center;
-      gap: 6px;
+      left: 16px;
+      bottom: 16px;
       z-index: 20;
     }
 
     .cloud-arch-mermaid-btn {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 32px;
-      height: 32px;
-      border-radius: 6px;
-      font-size: 0.875rem;
+      font-size: 14px;
       font-weight: 700;
-      background: #161b22;
-      color: #7d8590;
-      border: 1px solid #30363d;
-      cursor: pointer;
-      transition: background 0.15s, color 0.15s;
     }
 
-    .cloud-arch-mermaid-btn:hover {
-      background: #21262d;
-      color: #e6edf3;
-    }
-
-    .cloud-arch-mermaid-btn:focus-visible {
-      outline: 2px solid #60a5fa;
-      outline-offset: 2px;
-    }
-
-    .cloud-arch-mermaid-btn--text {
-      width: auto;
-      gap: 4px;
-      padding: 0 10px;
-      font-size: 0.75rem;
-      font-weight: 500;
+    .cloud-arch-mermaid-btn--export svg {
+      width: 12px;
+      height: 12px;
     }
 
     .cloud-arch-title {
@@ -878,20 +851,14 @@
 
       <div class="cloud-arch-views">
         <div class="cloud-arch-view cloud-arch-mermaid-view" id="cloud-arch-mermaid-view" hidden>
-          <div class="cloud-arch-mermaid-controls">
-            <button type="button" class="cloud-arch-mermaid-btn" data-diagram-zoom-out="cloud-arch-mermaid-root" title="Zoom out (−)">−</button>
-            <button type="button" class="cloud-arch-mermaid-btn" data-diagram-zoom-in="cloud-arch-mermaid-root" title="Zoom in (+)">+</button>
-            <button type="button" class="cloud-arch-mermaid-btn cloud-arch-mermaid-btn--text" data-diagram-fit="cloud-arch-mermaid-root" title="Fit to screen (F)">
-              <svg style="width:14px;height:14px;flex-shrink:0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/>
-              </svg>
-              Fit
-            </button>
-            <button type="button" class="cloud-arch-mermaid-btn cloud-arch-mermaid-btn--text" data-diagram-export="cloud-arch-mermaid-root" title="Export PNG">
-              <svg style="width:14px;height:14px;flex-shrink:0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <div class="cloud-arch-mermaid-controls react-flow__panel react-flow__controls bottom left">
+            <button type="button" class="cloud-arch-mermaid-btn react-flow__controls-button" data-diagram-zoom-in="cloud-arch-mermaid-root" title="Zoom in">+</button>
+            <button type="button" class="cloud-arch-mermaid-btn react-flow__controls-button" data-diagram-zoom-out="cloud-arch-mermaid-root" title="Zoom out">−</button>
+            <button type="button" class="cloud-arch-mermaid-btn react-flow__controls-button" data-diagram-fit="cloud-arch-mermaid-root" title="Fit view">⤢</button>
+            <button type="button" class="cloud-arch-mermaid-btn cloud-arch-mermaid-btn--export react-flow__controls-button" data-diagram-export="cloud-arch-mermaid-root" title="Export PNG">
+              <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3"/>
               </svg>
-              PNG
             </button>
           </div>
           <div id="cloud-arch-mermaid-scroll">
@@ -976,7 +943,7 @@
     // window.__triageCloudArchLoadMermaid is defined before ReactFlow mounts
     // and calls loadGraph.
     if (needsMermaid) {
-      await import('/static/js/cloud-architecture-mermaid.js?v=1');
+      await import('/static/js/cloud-architecture-mermaid.js?v=2');
     }
     import('/static/js/cloud-architecture-reactflow.js?v=13');
   </script>

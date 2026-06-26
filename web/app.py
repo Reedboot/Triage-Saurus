@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import html
+import ipaddress
 import contextvars
 import hashlib
 import re
@@ -13311,8 +13312,36 @@ def _build_subscription_architecture_payload(
 
     raw_json_by_id = {str(row["id"]).lower(): (row["raw_json"] or "{}") for row in asset_rows}
 
+    def _is_public_ip_asset_type(asset_type: str | None) -> bool:
+        return "publicipaddresses" in str(asset_type or "").lower()
+
+    public_ip_assets_by_id: dict[str, dict] = {}
+    public_ip_assets_by_name_rg: dict[tuple[str, str], list[dict]] = defaultdict(list)
     assets: list[dict] = []
     for row in asset_rows:
+        if _is_public_ip_asset_type(row["type"]):
+            raw_json = row["raw_json"] or "{}"
+            try:
+                parsed = json.loads(raw_json) if isinstance(raw_json, str) else (raw_json or {})
+            except Exception:
+                parsed = {}
+            public_ip_asset = {
+                "id": row["id"],
+                "name": row["name"],
+                "resource_group": row["resource_group"] or "",
+                "public_ips": _extract_public_ips(parsed) if isinstance(parsed, dict) else [],
+                "dns_names": _extract_dns_names(parsed, row["fqdn"]),
+                "is_public": bool(row["is_public"]),
+            }
+            id_key = str(row["id"] or "").strip().lower()
+            if id_key:
+                public_ip_assets_by_id[id_key] = public_ip_asset
+            name_key = str(row["name"] or "").strip().lower()
+            rg_key = str(row["resource_group"] or "").strip().lower()
+            if name_key:
+                public_ip_assets_by_name_rg[(rg_key, name_key)].append(public_ip_asset)
+            continue
+
         raw_json = row["raw_json"] or "{}"
         try:
             parsed = json.loads(raw_json) if isinstance(raw_json, str) else (raw_json or {})
@@ -13355,6 +13384,45 @@ def _build_subscription_architecture_payload(
             "provider_label": "Azure",
             "tier": _shared_subscription_asset_tier(row["type"], row["name"]),
         }
+
+        linked_public_ip_ids = _extract_public_ip_resource_ids(parsed) if isinstance(parsed, dict) else set()
+        linked_public_ip_assets: list[dict] = []
+        for pip_id in linked_public_ip_ids:
+            candidate = public_ip_assets_by_id.get(str(pip_id).lower())
+            if candidate:
+                linked_public_ip_assets.append(candidate)
+        if not linked_public_ip_assets:
+            name_key = str(row["name"] or "").strip().lower()
+            rg_key = str(row["resource_group"] or "").strip().lower()
+            linked_public_ip_assets = list(public_ip_assets_by_name_rg.get((rg_key, name_key), []))
+
+        if linked_public_ip_assets:
+            linked_ips: list[str] = []
+            linked_dns: list[str] = []
+            linked_seen = set()
+            dns_seen = set()
+            for pip in linked_public_ip_assets:
+                for ip in pip.get("public_ips") or []:
+                    ip_norm = str(ip or "").strip()
+                    if ip_norm and ip_norm not in linked_seen:
+                        linked_seen.add(ip_norm)
+                        linked_ips.append(ip_norm)
+                for dns in pip.get("dns_names") or []:
+                    dns_norm = str(dns or "").strip()
+                    if dns_norm and dns_norm not in dns_seen:
+                        dns_seen.add(dns_norm)
+                        linked_dns.append(dns_norm)
+            if linked_ips:
+                asset["associated_public_ips"] = linked_ips
+                if not public_ip:
+                    public_ip = linked_ips[0]
+                asset["is_public"] = True
+            if linked_dns:
+                asset["associated_fqdns"] = linked_dns
+                if not asset.get("fqdn"):
+                    asset["fqdn"] = linked_dns[0]
+                    asset["is_public"] = True
+
         if public_ip:
             asset["public_ip"] = public_ip
         assets.append(asset)
@@ -14003,6 +14071,10 @@ def _build_subscription_architecture_payload(
             is_group_node = bool(asset.get("_is_group_node"))
             # Check if this is a child node (depth > 0 or has parent_id)
             is_child_node = bool(asset.get("is_child") or asset.get("depth", 0) > 0 or asset.get("parent_id"))
+            label = (asset.get("short_name") or asset["name"]) if requested_mode == "overview" else asset["name"]
+            asset_type_key = str(asset.get("type") or "").lower()
+            if "bastionhost" in asset_type_key and asset.get("resource_group"):
+                label = f"{label} ({asset.get('resource_group')})"
             
             nodes.append(
                 {
@@ -14014,7 +14086,7 @@ def _build_subscription_architecture_payload(
                     },
                     "hidden": is_child_node,  # Start with child nodes hidden
                     "data": {
-                        "label": (asset.get("short_name") or asset["name"]) if requested_mode == "overview" else asset["name"],
+                        "label": label,
                         "providerKey": asset["provider_key"],
                         "providerLabel": asset["provider_label"],
                         "typeLabel": asset["display_type_label"] or asset["type_label"],
@@ -14965,6 +15037,17 @@ def api_cloud_resource_details():
         
         raw_json = json.loads(asset_row["raw_json"] or "{}") if asset_row["raw_json"] else {}
         parent_row = _resolve_parent_resource(conn, asset_row)
+        associated_public_ips, associated_dns_names = _resolve_associated_public_ip_details(
+            conn,
+            str(asset_row["subscription_id"] or ""),
+            str(asset_row["name"] or ""),
+            str(asset_row["resource_group"] or ""),
+            raw_json if isinstance(raw_json, dict) else {},
+        )
+        if associated_dns_names and not asset_row["fqdn"]:
+            fqdn_value = associated_dns_names[0]
+        else:
+            fqdn_value = asset_row["fqdn"]
         
         # Extract security settings from raw JSON
         details = {
@@ -14976,7 +15059,7 @@ def api_cloud_resource_details():
             "resource_group": asset_row["resource_group"],
             "location": asset_row["location"],
             "sku": asset_row["sku"],
-            "fqdn": asset_row["fqdn"],
+            "fqdn": fqdn_value,
             "subscription": asset_row["sub_name"],
             "environment": asset_row["environment"],
             "is_virtual": False,
@@ -15011,8 +15094,8 @@ def api_cloud_resource_details():
                 "private_endpoints": _extract_private_endpoints(raw_json),
                 "vnet": _extract_vnet(raw_json),
                 "subnet": _extract_subnet(raw_json),
-                "public_ips": _extract_public_ips(raw_json),
-                "dns_names": _extract_dns_names(raw_json, asset_row["fqdn"]),
+                "public_ips": sorted(set([*_extract_public_ips(raw_json), *associated_public_ips])),
+                "dns_names": sorted(set([*_extract_dns_names(raw_json, fqdn_value), *associated_dns_names])),
             },
             "keyvault": {
                 "references": _extract_keyvault_refs(raw_json),
@@ -15224,6 +15307,14 @@ def _extract_public_ips(raw_json: dict) -> list[str]:
 
     def _add(ip: str) -> None:
         v = ip.strip()
+        # Avoid surfacing ARM resource IDs as "IP addresses".
+        if "/" in v and not re.fullmatch(r"[0-9a-fA-F:.]+", v):
+            return
+        try:
+            ipaddress.ip_address(v)
+        except ValueError:
+            if not re.fullmatch(r"[0-9a-fA-F:.]+", v):
+                return
         if v and v not in seen:
             seen.add(v)
             public_ips.append(v)
@@ -15271,6 +15362,113 @@ def _extract_public_ips(raw_json: dict) -> list[str]:
                     _add(v)
 
     return public_ips
+
+
+def _extract_public_ip_resource_ids(raw_json: dict) -> set[str]:
+    """Extract ARM IDs of referenced Public IP resources from a resource JSON blob."""
+    if not isinstance(raw_json, dict):
+        return set()
+
+    found: set[str] = set()
+
+    def _visit(value) -> None:
+        if isinstance(value, dict):
+            for key, inner in value.items():
+                key_l = str(key).lower()
+                if key_l in {"id", "resourceid"} and isinstance(inner, str):
+                    if "/publicipaddresses/" in inner.lower():
+                        found.add(inner.strip())
+                _visit(inner)
+        elif isinstance(value, list):
+            for item in value:
+                _visit(item)
+        elif isinstance(value, str):
+            if "/publicipaddresses/" in value.lower():
+                found.add(value.strip())
+
+    _visit(raw_json)
+    return found
+
+
+def _resolve_associated_public_ip_details(
+    conn,
+    subscription_id: str,
+    resource_name: str,
+    resource_group: str,
+    raw_json: dict,
+) -> tuple[list[str], list[str]]:
+    """Resolve public IP literals and DNS names associated to a non-PIP resource."""
+    ips: list[str] = []
+    dns_names: list[str] = []
+    seen_ips: set[str] = set()
+    seen_dns: set[str] = set()
+
+    def _add_ip(value: str) -> None:
+        v = str(value or "").strip()
+        if v and v not in seen_ips:
+            seen_ips.add(v)
+            ips.append(v)
+
+    def _add_dns(value: str) -> None:
+        v = str(value or "").strip()
+        if v and v not in seen_dns:
+            seen_dns.add(v)
+            dns_names.append(v)
+
+    for value in _extract_public_ips(raw_json):
+        _add_ip(value)
+    for value in _extract_dns_names(raw_json, None):
+        _add_dns(value)
+
+    public_ip_ids = list(_extract_public_ip_resource_ids(raw_json))
+    if public_ip_ids:
+        placeholders = ",".join("?" for _ in public_ip_ids)
+        rows = conn.execute(
+            f"""
+            SELECT fqdn, raw_json
+            FROM provisioned_assets
+            WHERE subscription_id = ?
+              AND LOWER(type) LIKE '%publicipaddresses%'
+              AND LOWER(id) IN ({placeholders})
+            """,
+            [subscription_id, *[pid.lower() for pid in public_ip_ids]],
+        ).fetchall()
+        for row in rows:
+            row_raw = row["raw_json"] or "{}"
+            try:
+                parsed = json.loads(row_raw) if isinstance(row_raw, str) else (row_raw or {})
+            except Exception:
+                parsed = {}
+            for value in _extract_public_ips(parsed):
+                _add_ip(value)
+            for value in _extract_dns_names(parsed, row["fqdn"]):
+                _add_dns(value)
+
+    if not ips and not dns_names and resource_name:
+        # Best-effort fallback when ARM reference IDs are missing in source JSON.
+        rows = conn.execute(
+            """
+            SELECT fqdn, raw_json
+            FROM provisioned_assets
+            WHERE subscription_id = ?
+              AND LOWER(type) LIKE '%publicipaddresses%'
+              AND LOWER(name) = LOWER(?)
+              AND LOWER(COALESCE(resource_group, '')) = LOWER(?)
+            """,
+            (subscription_id, resource_name, resource_group or ""),
+        ).fetchall()
+        for row in rows:
+            row_raw = row["raw_json"] or "{}"
+            try:
+                parsed = json.loads(row_raw) if isinstance(row_raw, str) else (row_raw or {})
+            except Exception:
+                parsed = {}
+            for value in _extract_public_ips(parsed):
+                _add_ip(value)
+            for value in _extract_dns_names(parsed, row["fqdn"]):
+                _add_dns(value)
+
+    return ips, dns_names
 
 
 def _resolve_parent_resource(conn, asset_row: sqlite3.Row) -> dict | None:

@@ -408,25 +408,27 @@ const MermaidIconInjector = (() => {
   /**
    * Fetch icon map once and cache it. Returns a Promise<iconMap>.
    */
-  let _iconMapCache = null;
+  let _iconMapCache = new Map();
   async function _getIconMap(iconDataUrl = '/api/icon-mappings') {
-    if (_iconMapCache) return _iconMapCache;
+    const cacheKey = String(iconDataUrl || '/api/icon-mappings');
+    if (_iconMapCache.has(cacheKey)) return _iconMapCache.get(cacheKey);
     try {
       // Add cache-buster while preserving existing query params (e.g. provider=azure).
-      const url = new URL(iconDataUrl, window.location.origin);
+      const url = new URL(cacheKey, window.location.origin);
       url.searchParams.set('v', String(Date.now()));
       const response = await fetch(url.toString());
       if (!response.ok) {
         console.warn(`[MermaidIconInjector] Failed to fetch icon mappings: ${response.status}`);
         return {};
       }
-      _iconMapCache = await response.json();
+      const iconMap = await response.json();
       // Sanitize all icon paths defensively so stale/bad cache entries
       // cannot produce broken static URLs.
-      Object.keys(_iconMapCache).forEach((k) => {
-        _iconMapCache[k] = _sanitizeIconPath(_iconMapCache[k]);
+      Object.keys(iconMap).forEach((k) => {
+        iconMap[k] = _sanitizeIconPath(iconMap[k]);
       });
-      return _iconMapCache;
+      _iconMapCache.set(cacheKey, iconMap);
+      return iconMap;
     } catch (err) {
       console.error('[MermaidIconInjector] Error fetching icon mappings:', err.message);
       return {};
@@ -449,10 +451,11 @@ const MermaidIconInjector = (() => {
         return;
       }
 
-      // Find SVGs in both inline (.mermaid) and standalone (#diagram-container) viewers
+      // Find SVGs in the common Mermaid containers plus the cloud architecture root.
       const svgElements = new Set([
         ...document.querySelectorAll('.mermaid svg'),
-        ...document.querySelectorAll('#diagram-container svg')
+        ...document.querySelectorAll('#diagram-container svg'),
+        ...document.querySelectorAll('#cloud-arch-mermaid-root svg')
       ]);
 
       for (const svgElement of svgElements) {
@@ -550,7 +553,7 @@ const MermaidIconInjector = (() => {
     CONFIG, // Expose for customization if needed
     _clearCache: () => {
       _svgCache = {};
-      _iconMapCache = null;
+      _iconMapCache = new Map();
     }
   };
 })();

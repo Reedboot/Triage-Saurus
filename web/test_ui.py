@@ -3947,6 +3947,134 @@ class TestCloudPosture:
         assert data["parent_resource"]["type_label"] == "Bastion"
         assert data["parent_resource"]["icon_path"]
 
+    def test_api_cloud_architecture_omits_public_ip_nodes_and_surfaces_on_bastion(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+        import tempfile
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        conn = sqlite3.connect(tmp.name)
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+        public_ip_id = "/subscriptions/sub-1/resourceGroups/blue-network-ukwest/providers/Microsoft.Network/publicIPAddresses/bastion"
+        bastion_id = "/subscriptions/sub-1/resourceGroups/blue-network-ukwest/providers/Microsoft.Network/bastionHosts/bastion"
+        conn.executemany(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    bastion_id,
+                    "sub-1",
+                    "blue-network-ukwest",
+                    "bastion",
+                    "Microsoft.Network/bastionHosts",
+                    "uksouth",
+                    "Standard",
+                    None,
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps(
+                        {
+                            "properties": {
+                                "ipConfigurations": [
+                                    {"properties": {"publicIPAddress": {"id": public_ip_id}}}
+                                ]
+                            }
+                        }
+                    ),
+                    0,
+                    None,
+                ),
+                (
+                    public_ip_id,
+                    "sub-1",
+                    "blue-network-ukwest",
+                    "bastion",
+                    "Microsoft.Network/publicIPAddresses",
+                    "uksouth",
+                    "Standard",
+                    "bastion.example.com",
+                    1,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({"properties": {"ipAddress": "20.30.40.50", "dnsSettings": {"fqdn": "bastion.example.com"}}}),
+                    0,
+                    None,
+                ),
+            ],
+        )
+        conn.commit()
+
+        def _db():
+            c = sqlite3.connect(tmp.name)
+            c.row_factory = sqlite3.Row
+            return c
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", _db)
+        client = app_module.app.test_client()
+
+        graph_resp = client.get("/api/cloud/architecture?sub=sub-1&view=reactflow")
+        assert graph_resp.status_code == 200, graph_resp.get_data(as_text=True)
+        graph = graph_resp.get_json()
+        assert not any("publicipaddresses" in str((n.get("data") or {}).get("resourceType", "")).lower() for n in graph["nodes"])
+        bastion_node = next(n for n in graph["nodes"] if str((n.get("data") or {}).get("resourceType", "")).lower().endswith("/bastionhosts"))
+        assert "blue-network-ukwest" in str((bastion_node.get("data") or {}).get("label", ""))
+
+        details_resp = client.get("/api/cloud/resource-details", query_string={"id": bastion_id})
+        assert details_resp.status_code == 200, details_resp.get_data(as_text=True)
+        details = details_resp.get_json()
+        assert details["fqdn"] == "bastion.example.com"
+        assert "20.30.40.50" in details["network"]["public_ips"]
+        os.unlink(tmp.name)
+
     def test_api_cloud_architecture_includes_icon_metadata_for_mermaid_nodes(self, monkeypatch):
         import os
         import sqlite3

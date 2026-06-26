@@ -76,15 +76,44 @@ export function getDiagramContentBounds(svg) {
 
 // ── Icon Injection Helper ──────────────────────────────────────────────────────
 
+async function fetchIconMap(iconDataUrl) {
+  const url = new URL(iconDataUrl, window.location.origin);
+  url.searchParams.set('v', String(Date.now()));
+  const resp = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
+  if (!resp.ok) {
+    throw new Error(`Failed to load icon map (${resp.status})`);
+  }
+  return resp.json();
+}
+
+/**
+ * Inject Mermaid provider icons directly into a rendered SVG.
+ * This follows the same direct-render path as the working subscription page.
+ */
+export async function injectDiagramIconsIntoSvg(svgEl, provider = 'all') {
+  if (!svgEl || !window.MermaidIconInjector || typeof window.MermaidIconInjector.injectIcons !== 'function') {
+    return false;
+  }
+
+  const iconDataUrl = `/api/icon-mappings?provider=${encodeURIComponent(provider)}`;
+  const iconMap = await fetchIconMap(iconDataUrl);
+  if (!iconMap || !Object.keys(iconMap).length) {
+    return false;
+  }
+
+  await window.MermaidIconInjector.injectIcons(svgEl, iconMap);
+  return true;
+}
+
 /**
  * Process Mermaid diagrams for icon injection using the MermaidIconInjector.
- * Called by both viewers after rendering to inject provider icons into diagrams.
+ * Kept for viewer pages that still depend on the global scan-and-retry path.
  */
 export function injectDiagramIcons(provider) {
   if (!window.MermaidIconInjector) return;
 
   const iconDataUrl = `/api/icon-mappings?provider=${encodeURIComponent(provider)}`;
-  
+
   // Retry a few times to handle race between SVG insertion and icon map loading.
   [0, 250, 700].forEach(delay => {
     setTimeout(() => {
