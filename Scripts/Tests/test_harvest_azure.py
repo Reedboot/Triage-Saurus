@@ -35,6 +35,7 @@ from Azure._helpers import (
 )
 from Azure._staged import BackfillJob, StagedRows
 from Azure import app_configuration, storage, aks, key_vault, sql_server, service_bus, event_hub, virtual_network
+from Azure import load_balancer
 from Azure import virtual_machine
 
 
@@ -75,6 +76,68 @@ class TestSafeStr:
 
     def test_coerces_int_to_string(self):
         assert safe_str(42) == "42"
+
+
+class TestLoadBalancerHarvest:
+    def test_extract_public_ip_ids_from_frontend_configs(self):
+        resource = {
+            "properties": {
+                "frontendIPConfigurations": [
+                    {"properties": {"publicIPAddress": {"id": "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Network/publicIPAddresses/pip-one"}}},
+                    {"properties": {"publicIPAddressId": "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Network/publicIPAddresses/pip-two"}},
+                ]
+            }
+        }
+        ids = load_balancer._extract_public_ip_ids(resource)
+        assert sorted(ids) == sorted([
+            "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Network/publicIPAddresses/pip-one",
+            "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Network/publicIPAddresses/pip-two",
+        ])
+        assert load_balancer._is_public(resource) is True
+
+    def test_harvest_uses_lb_show_details_for_public_detection(self, monkeypatch):
+        lb_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/loadBalancers/lb-one"
+        pip_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/publicIPAddresses/pip-one"
+
+        list_row = {
+            "id": lb_id,
+            "name": "lb-one",
+            "resourceGroup": "rg-net",
+            "type": "Microsoft.Network/loadBalancers",
+            "location": "ukwest",
+            "properties": {
+                # Simulate shallow `az resource list` payload with no frontend details.
+                "frontendIPConfigurations": []
+            },
+        }
+        detailed_row = {
+            **list_row,
+            "properties": {
+                "frontendIPConfigurations": [
+                    {"properties": {"publicIPAddress": {"id": pip_id}}}
+                ],
+                "backendAddressPools": [{"name": "pool-1"}],
+                "probes": [{"name": "probe-1"}],
+            },
+        }
+
+        def fake_az(args, subscription_id):
+            if args[:3] == ["resource", "list", "--resource-type"]:
+                return [list_row]
+            if args[:3] == ["network", "lb", "show"]:
+                return detailed_row
+            return []
+
+        monkeypatch.setattr(load_balancer, "az", fake_az)
+
+        rows = load_balancer.harvest("sub-1")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["id"] == lb_id
+        assert row["is_public"] == 1
+        raw = json.loads(row["raw_json"])
+        assert raw["properties"]["frontendIPConfigurations"][0]["properties"]["publicIPAddress"]["id"] == pip_id
+        assert raw["_extra"]["public_ip_resource_ids"] == [pip_id]
 
 
 # ---------------------------------------------------------------------------

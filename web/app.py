@@ -18078,6 +18078,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         if ("applicationgateway" in type_key or "frontdoor" in type_key
                 or "publicipaddress" in type_key
                 or "azurefirewalls" in type_key
+                or "loadbalancer" in type_key
                 or "bastionhost" in type_key):
             entry_points.append(item)
         elif "apimanagement" in type_key:
@@ -18220,6 +18221,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 category = "Traffic Manager"
             elif "azurefirewalls" in type_key:
                 category = "Azure Firewall"
+            elif "loadbalancer" in type_key:
+                category = "Load Balancer"
             elif "bastionhost" in type_key:
                 category = "Bastion"
             elif "publicip" in type_key:

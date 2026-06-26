@@ -90,7 +90,6 @@ async function renderFirefoxIconOverlay(svgEl) {
 
   svgEl.querySelectorAll("g.node").forEach((nodeEl) => {
     const img = nodeEl.querySelector("img.ni");
-    const iconRect = toLocalRect(img?.getBoundingClientRect());
     let src = img?.getAttribute("src") || "";
     const rawNodeId = nodeEl.getAttribute("id") || "";
     const nodeId = normalizeMermaidNodeId(rawNodeId);
@@ -139,11 +138,10 @@ async function renderFirefoxIconOverlay(svgEl) {
       18,
       Math.min(42, Math.round((nodeRect.width || 120) * 0.22))
     );
-    const iconWidth = Math.max(0, iconRect?.width || fallbackSize);
-    const iconHeight = Math.max(0, iconRect?.height || fallbackSize);
-
-    const fallbackLeft = nodeRect.left + ((nodeRect.width || iconWidth) - iconWidth) / 2;
-    const fallbackTop = nodeRect.top + Math.max(8, Math.min(16, nodeRect.height * 0.14));
+    const iconWidth = Math.max(0, fallbackSize);
+    const iconHeight = Math.max(0, fallbackSize);
+    const iconTop = nodeRect.top + Math.max(8, Math.min(16, nodeRect.height * 0.14));
+    const iconLeft = nodeRect.left + Math.max(0, ((nodeRect.width || iconWidth) - iconWidth) / 2);
 
     overlayImg.style.cssText = [
       `width:${iconWidth}px`,
@@ -152,8 +150,8 @@ async function renderFirefoxIconOverlay(svgEl) {
       "pointer-events:none",
       "user-select:none",
       "position:absolute",
-      `left:${Math.max(0, iconRect?.left ?? fallbackLeft)}px`,
-      `top:${Math.max(0, iconRect?.top ?? fallbackTop)}px`,
+      `left:${Math.max(0, iconLeft)}px`,
+      `top:${Math.max(0, iconTop)}px`,
     ].join(";");
     overlay.appendChild(overlayImg);
 
@@ -163,12 +161,18 @@ async function renderFirefoxIconOverlay(svgEl) {
       overlayLabel.textContent = labelText;
       overlayLabel.dataset.nodeId = nodeId;
       const labelRectLocal = toLocalRect(labelRect);
+      const labelWidth = Math.max(0, Math.min(nodeRect.width - 10, labelRectLocal?.width || nodeRect.width - 10));
+      const labelLeft = nodeRect.left + Math.max(5, (nodeRect.width - labelWidth) / 2);
+      const labelTop = Math.max(
+        nodeRect.top + iconHeight + Math.max(12, Math.min(20, nodeRect.height * 0.2)),
+        labelRectLocal?.top || 0
+      );
       overlayLabel.style.cssText = [
         "position:absolute",
-        `left:${Math.max(0, labelRectLocal?.left || 0)}px`,
-        `top:${Math.max(0, labelRectLocal?.top || 0)}px`,
-        `width:${Math.max(0, labelRectLocal?.width || 0)}px`,
-        `height:${Math.max(0, labelRectLocal?.height || 0)}px`,
+        `left:${Math.max(0, labelLeft)}px`,
+        `top:${Math.max(0, labelTop)}px`,
+        `width:${Math.max(0, labelWidth)}px`,
+        `height:${Math.max(0, labelRectLocal?.height || 24)}px`,
         `font-size:${labelStyles.fontSize || "11px"}`,
         `line-height:${labelStyles.lineHeight || "1.15"}`,
         `font-weight:${labelStyles.fontWeight || "500"}`,
@@ -184,9 +188,13 @@ async function renderFirefoxIconOverlay(svgEl) {
         "pointer-events:none",
       ].join(";");
       overlay.appendChild(overlayLabel);
+      labelEl.style.opacity = "0";
+      labelEl.style.visibility = "hidden";
     }
-    // Do not hide original labels/icons in Firefox fallback; overlay is additive.
-    // This avoids dropping icons when a replacement image fails to paint.
+    if (img) {
+      img.style.opacity = "0";
+      img.style.visibility = "hidden";
+    }
   });
 }
 
