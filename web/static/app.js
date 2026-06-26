@@ -234,41 +234,6 @@
       : wrapHeight / (2 * fitScale) - bounds.height / 2;
     applyTransform();
     saveDiagramState(currentDiagramIndex);
-
-    // Nudge pan so the Internet / 🌐 node stays visible after fit.
-    // We find the first label containing "internet" (case-insensitive), measure it
-    // relative to the scaled diagram-zoom-inner, and if it's outside the visible wrap
-    // area we shift panX/panY just enough to bring it into view with 24px margin.
-    try {
-      const innerEl = document.getElementById('diagram-zoom-inner');
-      if (!innerEl) return;
-      const allLabels = activeDiagram.querySelectorAll('.nodeLabel, .node text, text');
-      let internetEl = null;
-      for (const el of allLabels) {
-        if (/internet/i.test(el.textContent || '')) { internetEl = el; break; }
-      }
-      if (!internetEl) return;
-      const innerRect = innerEl.getBoundingClientRect();
-      const nodeRect  = internetEl.getBoundingClientRect();
-      const margin = 24;
-      // Node position relative to inner element in unscaled coords
-      // In screen px the visible wrap area is [0, wrapWidth] x [0, wrapHeight]
-      const nodeScreenLeft   = nodeRect.left   - innerRect.left;
-      const nodeScreenRight  = nodeRect.right  - innerRect.left;
-      const nodeScreenTop    = nodeRect.top    - innerRect.top;
-      const nodeScreenBottom = nodeRect.bottom - innerRect.top;
-      let nudgeX = 0, nudgeY = 0;
-      if (nodeScreenLeft < margin)                nudgeX = (margin - nodeScreenLeft)    / fitScale;
-      if (nodeScreenRight > wrapWidth - margin)   nudgeX = (wrapWidth - margin - nodeScreenRight) / fitScale;
-      if (nodeScreenTop < margin)                 nudgeY = (margin - nodeScreenTop)     / fitScale;
-      if (nodeScreenBottom > wrapHeight - margin) nudgeY = (wrapHeight - margin - nodeScreenBottom) / fitScale;
-      if (nudgeX !== 0 || nudgeY !== 0) {
-        zoomState.panX += nudgeX;
-        zoomState.panY += nudgeY;
-        applyTransform();
-        saveDiagramState(currentDiagramIndex);
-      }
-    } catch (_) { /* non-critical */ }
   }
 
   function scheduleDiagramFit(attempt = 0) {

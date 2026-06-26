@@ -218,6 +218,7 @@ function buildFallbackModalData(resourceId, nodeData, lookup = {}) {
   return {
   title: firstNonEmpty(
     lookup.name,
+    primary?.name,
     nodeData?.title,
     nodeData?.label,
     nodeData?.providerLabel,
@@ -387,6 +388,12 @@ function buildNodeLabel(nodeLabel, typeLabel, repoLabel) {
   const lines = [typeLabel, nodeLabel, repoLabel]
     .map((item) => String(item || "").trim())
     .filter(Boolean)
+    .map((item) => {
+      if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(item)) return item;
+      if (item.includes(" ") || !item.includes(".")) return item;
+      const shortLabel = item.split(".", 1)[0];
+      return shortLabel || item;
+    })
     .map((item) => escapeMermaidText(item));
 
   return lines.join("\\n");
@@ -746,6 +753,11 @@ function closeModal() {
 
 function openNodePopup(resourceId, nodeData) {
   const resources = Array.isArray(nodeData?.resources) ? nodeData.resources.filter(Boolean) : [];
+  const isGroupedNode = Boolean(nodeData?.is_group || nodeData?.isGroupNode || nodeData?.summaryNode || nodeData?.groupType);
+  if (resources.length > 1 || (isGroupedNode && resources.length > 0)) {
+    renderGroupedResourcesModal(nodeData);
+    return;
+  }
   if (resources.length === 1) {
     const resource = resources[0] || {};
     openModal(resourceId, nodeData, {
@@ -758,6 +770,50 @@ function openNodePopup(resourceId, nodeData) {
     return;
   }
   openModal(resourceId, nodeData);
+}
+
+function renderGroupedResourcesModal(nodeData) {
+  if (!modalOverlay || !modalTitle || !modalBody) return;
+  const resources = Array.isArray(nodeData?.resources) ? nodeData.resources.filter(Boolean) : [];
+  const title = firstNonEmpty(nodeData?.title, nodeData?.label, "Grouped resources");
+  const typeLabel = firstNonEmpty(nodeData?.typeLabel, nodeData?.arm_type, nodeData?.type);
+
+  modalOverlay.hidden = false;
+  modalTitle.textContent = title;
+  if (modalSubtitle) {
+    modalSubtitle.textContent = `${typeLabel}${resources.length ? ` • ${resources.length} resources` : ""}`;
+  }
+  setModalHeaderIcon(firstNonEmpty(nodeData?.icon_path, nodeData?.iconPath), "🧩");
+
+  if (!resources.length) {
+    modalBody.innerHTML = '<div class="cloud-arch-modal-empty">No resources found in this group.</div>';
+    return;
+  }
+
+  const sorted = [...resources].sort((a, b) => {
+    const arg = String(a?.rg || "");
+    const brg = String(b?.rg || "");
+    if (arg !== brg) return arg.localeCompare(brg);
+    return String(a?.name || "").localeCompare(String(b?.name || ""));
+  });
+
+  modalBody.innerHTML = `
+    <div class="cloud-arch-modal-section">
+      <div class="cloud-arch-modal-section-title">
+        <span class="cloud-arch-modal-section-icon">📦</span>
+        Group Members
+      </div>
+      <ul class="cloud-arch-modal-list">
+        ${sorted
+          .map((resource) => {
+            const name = escapeHtml(String(resource?.name || "unnamed"));
+            const rg = escapeHtml(String(resource?.rg || ""));
+            return `<li class="cloud-arch-modal-list-item"><strong>${name}</strong>${rg ? ` <span style="color: var(--text-muted);">(${rg})</span>` : ""}</li>`;
+          })
+          .join("")}
+      </ul>
+    </div>
+  `;
 }
 
 function openModal(resourceId, nodeData, lookup = {}) {

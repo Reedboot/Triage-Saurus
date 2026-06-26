@@ -15033,6 +15033,43 @@ def api_cloud_resource_details():
         ).fetchone()
         
         if not asset_row:
+            lookup_name = (request.args.get("name") or request.args.get("resource_name") or "").strip()
+            lookup_rg = (request.args.get("resource_group") or request.args.get("rg") or "").strip()
+            lookup_type = (request.args.get("type") or request.args.get("resource_type") or "").strip()
+            lookup_sub = (request.args.get("sub") or request.args.get("subscription") or "").strip()
+            resolved_sub_id = ""
+            if lookup_sub:
+                sub_row = _cloud_resolve_subscription(conn, lookup_sub)
+                if sub_row:
+                    resolved_sub_id = str(sub_row["id"] or "").strip()
+
+            if lookup_name:
+                sql = [
+                    """
+                    SELECT
+                        pa.id, pa.name, pa.type, pa.resource_group, pa.location, pa.sku,
+                        pa.fqdn, pa.is_public, pa.status, pa.raw_json, pa.waf_mode,
+                        pa.is_restricted, s.display_name AS sub_name,
+                        s.environment, s.id AS subscription_id
+                    FROM provisioned_assets pa
+                    JOIN subscriptions s ON s.id = pa.subscription_id
+                    WHERE LOWER(pa.name) = LOWER(?)
+                    """
+                ]
+                params: list[str] = [lookup_name]
+                if lookup_rg:
+                    sql.append("AND LOWER(COALESCE(pa.resource_group, '')) = LOWER(?)")
+                    params.append(lookup_rg)
+                if lookup_type:
+                    sql.append("AND LOWER(COALESCE(pa.type, '')) = LOWER(?)")
+                    params.append(lookup_type)
+                if resolved_sub_id:
+                    sql.append("AND pa.subscription_id = ?")
+                    params.append(resolved_sub_id)
+                sql.append("ORDER BY pa.last_synced DESC LIMIT 1")
+                asset_row = conn.execute("\n".join(sql), params).fetchone()
+
+        if not asset_row:
             return jsonify({"error": "Resource not found"}), 404
         
         raw_json = json.loads(asset_row["raw_json"] or "{}") if asset_row["raw_json"] else {}
@@ -18011,6 +18048,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     
     for row in rows:
         name, rtype, rg, fqdn, is_public, sku = row[:6]
+        resource_id = row[6] if len(row) > 6 else None
         has_waf = row[7] if len(row) > 7 else False
         listeners = row[8] if len(row) > 8 else None
         is_restricted = row[9] if len(row) > 9 else False
@@ -18019,6 +18057,11 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         raw_json = row[12] if len(row) > 12 else None
         auth_methods_raw = row[13] if len(row) > 13 else None
         ip_restrictions_raw = row[14] if len(row) > 14 else None
+        parsed_raw = None
+        try:
+            parsed_raw = json.loads(raw_json) if isinstance(raw_json, str) and raw_json.strip() else raw_json
+        except Exception:
+            parsed_raw = None
         try:
             auth_methods = json.loads(auth_methods_raw) if isinstance(auth_methods_raw, str) else (auth_methods_raw or [])
             if not isinstance(auth_methods, list):
@@ -18052,6 +18095,12 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         type_key = (rtype or "").lower()
         if "containerregistry" in type_key:
             item["acr_requires_credentials"] = _acr_requires_credentials(raw_json)
+        item["id"] = resource_id
+        item["public_ip_resource_ids"] = (
+            list(_extract_public_ip_resource_ids(parsed_raw))
+            if isinstance(parsed_raw, dict)
+            else []
+        )
 
         # Skip child resources (e.g. storageAccounts/blobServices/containers,
         # servers/databases). These have no independent public FQDNs and inflating
@@ -18087,7 +18136,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
               or "serverfarms" in type_key or "hostingenvironment" in type_key
               or "datafactory" in type_key or "cognitiveservices" in type_key
               or "containerregistry" in type_key or "servicefabric" in type_key
-              or "sites" in type_key):
+              or "sites" in type_key or "virtualmachinescalesets" in type_key):
             # App Insights (insights/components) intentionally excluded — monitoring
             # sink, not a compute backend; showing it implies it routes traffic.
             backends.append(item)
@@ -18175,12 +18224,16 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         for item in entry_points
         if "bastionhost" in (item.get("arm_type") or item.get("type") or "").lower()
     }
+    public_ip_assets_by_id: dict[str, dict] = {}
     bastion_children_by_key: dict[tuple[str, str], list[dict]] = _dd(list)
     resources_with_public_ips: dict[tuple[str, str], list[dict]] = _dd(list)  # Track resources that have public IPs
     for item in entry_points:
         type_key = (item.get("arm_type") or item.get("type") or "").lower()
         if "publicipaddress" not in type_key:
             continue
+        item_id = str(item.get("id") or "").strip().lower()
+        if item_id:
+            public_ip_assets_by_id[item_id] = item
         item_key = (str(item.get("rg") or "").strip().lower(), str(item.get("name") or "").strip().lower())
         if item_key in bastion_keys:
             item["parent_bastion_key"] = item_key
@@ -18188,6 +18241,50 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             bastion_children_by_key[item_key].append(item)
         # Track all Public IPs by their parent resource key for Internet connectivity
         resources_with_public_ips[item_key].append(item)
+
+    def _public_ip_label(public_ips: list[dict]) -> str:
+        public_ip_addrs = []
+        for pip_resource in public_ips:
+            try:
+                raw_json = pip_resource.get("raw_json")
+                if isinstance(raw_json, str):
+                    parsed = json.loads(raw_json)
+                else:
+                    parsed = raw_json or {}
+                ip_addr = parsed.get("properties", {}).get("ipAddress")
+                if ip_addr:
+                    public_ip_addrs.append(str(ip_addr))
+            except Exception:
+                pass
+
+        ip_label = ", ".join(public_ip_addrs[:2])
+        if len(public_ip_addrs) > 2:
+            ip_label += f" +{len(public_ip_addrs)-2}"
+        return f"Public IP: {ip_label}" if ip_label else "Public IP"
+
+    # Also map public IP associations by referenced PublicIPAddress ARM IDs
+    # (e.g. Load Balancer/frontend configs where PIP name != resource name).
+    for item in entry_points + backends + data_stores:
+        type_key = (item.get("arm_type") or item.get("type") or "").lower()
+        if "publicipaddress" in type_key:
+            continue
+        linked = []
+        for pip_id in item.get("public_ip_resource_ids") or []:
+            candidate = public_ip_assets_by_id.get(str(pip_id or "").strip().lower())
+            if candidate:
+                linked.append(candidate)
+        if not linked:
+            continue
+        item_key = (str(item.get("rg") or "").strip().lower(), str(item.get("name") or "").strip().lower())
+        existing = resources_with_public_ips[item_key]
+        seen_ids = {str(p.get("id") or "").strip().lower() for p in existing}
+        for candidate in linked:
+            candidate_id = str(candidate.get("id") or "").strip().lower()
+            if candidate_id and candidate_id not in seen_ids:
+                existing.append(candidate)
+                seen_ids.add(candidate_id)
+        # A resource explicitly linked to one or more Public IP resources is internet-exposed.
+        item["public"] = True
 
     # Build simplified Mermaid diagram focusing on entry flow
     lines = [
@@ -18981,13 +19078,18 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 _add_link(f'    {waf_target} --> {gateway_nid}', color)
 
     def _fqdn_label(fqdns: list, suffix: str = "") -> str:
-        """Build a concise arrow label from a list of FQDNs."""
+        """Build a concise arrow label from a list of hostnames."""
         if not fqdns:
             return suffix or "HTTPS"
-        first = fqdns[0]
-        if len(first) > 40:
-            first = first[:38] + "…"
-        label = first
+        first = str(fqdns[0] or "").strip()
+        if not first:
+            return suffix or "HTTPS"
+        if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", first):
+            label = first
+        else:
+            label = first.split(".", 1)[0] if "." in first else first
+        if len(label) > 40:
+            label = label[:38] + "…"
         if len(fqdns) > 1:
             label += f" +{len(fqdns) - 1}"
         if suffix:
@@ -19244,30 +19346,26 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             public_ips = item.get("public_ips") or resources_with_public_ips.get(lookup_key, [])
             if not public_ips:
                 continue
-            
-            node_id = _get_node_id(item)
-            # Extract actual IP addresses from public IP resources
-            public_ip_addrs = []
-            for pip_resource in public_ips:
-                try:
-                    raw_json = pip_resource.get("raw_json")
-                    if isinstance(raw_json, str):
-                        parsed = json.loads(raw_json)
-                    else:
-                        parsed = raw_json or {}
-                    ip_addr = parsed.get("properties", {}).get("ipAddress")
-                    if ip_addr:
-                        public_ip_addrs.append(str(ip_addr))
-                except Exception:
-                    pass
-            
-            ip_label = ", ".join(public_ip_addrs[:2])  # Show first 2 IPs
-            if len(public_ip_addrs) > 2:
-                ip_label += f" +{len(public_ip_addrs)-2}"
-            label_text = f"Public IP: {ip_label}" if ip_label else "Public IP"
-            _add_link(f'    Internet -->|"{label_text}"| {node_id}', "#06b6d4")  # cyan for bastion
 
-    # Internet → Entry Points (orange — internet-reachable entry path, FQDN on arrow)
+            node_id = _get_node_id(item)
+            label_text = _public_ip_label(public_ips)
+            _add_link(f'    Internet -->|"{label_text}"| {node_id}', "orange")
+
+    # Internet → Public backends / storage with associated public IPs.
+    if shown_backend or shown_data:
+        for item in shown_backend + shown_data:
+            if not item.get("public"):
+                continue
+            type_key = (item.get("arm_type") or item.get("type") or "").lower()
+            if "publicipaddress" in type_key or "bastionhost" in type_key:
+                continue
+            lookup_key = (str(item.get("rg") or "").strip().lower(), str(item.get("name") or "").strip().lower())
+            public_ips = item.get("public_ips") or resources_with_public_ips.get(lookup_key, [])
+            if not public_ips:
+                continue
+            _add_link(f'    Internet -->|"{_public_ip_label(public_ips)}"| {_get_node_id(item)}', "orange")
+
+    # Internet → Entry Points (orange — internet-reachable entry path, hostname on arrow)
     if shown_entry:
         for item in shown_entry:
             if item.get("parent_bastion_key") or "bastionhost" in (item.get("arm_type") or item.get("type") or "").lower():
@@ -19791,7 +19889,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         ".entry-point { stroke: #ff6b6b; stroke-width: 2px; fill: #ffe0e0; }",
         ".api-gateway { stroke: #ff8c00; stroke-width: 2px; fill: #ffe8cc; }",
         ".api-layer { stroke: #f97316; stroke-width: 2px; fill: #ffedd5; }",
-        ".backend { stroke: #0066cc; stroke-width: 2px; fill: #cfe8ff; }",
+        ".backend {  stroke-width: 2px; fill: #cfe8ff; }",
         ".dataStore { stroke: #8b5cf6; stroke-width: 2px; fill: #ede9fe; }",
         ".summary { stroke: #666666; stroke-width: 2px; fill: #f0f0f0; }",
     ]

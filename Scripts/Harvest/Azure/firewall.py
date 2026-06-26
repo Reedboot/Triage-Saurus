@@ -93,6 +93,8 @@ def _get_firewall_exposure_level(firewall: dict[str, Any]) -> str:
         public_ip = config_props.get("publicIPAddress") or config.get("publicIPAddress")
         if isinstance(public_ip, dict) and safe_str(public_ip.get("id")):
             return "Public"
+        if safe_str(config_props.get("publicIPAddressId")):
+            return "Public"
         if safe_str(public_ip):
             return "Public"
     return "Internal"

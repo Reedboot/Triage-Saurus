@@ -47,6 +47,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "listener_count": len(props.get("httpListeners") or []),
             "backend_pool_count": len(props.get("backendAddressPools") or []),
             "waf_mode": waf_mode,
+            "public_ip_resource_ids": _extract_public_ip_ids(props),
         }
 
         results.append({
@@ -86,11 +87,24 @@ def _get_frontend_fqdn(props: dict[str, Any]) -> str | None:
 
 
 def _has_public_frontend(props: dict[str, Any]) -> int:
+    return 1 if _extract_public_ip_ids(props) else 0
+
+
+def _extract_public_ip_ids(props: dict[str, Any]) -> list[str]:
+    found: list[str] = []
+    seen: set[str] = set()
     for fip in props.get("frontendIPConfigurations") or []:
         fip_props = fip.get("properties") or {}
-        if fip_props.get("publicIPAddress"):
-            return 1
-    return 0
+        refs = [
+            (fip_props.get("publicIPAddress") or {}).get("id"),
+            fip_props.get("publicIPAddressId"),
+        ]
+        for ref in refs:
+            value = safe_str(ref)
+            if value and value.lower() not in seen:
+                seen.add(value.lower())
+                found.append(value)
+    return found
 
 
 def _get_endpoint_entries(props: dict[str, Any]) -> list[tuple[str | None, int, str]]:

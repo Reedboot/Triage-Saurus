@@ -608,6 +608,9 @@ from Azure import apim
 from Azure.apim import _get_gateway_hosts, _get_apim_exposure_level
 from Azure import function_apps
 from Azure import service_fabric
+from Azure import app_gateway
+from Azure import bastion_host
+from Azure import virtual_machine_scale_set
 from Azure.function_apps import _derive_trigger_auth_methods, _extract_http_triggers
 from Azure.firewall import _extract_nat_rules, _extract_app_rules, _get_firewall_exposure_level
 from Azure.front_door import _extract_classic_routes, _extract_afd_route
@@ -960,6 +963,56 @@ class TestApimExposureLevel:
 
     def test_public_otherwise(self):
         assert _get_apim_exposure_level({"properties": {"virtualNetworkType": "External"}}) == "Public"
+
+
+class TestAppGatewayPublicIpDetection:
+    def test_detects_public_frontend_from_public_ip_id(self):
+        props = {
+            "frontendIPConfigurations": [
+                {"properties": {"publicIPAddressId": "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Network/publicIPAddresses/pip-one"}}
+            ]
+        }
+        assert app_gateway._has_public_frontend(props) == 1
+        assert app_gateway._extract_public_ip_ids(props) == [
+            "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Network/publicIPAddresses/pip-one"
+        ]
+
+
+class TestBastionPublicIpDetection:
+    def test_detects_public_via_ip_configuration_reference(self):
+        resource = {
+            "properties": {
+                "ipConfigurations": [
+                    {"properties": {"publicIPAddress": {"id": "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Network/publicIPAddresses/pip-one"}}}
+                ]
+            }
+        }
+        assert bastion_host._is_public(resource) is True
+        assert bastion_host._extract_public_ip_ids(resource) == [
+            "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Network/publicIPAddresses/pip-one"
+        ]
+
+
+class TestVmssPublicIpDetection:
+    def test_detects_public_ip_configuration_in_network_profile(self):
+        resource = {
+            "properties": {
+                "virtualMachineProfile": {
+                    "networkProfile": {
+                        "networkInterfaceConfigurations": [
+                            {
+                                "properties": {
+                                    "ipConfigurations": [
+                                        {"properties": {"publicIPAddressConfiguration": {"name": "pip-config"}}}
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+        assert virtual_machine_scale_set._has_public_ip_configuration(resource) is True
 
 
 class TestApimHarvestConcurrency:
@@ -1529,6 +1582,10 @@ class TestFirewallAppRules:
 class TestFirewallExposureLevel:
     def test_public_if_public_ip_present(self):
         firewall = {"properties": {"ipConfigurations": [{"properties": {"publicIPAddress": {"id": "/pip/one"}}}]}}
+        assert _get_firewall_exposure_level(firewall) == "Public"
+
+    def test_public_if_public_ip_id_present(self):
+        firewall = {"properties": {"ipConfigurations": [{"properties": {"publicIPAddressId": "/pip/one"}}]}}
         assert _get_firewall_exposure_level(firewall) == "Public"
 
     def test_internal_without_public_ip(self):
