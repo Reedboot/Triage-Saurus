@@ -3817,6 +3817,9 @@ class TestCloudPosture:
         assert f"{public_ip_id}[\"" not in mermaid, f"Public IP should not be a node in Mermaid. Found in: {mermaid}"
         # Bastion node should exist
         assert f"{bastion_id}[\"" in mermaid, mermaid
+        # Internet should connect to bastion with public IP
+        assert f"Internet -->|\"Public IP" in mermaid, f"Internet should connect to bastion with public IP. Mermaid: {mermaid}"
+        assert f"| {bastion_id}" in mermaid, f"Connection should target bastion node. Mermaid: {mermaid}"
         bastion_node_line = next(line for line in mermaid.splitlines() if f"{bastion_id}[" in line)
         assert "WAF" not in bastion_node_line, mermaid
 

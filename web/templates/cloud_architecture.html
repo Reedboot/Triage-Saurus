@@ -152,6 +152,22 @@
       opacity: 1 !important;
     }
 
+    #cloud-arch-mermaid-root svg g.node.internet text,
+    #cloud-arch-mermaid-root svg g.node.internet .nodeLabel,
+    #cloud-arch-mermaid-root svg g.node.internet .nodeLabel p,
+    #cloud-arch-mermaid-root svg g.node.internet .nodeLabel span {
+      color: #e2e8f0 !important;
+      fill: #e2e8f0 !important;
+      font-weight: 500 !important;
+    }
+
+    #cloud-arch-mermaid-root svg g.node.internet .nodeLabel strong,
+    #cloud-arch-mermaid-root svg g.node.internet .nodeLabel b {
+      color: inherit !important;
+      fill: currentColor !important;
+      font-weight: 500 !important;
+    }
+
     #cloud-arch-mermaid-root svg g[class*="node"],
     #cloud-arch-mermaid-root svg g[class*="cluster"],
     #cloud-arch-mermaid-root svg g[class*="icon"] {
@@ -943,7 +959,7 @@
     // window.__triageCloudArchLoadMermaid is defined before ReactFlow mounts
     // and calls loadGraph.
     if (needsMermaid) {
-      await import('/static/js/cloud-architecture-mermaid.js?v=2');
+      await import('/static/js/cloud-architecture-mermaid.js?v=3');
     }
     import('/static/js/cloud-architecture-reactflow.js?v=13');
   </script>

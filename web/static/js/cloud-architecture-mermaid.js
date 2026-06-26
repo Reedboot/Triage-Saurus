@@ -29,6 +29,11 @@ const legendEl = document.getElementById("cloud-arch-provider-legend");
 const formEl = document.getElementById("cloud-arch-form");
 const subscriptionInput = document.getElementById("subscription-input");
 const viewButtons = Array.from(document.querySelectorAll("[data-cloud-arch-view]"));
+const modalOverlay = document.getElementById("cloud-arch-modal-overlay");
+const modalTitle = document.getElementById("modal-title");
+const modalSubtitle = document.getElementById("modal-subtitle");
+const modalBody = document.getElementById("modal-body");
+const modalIcon = document.getElementById("modal-icon");
 
 let activeViewMode = normalizeViewMode(CONFIG.initialViewMode || "mermaid");
 const isFirefox = /firefox/i.test(navigator.userAgent || "");
@@ -36,6 +41,7 @@ let firefoxOverlayRaf = null;
 let firefoxOverlayTimeout = null;
 let firefoxOverlayResizeObserver = null;
 let firefoxIconMapPromise = null;
+let activeModalRequest = null;
 
 async function loadFirefoxIconMap() {
   if (!firefoxIconMapPromise) {
@@ -67,11 +73,24 @@ async function renderFirefoxIconOverlay(svgEl) {
 
   overlay.innerHTML = "";
   const svgRect = svgEl.getBoundingClientRect();
+  const diagramScale = Math.max(
+    0.01,
+    parseFloat(mermaidRootEl.dataset.diagramScale || "1") || 1
+  );
+  const toLocalRect = (rect) => {
+    if (!rect) return null;
+    return {
+      left: (rect.left - svgRect.left) / diagramScale,
+      top: (rect.top - svgRect.top) / diagramScale,
+      width: rect.width / diagramScale,
+      height: rect.height / diagramScale,
+    };
+  };
   const iconMap = await loadFirefoxIconMap();
 
   svgEl.querySelectorAll("g.node").forEach((nodeEl) => {
     const img = nodeEl.querySelector("img.ni");
-    const rect = img?.getBoundingClientRect();
+    const iconRect = toLocalRect(img?.getBoundingClientRect());
     let src = img?.getAttribute("src") || "";
     const rawNodeId = nodeEl.getAttribute("id") || "";
     const nodeId = normalizeMermaidNodeId(rawNodeId);
@@ -109,13 +128,22 @@ async function renderFirefoxIconOverlay(svgEl) {
     overlayImg.src = src;
     overlayImg.alt = "";
     overlayImg.setAttribute("aria-hidden", "true");
-    const nodeRect = nodeEl.getBoundingClientRect();
-    const fallbackSize = Math.max(18, Math.min(42, Math.round((nodeRect.width || 120) * 0.22)));
-    const iconWidth = Math.max(0, rect?.width || fallbackSize);
-    const iconHeight = Math.max(0, rect?.height || fallbackSize);
+    overlayImg.dataset.nodeId = nodeId;
+    const nodeRect = toLocalRect(nodeEl.getBoundingClientRect()) || {
+      left: 0,
+      top: 0,
+      width: 120,
+      height: 80,
+    };
+    const fallbackSize = Math.max(
+      18,
+      Math.min(42, Math.round((nodeRect.width || 120) * 0.22))
+    );
+    const iconWidth = Math.max(0, iconRect?.width || fallbackSize);
+    const iconHeight = Math.max(0, iconRect?.height || fallbackSize);
 
     const fallbackLeft = nodeRect.left + ((nodeRect.width || iconWidth) - iconWidth) / 2;
-    const fallbackTop = nodeRect.top + 10;
+    const fallbackTop = nodeRect.top + Math.max(8, Math.min(16, nodeRect.height * 0.14));
 
     overlayImg.style.cssText = [
       `width:${iconWidth}px`,
@@ -124,8 +152,8 @@ async function renderFirefoxIconOverlay(svgEl) {
       "pointer-events:none",
       "user-select:none",
       "position:absolute",
-      `left:${Math.max(0, ((rect?.left ?? fallbackLeft) - svgRect.left))}px`,
-      `top:${Math.max(0, ((rect?.top ?? fallbackTop) - svgRect.top))}px`,
+      `left:${Math.max(0, iconRect?.left ?? fallbackLeft)}px`,
+      `top:${Math.max(0, iconRect?.top ?? fallbackTop)}px`,
     ].join(";");
     overlay.appendChild(overlayImg);
 
@@ -133,12 +161,14 @@ async function renderFirefoxIconOverlay(svgEl) {
       const labelStyles = window.getComputedStyle(labelEl);
       const overlayLabel = document.createElement("div");
       overlayLabel.textContent = labelText;
+      overlayLabel.dataset.nodeId = nodeId;
+      const labelRectLocal = toLocalRect(labelRect);
       overlayLabel.style.cssText = [
         "position:absolute",
-        `left:${Math.max(0, labelRect.left - svgRect.left)}px`,
-        `top:${Math.max(0, labelRect.top - svgRect.top)}px`,
-        `width:${Math.max(0, labelRect.width)}px`,
-        `height:${Math.max(0, labelRect.height)}px`,
+        `left:${Math.max(0, labelRectLocal?.left || 0)}px`,
+        `top:${Math.max(0, labelRectLocal?.top || 0)}px`,
+        `width:${Math.max(0, labelRectLocal?.width || 0)}px`,
+        `height:${Math.max(0, labelRectLocal?.height || 0)}px`,
         `font-size:${labelStyles.fontSize || "11px"}`,
         `line-height:${labelStyles.lineHeight || "1.15"}`,
         `font-weight:${labelStyles.fontWeight || "500"}`,
@@ -158,6 +188,43 @@ async function renderFirefoxIconOverlay(svgEl) {
     // Do not hide original labels/icons in Firefox fallback; overlay is additive.
     // This avoids dropping icons when a replacement image fails to paint.
   });
+}
+
+function buildFallbackModalData(resourceId, nodeData, lookup = {}) {
+  const resources = Array.isArray(nodeData?.resources) ? nodeData.resources : [];
+  const primary = resources[0] || {};
+  const fallbackFqdns = resources
+  .flatMap((item) => [
+    item?.fqdn,
+    ...(Array.isArray(item?.dns_names) ? item.dns_names : []),
+  ])
+  .map((value) => String(value || "").trim())
+  .filter(Boolean);
+  const fallbackIps = resources
+  .flatMap((item) => [
+    item?.public_ip,
+    ...(Array.isArray(item?.public_ips) ? item.public_ips : []),
+  ])
+  .map((value) => String(value || "").trim())
+  .filter(Boolean);
+  return {
+  title: firstNonEmpty(
+    lookup.name,
+    nodeData?.title,
+    nodeData?.label,
+    nodeData?.providerLabel,
+    resourceId
+  ),
+  name: firstNonEmpty(lookup.name, primary?.name, nodeData?.label, resourceId),
+  resource_group: firstNonEmpty(lookup.resourceGroup, primary?.rg, nodeData?.resourceGroup),
+  type_label: firstNonEmpty(lookup.type, nodeData?.typeLabel, nodeData?.type),
+  type: firstNonEmpty(lookup.type, nodeData?.resourceType, nodeData?.arm_type, nodeData?.type),
+  fqdn: firstNonEmpty(nodeData?.fqdn, primary?.fqdn),
+  dns_names: fallbackFqdns,
+  public_ip: firstNonEmpty(nodeData?.public_ip, primary?.public_ip),
+  public_ips: fallbackIps,
+  icon_path: firstNonEmpty(nodeData?.icon_path, nodeData?.iconPath),
+  };
 }
 
 function refreshFirefoxOverlay() {
@@ -647,40 +714,226 @@ function syncViewButtons() {
 }
 
 function resetModalRequestState() {
-  window.__triageCloudArchModalState = {
-    inProgress: false,
-    resourceId: null,
-    resourceData: null,
-  };
+  activeModalRequest = null;
 }
 
 function startModalRequest() {
-  window.__triageCloudArchModalState = window.__triageCloudArchModalState || {};
-  window.__triageCloudArchModalState.inProgress = true;
+  if (activeModalRequest) {
+    activeModalRequest.abort();
+  }
+  const controller = new AbortController();
+  activeModalRequest = controller;
+  return controller;
 }
 
 function closeModal() {
-  const overlay = document.getElementById("cloud-arch-modal-overlay");
-  if (overlay) {
-    overlay.hidden = true;
+  if (activeModalRequest) {
+    activeModalRequest.abort();
+  }
+  if (modalOverlay) {
+    modalOverlay.hidden = true;
   }
   resetModalRequestState();
 }
 
 function openNodePopup(resourceId, nodeData) {
+  const resources = Array.isArray(nodeData?.resources) ? nodeData.resources.filter(Boolean) : [];
+  if (resources.length === 1) {
+    const resource = resources[0] || {};
+    openModal(resourceId, nodeData, {
+      id: resource.id,
+      name: resource.name,
+      resourceGroup: resource.rg,
+      type: nodeData?.arm_type || nodeData?.type || nodeData?.resourceType || "",
+      subscription: currentMermaidSubscriptionId,
+    });
+    return;
+  }
   openModal(resourceId, nodeData);
 }
 
 function openModal(resourceId, nodeData, lookup = {}) {
-  startModalRequest();
-  const overlay = document.getElementById("cloud-arch-modal-overlay");
-  if (!overlay) {
+  if (!modalOverlay || !modalTitle || !modalBody) {
     console.error("Modal overlay not found");
     return;
   }
-  overlay.hidden = false;
-  window.__triageCloudArchModalState.resourceId = resourceId;
-  window.__triageCloudArchModalState.resourceData = nodeData;
+  const controller = startModalRequest();
+  modalOverlay.hidden = false;
+  modalTitle.textContent = "Loading details…";
+  if (modalSubtitle) modalSubtitle.textContent = "";
+  modalBody.innerHTML = '<div class="cloud-arch-modal-loading">Loading resource details…</div>';
+
+  const url = new URL("/api/cloud/resource-details", window.location.origin);
+  const resolvedResourceId = String(lookup.id || lookup.resourceId || resourceId || "").trim();
+  if (resolvedResourceId) url.searchParams.set("id", resolvedResourceId);
+  const name = String(lookup.name || lookup.resourceName || lookup.label || nodeData?.label || "").trim();
+  const resourceGroup = String(lookup.resourceGroup || lookup.rg || nodeData?.resourceGroup || "").trim();
+  const type = String(lookup.type || lookup.armType || lookup.resourceType || nodeData?.type || "").trim();
+  const subscription = String(lookup.subscription || lookup.sub || currentMermaidSubscriptionId || "").trim();
+  if (name) url.searchParams.set("name", name);
+  if (resourceGroup) url.searchParams.set("resource_group", resourceGroup);
+  if (type) url.searchParams.set("type", type);
+  if (subscription) url.searchParams.set("sub", subscription);
+
+  fetch(url.toString(), { headers: { Accept: "application/json" }, signal: controller.signal })
+    .then(async (resp) => {
+      if (controller.signal.aborted) return;
+      const data = await readJsonResponse(resp);
+      if (!resp.ok) {
+        throw new Error(data?.error || `Request failed with status ${resp.status}`);
+      }
+      if (!data || data.error) {
+        renderModalContent(buildFallbackModalData(resourceId, nodeData, lookup));
+        activeModalRequest = null;
+        return;
+      }
+      if (controller.signal.aborted) return;
+      const mergedData = {
+        ...buildFallbackModalData(resourceId, nodeData, lookup),
+        ...data,
+      };
+      renderModalContent(mergedData);
+      activeModalRequest = null;
+    })
+    .catch((err) => {
+      if (err?.name === "AbortError") return;
+      const fallbackData = buildFallbackModalData(resourceId, nodeData, lookup);
+      const hasFallback =
+        fallbackData.name ||
+        fallbackData.resource_group ||
+        fallbackData.type_label ||
+        fallbackData.type ||
+        fallbackData.fqdn ||
+        (Array.isArray(fallbackData.public_ips) && fallbackData.public_ips.length > 0);
+      if (hasFallback) {
+        renderModalContent(fallbackData);
+      } else {
+        modalTitle.textContent = "Unable to load details";
+        if (modalSubtitle) modalSubtitle.textContent = "";
+        modalBody.innerHTML = `<div class="cloud-arch-modal-empty">${escapeHtml(err.message || "Unknown error")}</div>`;
+        if (modalIcon) modalIcon.textContent = "⚠";
+      }
+      activeModalRequest = null;
+    });
+}
+
+function setModalHeaderIcon(iconPath, fallbackText = "☁") {
+  if (!modalIcon) return;
+  if (iconPath) {
+    modalIcon.innerHTML = `<img src="${escapeHtml(iconPath)}" alt="" aria-hidden="true" style="width:28px;height:28px;object-fit:contain;" />`;
+    return;
+  }
+  modalIcon.textContent = fallbackText;
+}
+
+function firstNonEmpty(...values) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return "";
+}
+
+function collectPublicIps(data) {
+  const candidates = [
+    data?.public_ip,
+    data?.publicIp,
+    ...(Array.isArray(data?.public_ips) ? data.public_ips : []),
+    ...(Array.isArray(data?.network?.public_ips) ? data.network.public_ips : []),
+    ...(Array.isArray(data?.attack_surface?.public_ips) ? data.attack_surface.public_ips : []),
+  ];
+  const seen = new Set();
+  return candidates
+    .map((value) => String(value || "").trim())
+    .filter((value) => {
+      if (!value || seen.has(value)) return false;
+      seen.add(value);
+      return true;
+    });
+}
+
+function collectFqdns(data) {
+  const candidates = [
+    data?.fqdn,
+    data?.configuration?.hostname,
+    ...(Array.isArray(data?.dns_names) ? data.dns_names : []),
+    ...(Array.isArray(data?.network?.dns_names) ? data.network.dns_names : []),
+    ...(Array.isArray(data?.attack_surface?.dns_names) ? data.attack_surface.dns_names : []),
+  ];
+  const seen = new Set();
+  return candidates
+    .map((value) => String(value || "").trim())
+    .filter((value) => {
+      if (!value || seen.has(value)) return false;
+      seen.add(value);
+      return true;
+    });
+}
+
+function renderModalContent(data) {
+  if (!modalOverlay || !modalTitle || !modalBody) return;
+  modalOverlay.hidden = false;
+  modalTitle.textContent = firstNonEmpty(data.title, data.name, "Resource details");
+  if (modalSubtitle) {
+    modalSubtitle.textContent = firstNonEmpty(data.type_label, data.type, data.resourceType);
+  }
+  setModalHeaderIcon(data.icon_path || data.parent_resource?.icon_path || "", "☁");
+
+  const resourceName = firstNonEmpty(data.name, data.title, data.resource_name);
+  const resourceGroup = firstNonEmpty(
+    data.resource_group,
+    data.resourceGroup,
+    data.parent_resource?.resource_group
+  );
+  const resourceType = firstNonEmpty(data.type_label, data.type, data.resourceType);
+  const fqdns = collectFqdns(data);
+  const publicIps = collectPublicIps(data);
+
+  const fields = [];
+  if (resourceName) fields.push({ label: "Resource Name", value: escapeHtml(resourceName) });
+  if (resourceGroup) fields.push({ label: "Resource Group", value: escapeHtml(resourceGroup) });
+  if (resourceType) fields.push({ label: "Type", value: escapeHtml(resourceType) });
+  if (fqdns.length > 0) {
+    fields.push({
+      label: "FQDN",
+      value: fqdns.map((fqdn) => `<code>${escapeHtml(fqdn)}</code>`).join("<br/>"),
+      isHtml: true,
+    });
+  }
+  if (publicIps.length > 0) {
+    fields.push({
+      label: "Public IP",
+      value: publicIps.map((ip) => `<code>${escapeHtml(ip)}</code>`).join("<br/>"),
+      isHtml: true,
+    });
+  }
+
+  if (!fields.length) {
+    modalBody.innerHTML = '<div class="cloud-arch-modal-empty">No core resource details found for this node.</div>';
+    return;
+  }
+
+  modalBody.innerHTML = `
+    <div class="cloud-arch-modal-section">
+      <div class="cloud-arch-modal-section-title">
+        <span class="cloud-arch-modal-section-icon">🧩</span>
+        Resource Details
+      </div>
+      <div class="cloud-arch-modal-grid">
+        ${fields
+          .map(
+            (field) => `
+          <div class="cloud-arch-modal-field">
+            <div class="cloud-arch-modal-field-label">${field.label}</div>
+            <div class="cloud-arch-modal-field-value">${field.isHtml ? field.value : field.value}</div>
+          </div>
+        `
+          )
+          .join("")}
+      </div>
+    </div>
+  `;
 }
 
 function renderSummary(payload, subscriptionName, viewMode) {

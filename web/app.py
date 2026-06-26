@@ -18175,6 +18175,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         if "bastionhost" in (item.get("arm_type") or item.get("type") or "").lower()
     }
     bastion_children_by_key: dict[tuple[str, str], list[dict]] = _dd(list)
+    resources_with_public_ips: dict[tuple[str, str], list[dict]] = _dd(list)  # Track resources that have public IPs
     for item in entry_points:
         type_key = (item.get("arm_type") or item.get("type") or "").lower()
         if "publicipaddress" not in type_key:
@@ -18184,6 +18185,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             item["parent_bastion_key"] = item_key
             item["node_variant"] = "public_ip"
             bastion_children_by_key[item_key].append(item)
+        # Track all Public IPs by their parent resource key for Internet connectivity
+        resources_with_public_ips[item_key].append(item)
 
     # Build simplified Mermaid diagram focusing on entry flow
     lines = [
@@ -18252,6 +18255,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                         "listeners": item.get("listeners"),
                         "routing_targets": item.get("routing_targets"),
                         "parent_bastion_key": item.get("parent_bastion_key"),
+                        "public_ips": resources_with_public_ips.get((str(item.get("rg") or "").strip().lower(), str(item.get("name") or "").strip().lower()), []),
                     })
                     if "bastionhost" in (item.get("type") or "").lower():
                         result[-1]["bastion_key"] = (str(item.get("rg") or "").strip().lower(), str(item.get("name") or "").strip().lower())
@@ -18289,6 +18293,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     "listeners": next((i.get("listeners") for i in items if i.get("listeners")), None),
                     "routing_targets": merged_targets,
                     "parent_bastion_key": next((i.get("parent_bastion_key") for i in items if i.get("parent_bastion_key")), None),
+                    "public_ips": [pip for item in items for pip in resources_with_public_ips.get((str(item.get("rg") or "").strip().lower(), str(item.get("name") or "").strip().lower()), [])],
                 }
                 if "bastionhost" in (items[0].get("type") or "").lower():
                     group_item["bastion_key"] = (str(items[0].get("rg") or "").strip().lower(), str(items[0].get("name") or "").strip().lower())
@@ -19222,6 +19227,43 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     for spec in firewall_policy_node_specs:
         _add_link(f'    {spec["node_id"]} -->|"{spec["policy"]["nat_rule_count"]} NAT / {spec["policy"]["app_rule_count"]} App rules"| {_get_node_id({"name": spec["firewall_name"], "rg": spec["resource_group"]})}', "orange")
 
+    # Internet → Bastions with public IPs (cyan — bastion with public IP is internet-accessible)
+    if shown_entry:
+        for item in shown_entry:
+            if "bastionhost" not in (item.get("arm_type") or item.get("type") or "").lower():
+                continue
+            # For grouped bastions, use bastion_key; for individual bastions, build the key
+            if item.get("bastion_key"):
+                lookup_key = item.get("bastion_key")
+            else:
+                lookup_key = (str(item.get("rg") or "").strip().lower(), str(item.get("name") or "").strip().lower())
+            
+            public_ips = item.get("public_ips") or resources_with_public_ips.get(lookup_key, [])
+            if not public_ips:
+                continue
+            
+            node_id = _get_node_id(item)
+            # Extract actual IP addresses from public IP resources
+            public_ip_addrs = []
+            for pip_resource in public_ips:
+                try:
+                    raw_json = pip_resource.get("raw_json")
+                    if isinstance(raw_json, str):
+                        parsed = json.loads(raw_json)
+                    else:
+                        parsed = raw_json or {}
+                    ip_addr = parsed.get("properties", {}).get("ipAddress")
+                    if ip_addr:
+                        public_ip_addrs.append(str(ip_addr))
+                except Exception:
+                    pass
+            
+            ip_label = ", ".join(public_ip_addrs[:2])  # Show first 2 IPs
+            if len(public_ip_addrs) > 2:
+                ip_label += f" +{len(public_ip_addrs)-2}"
+            label_text = f"Public IP: {ip_label}" if ip_label else "Public IP"
+            _add_link(f'    Internet -->|"{label_text}"| {node_id}', "#06b6d4")  # cyan for bastion
+
     # Internet → Entry Points (orange — internet-reachable entry path, FQDN on arrow)
     if shown_entry:
         for item in shown_entry:
@@ -19742,7 +19784,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     # Generate CSS styling for the diagram (matches architecture diagram styling)
     css_lines = [
         "/* Ingress Diagram Styling */",
-        ".internet { stroke: #0066cc; stroke-width: 2px; fill: #cfe8ff; }",
+        ".internet { stroke-width: 2px; fill: #cfe8ff; }",
         ".entry-point { stroke: #ff6b6b; stroke-width: 2px; fill: #ffe0e0; }",
         ".api-gateway { stroke: #ff8c00; stroke-width: 2px; fill: #ffe8cc; }",
         ".api-layer { stroke: #f97316; stroke-width: 2px; fill: #ffedd5; }",
