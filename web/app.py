@@ -18234,7 +18234,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                         **item,
                         "name": item["name"],
                         "label": (
-                            f"Bastion<br/>{_short_name(item['name'])}"
+                            f"Bastion ({item.get('rg') or 'rg'})<br/>{_short_name(item['name'])}"
                             if "bastionhost" in (item.get("type") or "").lower()
                             else f"{_short_name(item['name'])}{_node_security_suffix(item)}"
                         ),
@@ -18271,7 +18271,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     **items[0],
                     "name": f"{category}_ep_group",
                     "label": (
-                        f"Bastion"
+                        f"Bastion ({items[0].get('rg') or 'rg'})"
                         if "bastionhost" in (items[0].get("type") or "").lower()
                         else f"{category}{_node_security_suffix({'restriction_label': 'IP restricted' if any(i.get('is_restricted') for i in items) else None, 'auth_summary': next((i.get('auth_summary') for i in items if i.get('auth_summary')), None)})}"
                     ),
@@ -18708,20 +18708,9 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         label = item.get("label") or item.get("type") or _friendly_type(arm_type)
         if item.get("has_waf") or item.get("waf_mode") or item.get("is_restricted"):
             label = f"{label} 🛡️"
-        if item.get("bastion_key") and item.get("bastion_children"):
-            lines.append(f'    subgraph {node_id}_bastion["Bastion"]')
-            for child in item.get("bastion_children") or []:
-                child_node_id = _get_node_id(child)
-                child_arm_type = child.get("arm_type") or child.get("type") or "microsoft.network/publicipaddresses"
-                child_label = f"Public IP<br/>{_short_name(child.get('name') or item.get('name') or 'bastion')}"
-                lines.append(_node_line(child_node_id, child_label, child_arm_type))
-            lines.append(_node_line(node_id, label, arm_type))
-            for child in item.get("bastion_children") or []:
-                child_node_id = _get_node_id(child)
-                bastion_child_edges.append((child_node_id, node_id))
-            lines.append("    end")
-        else:
-            lines.append(_node_line(node_id, label, arm_type))
+        # Note: bastion_children (Public IPs) are not rendered as nodes in Mermaid
+        # They are surfaced as properties on the Bastion resource instead
+        lines.append(_node_line(node_id, label, arm_type))
         if "applicationgateway" in (arm_type or "").lower():
             appgw_node_resources_by_id[node_id] = item.get("resources") or [{"rg": item.get("rg"), "name": item.get("name")}]
             appgw_node_title_by_id[node_id] = item.get("name") or item.get("label") or "App Gateway"
@@ -18944,8 +18933,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         link_styles.append((color, dasharray) if dasharray else color)
         lines.append(line)
 
-    for child_node_id, bastion_node_id in bastion_child_edges:
-        _add_link(f'    {child_node_id} -->|Bastion| {bastion_node_id}', "orange")
+    # Note: bastion_child_edges is no longer populated since Public IPs are not rendered as nodes
 
     # Track structural listener chain edges so we can safely add them from multiple
     # branches without creating duplicates.

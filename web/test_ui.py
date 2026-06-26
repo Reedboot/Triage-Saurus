@@ -3813,10 +3813,10 @@ class TestCloudPosture:
         mermaid = data["views"]["connectivity"]["mermaid"]
         bastion_id = "blue_network_ukwest_bastion_bastion"
         public_ip_id = "blue_network_ukwest_public_ip_bastion"
-        assert f"subgraph {bastion_id}_bastion[\"Bastion\"]" in mermaid, mermaid
-        assert f"{public_ip_id}[\"" in mermaid, mermaid
+        # Public IP nodes should NOT be rendered in Mermaid (surfaced as properties instead)
+        assert f"{public_ip_id}[\"" not in mermaid, f"Public IP should not be a node in Mermaid. Found in: {mermaid}"
+        # Bastion node should exist
         assert f"{bastion_id}[\"" in mermaid, mermaid
-        assert f"{public_ip_id} -->|Bastion| {bastion_id}" in mermaid, mermaid
         bastion_node_line = next(line for line in mermaid.splitlines() if f"{bastion_id}[" in line)
         assert "WAF" not in bastion_node_line, mermaid
 

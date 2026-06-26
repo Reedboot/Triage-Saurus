@@ -35,8 +35,20 @@ const isFirefox = /firefox/i.test(navigator.userAgent || "");
 let firefoxOverlayRaf = null;
 let firefoxOverlayTimeout = null;
 let firefoxOverlayResizeObserver = null;
+let firefoxIconMapPromise = null;
 
-function renderFirefoxIconOverlay(svgEl) {
+async function loadFirefoxIconMap() {
+  if (!firefoxIconMapPromise) {
+    firefoxIconMapPromise = fetch("/api/icon-mappings?provider=all", {
+      headers: { Accept: "application/json" },
+    })
+      .then((resp) => (resp.ok ? resp.json() : {}))
+      .catch(() => ({}));
+  }
+  return firefoxIconMapPromise;
+}
+
+async function renderFirefoxIconOverlay(svgEl) {
   if (!isFirefox || !mermaidRootEl || !svgEl) return;
 
   let overlay = mermaidRootEl.querySelector(":scope > .cloud-arch-firefox-icon-overlay");
@@ -55,12 +67,39 @@ function renderFirefoxIconOverlay(svgEl) {
 
   overlay.innerHTML = "";
   const svgRect = svgEl.getBoundingClientRect();
+  const iconMap = await loadFirefoxIconMap();
 
-  svgEl.querySelectorAll("g.node img.ni").forEach((img) => {
-    const src = img.getAttribute("src");
+  svgEl.querySelectorAll("g.node").forEach((nodeEl) => {
+    const img = nodeEl.querySelector("img.ni");
+    const rect = img?.getBoundingClientRect();
+    let src = img?.getAttribute("src") || "";
+    const rawNodeId = nodeEl.getAttribute("id") || "";
+    const nodeId = normalizeMermaidNodeId(rawNodeId);
+    const nodeData = mermaidNodeDataById.get(nodeId) || {};
+
+    if (!src) {
+      const fromDataPath = String(nodeData.iconPath || nodeData.icon_path || "").trim();
+      if (fromDataPath) {
+        src = fromDataPath;
+      } else {
+        const iconClass =
+          String(nodeData.iconClass || nodeData.icon_class || "").trim() ||
+          normalizeIconClass(nodeData.resourceType || nodeData.resource_type || "", nodeData.providerKey || "azure");
+        const iconKey = iconClass.startsWith("icon-")
+          ? iconClass.slice(5).replace(/-/g, "_")
+          : "";
+        if (iconKey && iconMap && typeof iconMap === "object") {
+          src = String(iconMap[iconKey] || "").trim();
+        }
+      }
+    }
+    if (!src) {
+      const nodeText = String(nodeEl.textContent || "").toLowerCase();
+      if (nodeText.includes("bastion")) {
+        src = "/static/assets/icons/azure/other/public-ip.svg";
+      }
+    }
     if (!src) return;
-    const rect = img.getBoundingClientRect();
-    const nodeEl = img.closest("g.node");
     const labelEl = nodeEl?.querySelector(".nl");
     const labelRect = labelEl?.getBoundingClientRect();
     const labelText =
@@ -70,15 +109,23 @@ function renderFirefoxIconOverlay(svgEl) {
     overlayImg.src = src;
     overlayImg.alt = "";
     overlayImg.setAttribute("aria-hidden", "true");
+    const nodeRect = nodeEl.getBoundingClientRect();
+    const fallbackSize = Math.max(18, Math.min(42, Math.round((nodeRect.width || 120) * 0.22)));
+    const iconWidth = Math.max(0, rect?.width || fallbackSize);
+    const iconHeight = Math.max(0, rect?.height || fallbackSize);
+
+    const fallbackLeft = nodeRect.left + ((nodeRect.width || iconWidth) - iconWidth) / 2;
+    const fallbackTop = nodeRect.top + 10;
+
     overlayImg.style.cssText = [
-      `width:${Math.max(0, rect.width)}px`,
-      `height:${Math.max(0, rect.height)}px`,
+      `width:${iconWidth}px`,
+      `height:${iconHeight}px`,
       "object-fit:contain",
       "pointer-events:none",
       "user-select:none",
       "position:absolute",
-      `left:${Math.max(0, rect.left - svgRect.left)}px`,
-      `top:${Math.max(0, rect.top - svgRect.top)}px`,
+      `left:${Math.max(0, ((rect?.left ?? fallbackLeft) - svgRect.left))}px`,
+      `top:${Math.max(0, ((rect?.top ?? fallbackTop) - svgRect.top))}px`,
     ].join(";");
     overlay.appendChild(overlayImg);
 
@@ -107,11 +154,9 @@ function renderFirefoxIconOverlay(svgEl) {
         "pointer-events:none",
       ].join(";");
       overlay.appendChild(overlayLabel);
-      labelEl.style.visibility = "hidden";
     }
-    // Keep layout metrics intact for future refreshes.
-    img.style.visibility = "hidden";
-    img.style.opacity = "0";
+    // Do not hide original labels/icons in Firefox fallback; overlay is additive.
+    // This avoids dropping icons when a replacement image fails to paint.
   });
 }
 
