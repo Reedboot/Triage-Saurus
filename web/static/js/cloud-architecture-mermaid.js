@@ -572,6 +572,7 @@ function buildMermaidGraph(payload, subscriptionName) {
   const edges = Array.isArray(payload?.edges) ? payload.edges : [];
   const nodeIdMap = new Map();
   const nodeClassAssignments = [];
+  const subgraphStyleAssignments = [];
   const providerOrder = Object.keys(PROVIDER_THEMES);
   const providerGroups = new Map();
   const hierarchy = buildHierarchyContext(nodes);
@@ -600,6 +601,70 @@ function buildMermaidGraph(payload, subscriptionName) {
   }
 
   const lines = ["flowchart LR"];
+  const networkTypePrefixes = [
+    "microsoft.network/",
+    "azurerm_virtual_network",
+    "azurerm_subnet",
+    "azurerm_network_security_group",
+    "azurerm_route_table",
+    "azurerm_private_endpoint",
+    "azurerm_nat_gateway",
+    "azurerm_firewall",
+    "azurerm_public_ip",
+    "aws_vpc",
+    "aws_subnet",
+    "aws_security_group",
+    "aws_route_table",
+    "aws_network_acl",
+    "aws_internet_gateway",
+    "aws_nat_gateway",
+    "aws_vpc_endpoint",
+    "google_compute_network",
+    "google_compute_subnetwork",
+    "google_compute_firewall",
+    "oci_core_vcn",
+    "oci_core_subnet",
+    "alicloud_vpc",
+    "alicloud_vswitch",
+  ];
+
+  function isNetworkAssetNode(node) {
+    const data = node?.data || {};
+    const fields = [
+      data?.resourceType,
+      data?.type,
+      data?.arm_type,
+      data?.typeLabel,
+      data?.providerLabel,
+      data?.label,
+      data?.vnet,
+      data?.vnet_name,
+      data?.subnet,
+      data?.subnet_name,
+    ]
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter(Boolean);
+
+    const joined = fields.join(" ");
+    if (!joined) return false;
+    if (networkTypePrefixes.some((prefix) => joined.includes(prefix))) return true;
+
+    return [
+      /\bvirtual[_\s-]*network\b/,
+      /\bvnet\b/,
+      /\bnetwork\b/,
+      /\bsubnet\b/,
+      /\bnsg\b/,
+      /\bnetwork[_\s-]*security[_\s-]*group\b/,
+      /\broute[_\s-]*table\b/,
+      /\bnetwork[_\s-]*interface\b/,
+      /\bnic\b/,
+      /\bprivate[_\s-]*endpoint\b/,
+      /\bnat[_\s-]*gateway\b/,
+      /\bvpn[_\s-]*gateway\b/,
+      /\bvpc\b/,
+    ].some((pattern) => pattern.test(joined));
+  }
 
   function renderNode(node, indent = "    ") {
     const mermaidId = sanitizeMermaidId(node?.id, `node_${autoIndex++}`);
@@ -646,10 +711,37 @@ function buildMermaidGraph(payload, subscriptionName) {
       const parent = hierarchy.nodeById.get(parentId);
       return !parent || (parent?.data?.providerKey || "unknown") !== providerKey;
     });
+
+    const networkRootNodes = [];
+    const otherRootNodes = [];
     for (const node of rootNodes) {
+      if (isNetworkAssetNode(node)) {
+        networkRootNodes.push(node);
+      } else {
+        otherRootNodes.push(node);
+      }
+    }
+
+    for (const node of otherRootNodes) {
       renderNode(node, "    ");
     }
+
+    if (networkRootNodes.length) {
+      const networkGroupId = `${groupId}_network`;
+      lines.push(`    subgraph ${networkGroupId}["${escapeMermaidText("🛡️ Networks / VNet")}"]`);
+      for (const node of networkRootNodes) {
+        renderNode(node, "      ");
+      }
+      lines.push("    end");
+      subgraphStyleAssignments.push(`  style ${networkGroupId} stroke:#1971c2,stroke-width:2px,fill:none;`);
+    }
+
     lines.push("  end");
+  }
+
+  if (subgraphStyleAssignments.length) {
+    lines.push("");
+    lines.push(...subgraphStyleAssignments);
   }
 
   if (nodeClassAssignments.length) {
@@ -770,10 +862,11 @@ function openNodePopup(resourceId, nodeData) {
       resourceGroup: resource.rg,
       type: nodeData?.arm_type || nodeData?.type || nodeData?.resourceType || "",
       subscription: currentMermaidSubscriptionId,
+      nodeId: resourceId,
     });
     return;
   }
-  openModal(resourceId, nodeData);
+  openModal(resourceId, nodeData, { nodeId: resourceId });
 }
 
 function renderGroupedResourcesModal(nodeData) {
@@ -826,6 +919,14 @@ function openModal(resourceId, nodeData, lookup = {}) {
     return;
   }
   const controller = startModalRequest();
+  const nodeId = String(lookup.nodeId || resourceId || "").trim();
+  const nodeChildren = collectChildNodeSummaries(nodeId);
+  const withNodeContext = (payload = {}) => ({
+    ...payload,
+    __node_id: nodeId,
+    __node_children: nodeChildren,
+    __node_label: firstNonEmpty(nodeData?.title, nodeData?.label, nodeId),
+  });
   modalOverlay.hidden = false;
   modalTitle.textContent = "Loading details…";
   if (modalSubtitle) modalSubtitle.textContent = "";
@@ -851,7 +952,7 @@ function openModal(resourceId, nodeData, lookup = {}) {
         throw new Error(data?.error || `Request failed with status ${resp.status}`);
       }
       if (!data || data.error) {
-        renderModalContent(buildFallbackModalData(resourceId, nodeData, lookup));
+        renderModalContent(withNodeContext(buildFallbackModalData(resourceId, nodeData, lookup)));
         activeModalRequest = null;
         return;
       }
@@ -860,7 +961,7 @@ function openModal(resourceId, nodeData, lookup = {}) {
         ...buildFallbackModalData(resourceId, nodeData, lookup),
         ...data,
       };
-      renderModalContent(mergedData);
+      renderModalContent(withNodeContext(mergedData));
       activeModalRequest = null;
     })
     .catch((err) => {
@@ -874,15 +975,37 @@ function openModal(resourceId, nodeData, lookup = {}) {
         fallbackData.fqdn ||
         (Array.isArray(fallbackData.public_ips) && fallbackData.public_ips.length > 0);
       if (hasFallback) {
-        renderModalContent(fallbackData);
+        renderModalContent(withNodeContext(fallbackData));
       } else {
         modalTitle.textContent = "Unable to load details";
         if (modalSubtitle) modalSubtitle.textContent = "";
         modalBody.innerHTML = `<div class="cloud-arch-modal-empty">${escapeHtml(err.message || "Unknown error")}</div>`;
         if (modalIcon) modalIcon.textContent = "⚠";
       }
+
       activeModalRequest = null;
     });
+}
+
+function collectChildNodeSummaries(nodeId) {
+  if (!nodeId || !mermaidNodeDataById || typeof mermaidNodeDataById.entries !== "function") {
+    return [];
+  }
+  const children = [];
+  for (const [childId, childData] of mermaidNodeDataById.entries()) {
+    const parentId = String(childData?.parentNodeId || childData?.parent_node_id || "").trim();
+    if (!parentId || parentId !== nodeId) continue;
+    const resources = Array.isArray(childData?.resources) ? childData.resources.filter(Boolean) : [];
+    children.push({
+      id: childId,
+      label: firstNonEmpty(childData?.title, childData?.label, childId),
+      type: firstNonEmpty(childData?.typeLabel, childData?.resourceType, childData?.arm_type, childData?.type),
+      resourceGroup: firstNonEmpty(childData?.resourceGroup, resources[0]?.rg),
+      resourcesCount: resources.length,
+    });
+  }
+  children.sort((a, b) => a.label.localeCompare(b.label));
+  return children;
 }
 
 function setModalHeaderIcon(iconPath, fallbackText = "☁") {
@@ -991,72 +1114,137 @@ function renderModalContent(data) {
   }
   setModalHeaderIcon(data.icon_path || data.parent_resource?.icon_path || "", "☁");
 
-  const resourceName = firstNonEmpty(data.name, data.title, data.resource_name);
+  const resourceName = firstNonEmpty(data.name, data.title, data.resource_name, data.__node_label);
   const resourceGroup = firstNonEmpty(
     data.resource_group,
     data.resourceGroup,
     data.parent_resource?.resource_group
   );
-  const resourceType = firstNonEmpty(data.type_label, data.type, data.resourceType);
+  const serviceType = firstNonEmpty(data.type_label, data.typeLabel, data.type, data.resourceType);
+  const resourceType = firstNonEmpty(data.type, data.resourceType, data.arm_type);
   const fqdns = collectFqdns(data);
   const publicIps = collectPublicIps(data);
   const routingTargets = collectRoutingTargets(data);
   const vnet = collectVnet(data);
   const subnet = collectSubnet(data);
+  const childNodes = Array.isArray(data.__node_children) ? data.__node_children : [];
 
-  const fields = [];
-  if (resourceName) fields.push({ label: "Resource Name", value: escapeHtml(resourceName) });
-  if (resourceGroup) fields.push({ label: "Resource Group", value: escapeHtml(resourceGroup) });
-  if (resourceType) fields.push({ label: "Type", value: escapeHtml(resourceType) });
-  if (vnet) fields.push({ label: "VNet", value: escapeHtml(vnet) });
-  if (subnet) fields.push({ label: "Subnet", value: escapeHtml(subnet) });
+  const sections = [];
+
+  const overviewFields = [];
+  if (resourceName) overviewFields.push({ label: "Asset Name", value: escapeHtml(resourceName) });
+  if (serviceType) overviewFields.push({ label: "Service Type", value: escapeHtml(serviceType) });
+  if (resourceType) overviewFields.push({ label: "Resource Type", value: escapeHtml(resourceType) });
+  if (data.sku || data.configuration?.sku_name) {
+    overviewFields.push({ label: "SKU", value: escapeHtml(String(data.sku || data.configuration?.sku_name || "")) });
+  }
+  if (data.security && typeof data.security.is_public === "boolean") {
+    overviewFields.push({
+      label: "Public",
+      value: data.security.is_public
+        ? '<span class="cloud-arch-modal-badge cloud-arch-modal-badge--danger">🌐 Public</span>'
+        : '<span class="cloud-arch-modal-badge cloud-arch-modal-badge--success">🔒 Private</span>',
+      isHtml: true,
+    });
+  }
+  if (resourceGroup) overviewFields.push({ label: "Resource Group", value: escapeHtml(resourceGroup) });
+  if (data.location) overviewFields.push({ label: "Location", value: escapeHtml(String(data.location)) });
+  if (overviewFields.length > 0) {
+    sections.push({ title: "Asset Overview", icon: "🧩", fields: overviewFields });
+  }
+
+  const configFields = [];
+  if (data.configuration?.sku_name) configFields.push({ label: "SKU", value: escapeHtml(String(data.configuration.sku_name)) });
+  if (data.configuration?.sku_tier) configFields.push({ label: "Tier", value: escapeHtml(String(data.configuration.sku_tier)) });
+  if (data.location) configFields.push({ label: "Location", value: escapeHtml(String(data.location)) });
+  if (data.subscription) configFields.push({ label: "Subscription", value: escapeHtml(String(data.subscription)) });
+  if (data.environment) configFields.push({ label: "Environment", value: escapeHtml(String(data.environment)) });
+  if (data.configuration?.kind) configFields.push({ label: "Kind", value: escapeHtml(String(data.configuration.kind)) });
+  if (data.configuration?.hostname) configFields.push({ label: "Hostname", value: escapeHtml(String(data.configuration.hostname)) });
+  if (data.configuration?.protocol) configFields.push({ label: "Protocol", value: escapeHtml(String(data.configuration.protocol)) });
+  if (data.configuration?.port) configFields.push({ label: "Port", value: escapeHtml(String(data.configuration.port)) });
+  if (configFields.length > 0) {
+    sections.push({ title: "Configuration", icon: "⚙️", fields: configFields });
+  }
+
+  const networkFields = [];
   if (fqdns.length > 0) {
-    fields.push({
+    networkFields.push({
       label: "FQDN",
       value: fqdns.map((fqdn) => `<code>${escapeHtml(fqdn)}</code>`).join("<br/>"),
       isHtml: true,
     });
   }
   if (publicIps.length > 0) {
-    fields.push({
+    networkFields.push({
       label: "Public IP",
       value: publicIps.map((ip) => `<code>${escapeHtml(ip)}</code>`).join("<br/>"),
       isHtml: true,
     });
   }
   if (routingTargets.length > 0) {
-    fields.push({
+    networkFields.push({
       label: "Routes To",
       value: routingTargets.map((target) => `<code>${escapeHtml(target)}</code>`).join("<br/>"),
       isHtml: true,
     });
   }
+  if (vnet) networkFields.push({ label: "Virtual Network", value: escapeHtml(vnet) });
+  if (subnet) networkFields.push({ label: "Subnet", value: escapeHtml(subnet) });
+  if (networkFields.length > 0) {
+    sections.push({ title: "Network", icon: "🌐", fields: networkFields });
+  }
 
-  if (!fields.length) {
+  if (childNodes.length > 0) {
+    sections.push({
+      title: "Children",
+      icon: "🧬",
+      fields: [
+        {
+          label: "Child Resources",
+          value: `<ul class="cloud-arch-modal-list">${childNodes
+            .map((child) => {
+              const type = child.type ? `<span style="color: var(--text-muted);">${escapeHtml(child.type)}</span>` : "";
+              const rg = child.resourceGroup ? `<span style="color: var(--text-muted);">(${escapeHtml(child.resourceGroup)})</span>` : "";
+              const count = child.resourcesCount > 1 ? ` <span class="cloud-arch-modal-badge cloud-arch-modal-badge--info">${child.resourcesCount} resources</span>` : "";
+              return `<li class="cloud-arch-modal-list-item"><strong>${escapeHtml(child.label)}</strong>${type ? ` • ${type}` : ""} ${rg}${count}</li>`;
+            })
+            .join("")}</ul>`,
+          isHtml: true,
+        },
+      ],
+    });
+  }
+
+  if (!sections.length) {
     modalBody.innerHTML = '<div class="cloud-arch-modal-empty">No core resource details found for this node.</div>';
     return;
   }
 
-  modalBody.innerHTML = `
-    <div class="cloud-arch-modal-section">
-      <div class="cloud-arch-modal-section-title">
-        <span class="cloud-arch-modal-section-icon">🧩</span>
-        Resource Details
+  modalBody.innerHTML = sections
+    .map(
+      (section) => `
+      <div class="cloud-arch-modal-section">
+        <div class="cloud-arch-modal-section-title">
+          <span class="cloud-arch-modal-section-icon">${section.icon}</span>
+          ${section.title}
+        </div>
+        <div class="cloud-arch-modal-grid">
+          ${(section.fields || [])
+            .map(
+              (field) => `
+            <div class="cloud-arch-modal-field">
+              <div class="cloud-arch-modal-field-label">${field.label}</div>
+              <div class="cloud-arch-modal-field-value">${field.isHtml ? field.value : field.value}</div>
+            </div>
+          `
+            )
+            .join("")}
+        </div>
       </div>
-      <div class="cloud-arch-modal-grid">
-        ${fields
-          .map(
-            (field) => `
-          <div class="cloud-arch-modal-field">
-            <div class="cloud-arch-modal-field-label">${field.label}</div>
-            <div class="cloud-arch-modal-field-value">${field.isHtml ? field.value : field.value}</div>
-          </div>
-        `
-          )
-          .join("")}
-      </div>
-    </div>
-  `;
+    `
+    )
+    .join("");
 }
 
 function renderSummary(payload, subscriptionName, viewMode) {
