@@ -94,8 +94,12 @@ export function autoFitDiagram(container, scrollEl) {
   const ch = scrollEl.clientHeight - 48;
   if (cw <= 0 || ch <= 0) return 1;
 
-  let sw = parseFloat(svgEl.getAttribute('width')) || 0;
-  let sh = parseFloat(svgEl.getAttribute('height')) || 0;
+  let sw = parseFloat(svgEl.dataset.baseWidth || '') || 0;
+  let sh = parseFloat(svgEl.dataset.baseHeight || '') || 0;
+  if (!sw || !sh) {
+    sw = parseFloat(svgEl.getAttribute('width')) || 0;
+    sh = parseFloat(svgEl.getAttribute('height')) || 0;
+  }
   if (!sw || !sh) {
     const vb = svgEl.viewBox.baseVal;
     sw = vb.width || svgEl.scrollWidth;

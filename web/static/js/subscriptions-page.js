@@ -1261,8 +1261,6 @@
     document.querySelectorAll('style[data-sub-style]').forEach(el => el.remove());
 
     const wrap = document.getElementById('subscription-diagram-wrap');
-    const loading = document.getElementById('subscription-diagram-loading');
-    const loadingText = loading?.querySelector('.subscription-diagram-loading-text');
     const container = document.getElementById('subscription-diagram-container');
     const title = document.getElementById('subscription-diagram-title');
     const footer = document.getElementById('subscription-diagram-footer');
@@ -1273,9 +1271,7 @@
     wrap.scrollLeft = 0;
     try { window.scrollTo({ top: 0, behavior: 'instant' }); } catch (_) { window.scrollTo(0, 0); }
     document.body.style.overflow = 'hidden';
-    loading.style.display = 'flex';
-    if (loadingText) loadingText.textContent = 'Fetching architecture data…';
-    container.style.display = 'none';
+    container.style.display = 'block';
     container.innerHTML = '';
     title.textContent = subName || subId;
     footer.style.display = 'none';
@@ -1286,12 +1282,12 @@
       const data = await resp.json();
 
       if (data.error) {
-        if (loadingText) loadingText.textContent = data.error;
+        const err = document.createElement('div');
+        err.style.cssText = 'color:#fca5a5;font-size:0.9rem;padding:12px;';
+        err.textContent = data.error;
+        container.replaceChildren(err);
         return;
       }
-
-      if (loadingText) loadingText.textContent = 'Rendering diagram…';
-      container.style.display = 'block';
 
       const ingressDiag = data.ingress_diagram;
       const modes = getDiagramModes(ingressDiag);
@@ -1328,11 +1324,12 @@
       await renderCurrentMode();
 
       if (window.initSubscriptionDiagrams) await window.initSubscriptionDiagrams();
-      loading.style.display = 'none';
     } catch(e) {
       if (e.name === 'AbortError') return; // Superseded by a newer click — silently discard
-      loading.style.display = 'flex';
-      if (loadingText) loadingText.textContent = 'Failed to load diagram: ' + e.message;
+      const err = document.createElement('div');
+      err.style.cssText = 'color:#fca5a5;font-size:0.9rem;padding:12px;';
+      err.textContent = `Failed to load diagram: ${e.message}`;
+      container.replaceChildren(err);
     }
   }
 

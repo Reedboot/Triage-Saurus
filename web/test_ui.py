@@ -4311,6 +4311,7 @@ class TestCloudPosture:
             ("sub-1", "Test Subscription", "production", "Enabled"),
         )
         load_balancer_id = "/subscriptions/sub-1/resourceGroups/cbuk-core-blue-pbi-gateway-ukwest/providers/Microsoft.Network/loadBalancers/pbi-gateway"
+        vmss_id = "/subscriptions/sub-1/resourceGroups/cbuk-core-blue-pbi-gateway-ukwest/providers/Microsoft.Compute/virtualMachineScaleSets/power_bi_gateway"
         public_ip_id = "/subscriptions/sub-1/resourceGroups/cbuk-core-blue-pbi-gateway-ukwest/providers/Microsoft.Network/publicIPAddresses/backend"
         conn.executemany(
             """
@@ -4330,13 +4331,22 @@ class TestCloudPosture:
                     "ukwest",
                     "Standard",
                     "pbi-gateway.example.contoso.com",
-                    0,
+                    1,
                     "active",
                     None,
                     "2026-06-01T00:00:00Z",
                     "2026-06-01T00:00:00Z",
                     json.dumps(
                         {
+                            "_extra": {
+                                "routing_targets": [
+                                    {
+                                        "target": "power_bi_gateway",
+                                        "name": "power_bi_gateway",
+                                        "type": "Microsoft.Compute/virtualMachineScaleSets",
+                                    }
+                                ]
+                            },
                             "properties": {
                                 "frontendIPConfigurations": [
                                     {"properties": {"publicIPAddress": {"id": public_ip_id}}}
@@ -4344,6 +4354,24 @@ class TestCloudPosture:
                             }
                         }
                     ),
+                    0,
+                    None,
+                ),
+                (
+                    vmss_id,
+                    "sub-1",
+                    "cbuk-core-blue-pbi-gateway-ukwest",
+                    "power_bi_gateway",
+                    "Microsoft.Compute/virtualMachineScaleSets",
+                    "ukwest",
+                    "Standard_A8_v2",
+                    None,
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({"properties": {"virtualMachineProfile": {"networkProfile": {"networkInterfaceConfigurations": []}}}}),
                     0,
                     None,
                 ),
@@ -4382,14 +4410,26 @@ class TestCloudPosture:
         graph = graph_resp.get_json()
         mermaid = graph["views"]["connectivity"]["mermaid"]
         lb_node_id = "cbuk_core_blue_pbi_gateway_ukwest_pbi_gateway"
+        vmss_node_id = "cbuk_core_blue_pbi_gateway_ukwest_power_bi_gateway"
         assert f'{lb_node_id}["' in mermaid, mermaid
+        assert f'{lb_node_id} -->|"Load balancing"| {vmss_node_id}' in mermaid, mermaid
         assert "pbi-gateway.example.contoso.com" not in mermaid, mermaid
         assert "#06b6d4" not in mermaid, mermaid
+        assert "simulation_knowledgecentre" not in mermaid, mermaid
 
         details_resp = client.get("/api/cloud/resource-details", query_string={"id": load_balancer_id})
         assert details_resp.status_code == 200, details_resp.get_data(as_text=True)
         details = details_resp.get_json()
         assert "20.30.40.50" in details["network"]["public_ips"]
+        assert any(str(item.get("target") or "") == "power_bi_gateway" for item in details["network"]["routing_targets"])
+
+        rf_resp = client.get("/api/cloud/architecture?sub=sub-1&view=reactflow")
+        assert rf_resp.status_code == 200, rf_resp.get_data(as_text=True)
+        rf_graph = rf_resp.get_json()
+        assert any(
+            edge.get("source") == load_balancer_id and edge.get("target") == vmss_id
+            for edge in rf_graph["edges"]
+        ), rf_graph["edges"]
 
         os.unlink(tmp.name)
 

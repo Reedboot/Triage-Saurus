@@ -104,35 +104,6 @@
   border-color: #2563eb;
 }
 
-.subscription-diagram-loading {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  gap: 14px;
-  min-height: 200px;
-}
-
-.subscription-diagram-loading-text {
-  font-size: 0.9rem;
-  color: var(--text-muted);
-}
-
-.subscription-diagram-spinner {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  border: 3px solid var(--border-color, #444);
-  border-top-color: var(--accent, #60a5fa);
-  animation: subscription-spinner 0.85s linear infinite;
-  flex: 0 0 auto;
-}
-
-@keyframes subscription-spinner {
-  to { transform: rotate(360deg); }
-}
-
 .diagram-container {
   display: none;
   flex: 1;

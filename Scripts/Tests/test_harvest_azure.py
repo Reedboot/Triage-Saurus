@@ -116,7 +116,16 @@ class TestLoadBalancerHarvest:
                 "frontendIPConfigurations": [
                     {"properties": {"publicIPAddress": {"id": pip_id}}}
                 ],
-                "backendAddressPools": [{"name": "pool-1"}],
+                "backendAddressPools": [
+                    {
+                        "name": "pool-1",
+                        "backendIPConfigurations": [
+                            {
+                                "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Compute/virtualMachineScaleSets/power_bi_gateway/virtualMachines/0/networkInterfaces/backend/ipConfigurations/public"
+                            }
+                        ],
+                    }
+                ],
                 "probes": [{"name": "probe-1"}],
             },
         }
@@ -138,6 +147,7 @@ class TestLoadBalancerHarvest:
         raw = json.loads(row["raw_json"])
         assert raw["properties"]["frontendIPConfigurations"][0]["properties"]["publicIPAddress"]["id"] == pip_id
         assert raw["_extra"]["public_ip_resource_ids"] == [pip_id]
+        assert raw["_extra"]["routing_targets"][0]["target"] == "power_bi_gateway"
 
 
 # ---------------------------------------------------------------------------
@@ -991,6 +1001,46 @@ class TestBastionPublicIpDetection:
         assert bastion_host._extract_public_ip_ids(resource) == [
             "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Network/publicIPAddresses/pip-one"
         ]
+
+    def test_harvest_uses_bastion_show_details_for_public_detection(self, monkeypatch):
+        bastion_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/bastionHosts/bastion-one"
+        pip_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/publicIPAddresses/bastion-one"
+
+        list_row = {
+            "id": bastion_id,
+            "name": "bastion-one",
+            "resourceGroup": "rg-net",
+            "type": "Microsoft.Network/bastionHosts",
+            "location": "ukwest",
+            "properties": {"ipConfigurations": []},
+        }
+        detailed_row = {
+            **list_row,
+            "properties": {
+                "ipConfigurations": [
+                    {"properties": {"publicIPAddress": {"id": pip_id}}}
+                ],
+                "dnsSettings": {"fqdn": "bastion-one.example.contoso.com"},
+            },
+        }
+
+        def fake_az(args, subscription_id):
+            if args[:3] == ["resource", "list", "--resource-type"]:
+                return [list_row]
+            if args[:3] == ["network", "bastion", "show"]:
+                return detailed_row
+            return []
+
+        monkeypatch.setattr(bastion_host, "az", fake_az)
+
+        rows = bastion_host.harvest("sub-1")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["id"] == bastion_id
+        assert row["is_public"] == 1
+        raw = json.loads(row["raw_json"])
+        assert raw["_extra"]["public_ip_resource_ids"] == [pip_id]
+        assert row["fqdn"] == "bastion-one.example.contoso.com"
 
 
 class TestVmssPublicIpDetection:

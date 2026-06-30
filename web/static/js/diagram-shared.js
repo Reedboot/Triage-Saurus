@@ -38,10 +38,32 @@ export function sanitizeMermaidSource(code) {
 export function stampSvgDimensions(svg) {
   const vb = svg.viewBox && svg.viewBox.baseVal;
   if (vb && vb.width > 0 && vb.height > 0) {
-    svg.setAttribute('width',  `${vb.width}px`);
-    svg.setAttribute('height', `${vb.height}px`);
-    svg.style.setProperty('width',  `${vb.width}px`);
-    svg.style.setProperty('height', `${vb.height}px`);
+    let x = vb.x;
+    let y = vb.y;
+    let width = vb.width;
+    let height = vb.height;
+
+    // In Firefox, Mermaid content (especially labels/icons) can extend beyond the
+    // initial viewBox and appear clipped. Expand the viewBox to include actual bounds.
+    try {
+      const bbox = svg.getBBox();
+      if (bbox && bbox.width > 0 && bbox.height > 0) {
+        const minX = Math.min(x, bbox.x);
+        const minY = Math.min(y, bbox.y);
+        const maxX = Math.max(x + width, bbox.x + bbox.width);
+        const maxY = Math.max(y + height, bbox.y + bbox.height);
+        x = minX;
+        y = minY;
+        width = Math.max(1, maxX - minX);
+        height = Math.max(1, maxY - minY);
+      }
+    } catch (_) {}
+
+    svg.setAttribute('viewBox', `${x} ${y} ${width} ${height}`);
+    svg.setAttribute('width',  `${width}px`);
+    svg.setAttribute('height', `${height}px`);
+    svg.style.setProperty('width',  `${width}px`);
+    svg.style.setProperty('height', `${height}px`);
     svg.style.removeProperty('max-width');
   }
 }
