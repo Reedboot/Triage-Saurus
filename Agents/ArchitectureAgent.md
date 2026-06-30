@@ -297,7 +297,7 @@ flowchart TB
 - **Line breaks:** Use `<br/>` not `\n` in node labels for proper rendering.
 - **Colored borders (RECOMMENDED):** Use colored stroke styling to visually distinguish component types:
   - **Internet edge** (red): `style Edge stroke:#cc0000,stroke-width:2px` - Internet/public ingress boundary
-  - **Network boundary** (purple): `style Network stroke:#8b5cf6,stroke-width:2px` - VNets, subnets, NSGs, firewalls, **load balancers (ALB/NLB/ELB/CLB)**, load balancer listeners, target groups, route tables, NAT gateways, VPN gateways, security groups, network ACLs, WAF, CDN/CloudFront (when acting as network edge)
+  - **Network boundary** (blue): `style Network stroke:#1971c2,stroke-width:2px` - VNets, subnets, NSGs, firewalls, **load balancers (ALB/NLB/ELB/CLB)**, load balancer listeners, target groups, route tables, NAT gateways, VPN gateways, security groups, network ACLs, WAF, CDN/CloudFront (when acting as network edge)
   - **Compute** (green): `style Compute stroke:#5a9e5a,stroke-width:2px` - App Service, AKS, VM, Functions
   - **Data services** (blue): `style Data stroke:#4a90d9,stroke-width:2px` - SQL, Storage, Redis, Cosmos DB
   - **Identity & secrets** (orange): `style Identity stroke:#e07b00,stroke-width:2px` - Key Vault, managed identities, AAD, secrets
@@ -336,6 +336,18 @@ flowchart TB
   **Example - INCORRECT (NEVER DO THIS):**
   ```
   style Main fill:#ff6b6b,stroke:#c92a2a    ❌ FORBIDDEN
+  ```
+
+- **VNet/Network subgraph requirement:** Place network assets inside a dedicated
+  Mermaid subgraph and style that subgraph with blue border, no fill.
+  ```mermaid
+  flowchart TB
+    subgraph Network["🛡️ Networks / VNet"]
+      VNet[Virtual Network]
+      Subnet[Subnet]
+      Nsg[Network Security Group]
+    end
+    style Network stroke:#1971c2,stroke-width:2px
   ```
 
 **CRITICAL: Mermaid Syntax Validation (Avoid Parse Errors)**
@@ -649,7 +661,7 @@ This ensures no `fill:` attributes slipped through and Mermaid syntax is valid.
 
 **Good patterns (colored borders for visual hierarchy):**
 - ✅ Internet edge: `style Edge stroke:#cc0000,stroke-width:2px` (red)
-- ✅ Network boundary: `style Network stroke:#8b5cf6,stroke-width:2px` (purple)
+- ✅ Network boundary: `style Network stroke:#1971c2,stroke-width:2px` (blue)
 - ✅ Compute: `style Compute stroke:#5a9e5a,stroke-width:2px` (green)
 - ✅ Data services: `style Data stroke:#4a90d9,stroke-width:2px` (blue)
 - ✅ Identity/secrets: `style Identity stroke:#e07b00,stroke-width:2px` (orange)

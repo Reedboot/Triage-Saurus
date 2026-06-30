@@ -2038,8 +2038,81 @@ class TestIngressDiagramGeneration:
             conn.close()
 
         assert result["view_type"] == "table", result
+        assert result["title"] == "App Service Plan — Hosted Apps", result
         assert result["rows"], result
         assert any(row[0] == "orders-fn-app" for row in result["rows"]), result["rows"]
+        assert result["parent_resource"]["name"] == "test-plan", result
+        assert result["parent_resource"]["type_label"] == "App Service Plan", result
+
+    def test_app_service_environment_drilldown_uses_correct_parent_type(self):
+        """ASE drilldown should resolve the parent resource as App Service Environment."""
+        import sqlite3
+
+        from web.app import _build_child_table
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute(
+                """
+                CREATE TABLE provisioned_assets (
+                    name TEXT,
+                    resource_group TEXT,
+                    fqdn TEXT,
+                    is_public INTEGER,
+                    is_restricted INTEGER,
+                    raw_json TEXT,
+                    type TEXT,
+                    subscription_id TEXT,
+                    id TEXT
+                )
+                """
+            )
+            ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/test-ase"
+            site_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/orders-fn-app"
+            conn.executemany(
+                """
+                INSERT INTO provisioned_assets
+                    (name, resource_group, fqdn, is_public, is_restricted, raw_json, type, subscription_id, id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        "test-ase",
+                        "rg-app",
+                        "test-ase.appserviceenvironment.net",
+                        0,
+                        0,
+                        '{"kind": "app"}',
+                        "Microsoft.Web/hostingEnvironments",
+                        "sub-1",
+                        ase_id,
+                    ),
+                    (
+                        "orders-fn-app",
+                        "rg-app",
+                        "orders.example.com",
+                        1,
+                        0,
+                        f'{{"hostingEnvironmentProfile": {{"id": "{ase_id}"}}, "kind": "functionapp,linux"}}',
+                        "Microsoft.Web/sites",
+                        "sub-1",
+                        site_id,
+                    ),
+                ],
+            )
+
+            result = _build_child_table(
+                conn,
+                "sub-1",
+                "Microsoft.Web/hostingEnvironments",
+                [{"rg": "rg-app", "name": "test-ase"}],
+            )
+        finally:
+            conn.close()
+
+        assert result["title"] == "App Service Environment — Hosted Apps", result
+        assert result["parent_resource"]["name"] == "test-ase", result
+        assert result["parent_resource"]["type_label"] == "App Service Environment", result
 
     def test_aks_drilldown_uses_service_type_and_hides_cluster_column(self):
         """AKS drilldown should infer service type and omit redundant cluster column."""

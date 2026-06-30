@@ -503,7 +503,7 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
   - ❌ Long text arrow chains (`A → B → C → D → E → F`) are hard to scan - use Mermaid instead
 - **Colored borders (REQUIRED for traffic flows, RECOMMENDED elsewhere):**
   - 🔴 Internet Edge (red): `#cc0000` stroke-width:2px - Internet/public ingress boundary
-  - 🟣 Network boundary (purple): `#8b5cf6` stroke-width:2px - VNets, subnets, NSGs, firewalls
+  - 🔵 Network boundary (blue): `#1971c2` stroke-width:2px - VNets, subnets, NSGs, firewalls
   - 🟢 Compute (green): `#5a9e5a` stroke-width:2px - App Service, AKS, VM, Functions
   - 🔵 Data Services (blue): `#4a90d9` stroke-width:2px - SQL, Storage, Redis, Cosmos DB
   - 🟠 Identity & Secrets (orange): `#e07b00` stroke-width:2px - Key Vault, AAD, managed identity
@@ -512,8 +512,11 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
   - **Always include a legend** in diagrams explaining resource category border colors
   - **Legend format (inline, one line):** Place immediately after the Mermaid code block:
     ```markdown
-    **Legend:** 🔴 Red = Internet Edge | 🟣 Purple = Network Boundary | 🟢 Green = Compute | 🔵 Blue = Data Services | 🟠 Orange = Identity & Secrets | 🩵 Teal = Monitoring
+    **Legend:** 🔴 Red = Internet Edge | 🔵 Blue = Network Boundary | 🟢 Green = Compute | 🔵 Blue = Data Services | 🟠 Orange = Identity & Secrets | 🩵 Teal = Monitoring
     ```
+  - Place VNet/network assets inside a dedicated Mermaid subgraph and style that
+    subgraph with stroke only (no fill), for example:
+    `subgraph Network["🛡️ Network / VNet"] ... end` + `style Network stroke:#1971c2,stroke-width:2px`.
 - **UTF-8 handling:** Emojis are acceptable in Mermaid diagrams (node labels AND subgraph labels)
   - ✅ **ALWAYS use edit/create tools** for files with emojis or Unicode characters
   - ❌ **NEVER use bash heredocs** (`cat << 'EOF'`) for UTF-8 content - causes Unicode corruption

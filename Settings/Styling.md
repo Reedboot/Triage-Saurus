@@ -115,12 +115,16 @@ those tools are added to the repo.
   | Group | Emoji | Border colour | Hex |
   |-------|-------|--------------|-----|
   | Internet Edge | 🌐 | Red | `#cc0000` |
-  | Network boundary (VNet, NSG) | 🛡️ | Purple | `#8b5cf6` |
+  | Network boundary (VNet, NSG) | 🛡️ | Blue | `#1971c2` |
   | Compute (App Service, AKS, VM) | ⚙️ | Green | `#5a9e5a` |
   | Data Services (SQL, Storage, Redis) | 🗄️ | Blue | `#4a90d9` |
   | Identity & Secrets (Key Vault, AAD, MI) | 🔐 | Orange | `#e07b00` |
   | Monitoring & Alerts | 📈 | Teal | `#2ab7a9` |
 
+  Network assets must be placed inside a dedicated Mermaid subgraph (for example
+  `subgraph Network["🛡️ Network / VNet"] ... end`) and styled with a blue border
+  and no fill: `style Network stroke:#1971c2,stroke-width:2px`.
+  
   Apply via `style <SubgraphId> stroke:#hex,stroke-width:2px` — never on individual nodes
   unless highlighting a specific vulnerability (`stroke-dasharray: 5 5` or `stroke-width:3px`).
 
@@ -131,7 +135,7 @@ those tools are added to the repo.
   ```
   **Legend — group borders:**
   - 🔴 Red — Internet Edge (public attack surface)
-  - 🟣 Purple — Network boundary (VNet, NSG, firewall controls)
+  - 🔵 Blue — Network boundary (VNet, NSG, firewall controls)
   - 🟢 Green — Compute (App Service, AKS, VM, Functions)
   - 🔵 Blue — Data Services (SQL, Storage, Redis, CosmosDB)
   - 🟠 Orange — Identity & Secrets (Key Vault, Managed Identity, AAD)

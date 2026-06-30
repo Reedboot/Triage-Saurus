@@ -1468,6 +1468,8 @@ flowchart TB
     end
     
     Hub <-->|Peering| Spoke
+    style Hub stroke:#1971c2,stroke-width:2px
+    style Spoke stroke:#1971c2,stroke-width:2px
 ```
 
 **Components:**

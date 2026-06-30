@@ -15474,6 +15474,8 @@ def _collect_subnet_ids(raw_json: dict) -> list[str]:
     - networkProfile.subnetId            (Container Instances, some AKS node pools)
     - agentPoolProfiles[].vnetSubnetID   (AKS)
     - ipConfigurations[].subnet.id       (NICs — flattened; or [].properties.subnet.id — ARM)
+    - virtualMachineProfile.networkProfile.networkInterfaceConfigurations[]
+      .ipConfigurations[].subnet.id      (VM Scale Sets)
     - gatewayIPConfigurations[].properties.subnet.id  (App Gateways)
     - frontendIPConfigurations[].properties.subnet.id (Internal LBs)
     """
@@ -15530,6 +15532,28 @@ def _collect_subnet_ids(raw_json: dict) -> list[str]:
                 sub = ip_props.get("subnet")
                 if isinstance(sub, dict):
                     _add(sub.get("id", ""))
+
+        # VM Scale Set network profile:
+        # virtualMachineProfile.networkProfile.networkInterfaceConfigurations[]
+        #   .ipConfigurations[].subnet.id
+        vm_profile = props.get("virtualMachineProfile")
+        if isinstance(vm_profile, dict):
+            net_profile = vm_profile.get("networkProfile")
+            if isinstance(net_profile, dict):
+                for nic_cfg in net_profile.get("networkInterfaceConfigurations") or []:
+                    if not isinstance(nic_cfg, dict):
+                        continue
+                    for ip_cfg in nic_cfg.get("ipConfigurations") or []:
+                        if not isinstance(ip_cfg, dict):
+                            continue
+                        sub = ip_cfg.get("subnet")
+                        if isinstance(sub, dict):
+                            _add(sub.get("id", ""))
+                        ip_props = ip_cfg.get("properties") or {}
+                        if isinstance(ip_props, dict):
+                            sub = ip_props.get("subnet")
+                            if isinstance(sub, dict):
+                                _add(sub.get("id", ""))
 
         # Gateway IP configurations (App Gateways)
         for gw_cfg in props.get("gatewayIPConfigurations") or []:
@@ -18587,6 +18611,27 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     
     type_groups = _dd(list)
 
+    def _vnet_name_from_subnet_id(subnet_id: str) -> str | None:
+        """Extract the VNet name from a subnet ARM resource ID.
+
+        Format: .../virtualNetworks/VNET_NAME/subnets/SUBNET_NAME
+        """
+        parts = (subnet_id or "").split("/")
+        for i, part in enumerate(parts):
+            if part.lower() == "virtualnetworks" and i + 1 < len(parts):
+                return parts[i + 1]
+        return None
+
+    def _extract_vnet_name(parsed_raw: dict | None) -> str | None:
+        """Extract the VNet name from an ARM resource's raw JSON.
+
+        Uses shared subnet-id extraction so all supported patterns are covered
+        (including VMSS/ASE VNet references when present).
+        """
+        if not isinstance(parsed_raw, dict):
+            return None
+        return _extract_vnet(parsed_raw)
+
     def _iter_appgw_route_rows():
         """Yield normalized App Gateway route tuples.
 
@@ -18652,6 +18697,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             "auth_required": auth_required,
             "auth_summary": _auth_summary(auth_methods),
             "rbac_label": rbac_label,
+            "vnet_name": _extract_vnet_name(parsed_raw),
         }
         routing_targets = _parse_routing_targets(routing_targets_raw)
         extracted_targets = _extract_routing_targets(parsed_raw) if isinstance(parsed_raw, dict) else []
@@ -18896,6 +18942,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
 
     # Build simplified Mermaid diagram focusing on entry flow
     lines = [
+        '%%{init: {"flowchart": {"diagramPadding": 60}}}%%',
         "graph LR",
         '    Internet["🌐 Internet"]',
     ]
@@ -19409,6 +19456,28 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     appgw_node_title_by_id: dict[str, str] = {}
 
     # Add nodes with icon classes
+    # Entry-point nodes plus network-attached backend infrastructure (VMSS/ASE)
+    # are wrapped in a 🔒 VNet subgraph.
+    def _is_network_backend(item: dict) -> bool:
+        t = str(item.get("arm_type") or item.get("type") or "").lower()
+        return ("virtualmachinescalesets" in t) or ("hostingenvironment" in t)
+
+    _network_backend_items = [item for item in shown_backend if _is_network_backend(item)]
+
+    # Collect unique VNet names from all assets that are rendered in this subgraph.
+    _network_vnet_names = sorted({
+        item.get("vnet_name") or ""
+        for item in (shown_entry + _network_backend_items)
+        if item.get("vnet_name") and not item.get("parent_bastion_key") and not item.get("parent_lb_key")
+    } - {""})
+    if _network_vnet_names:
+        _vnet_label_part = ", ".join(_network_vnet_names[:2])
+        if len(_network_vnet_names) > 2:
+            _vnet_label_part += f" (+{len(_network_vnet_names) - 2} more)"
+        _network_subgraph_label = f"🔒 VNet: {_vnet_label_part}"
+    else:
+        _network_subgraph_label = "🔒 Networks / VNet"
+    lines.append(f'    subgraph NetworkBoundary["{_network_subgraph_label}"]')
     bastion_child_edges: list[tuple[str, str]] = []
     for item in shown_entry:
         if item.get("parent_bastion_key") or item.get("parent_lb_key"):
@@ -19442,6 +19511,20 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     "firewall_name": item.get("name") or "",
                     "policy": policy,
                 })
+
+    # Network-attached backends that should be represented inside the VNet boundary.
+    _network_backend_node_ids: set[str] = set()
+    for item in _network_backend_items:
+        node_id = _get_node_id(item)
+        arm_type = item.get("arm_type") or item["type"]
+        label = item.get("label") or item.get("type") or _friendly_type(arm_type)
+        access_indicator = " 🌐" if item.get("public") and not item.get("is_restricted") else " 🔒"
+        if item.get("restriction_label") or item.get("auth_summary"):
+            label = f"{label}{_node_security_suffix(item)}"
+        if item.get("apim_unverified"):
+            access_indicator += " ⚠️"
+        lines.append(_node_line(node_id, f"{label}{access_indicator}", arm_type))
+        _network_backend_node_ids.add(node_id)
 
     # --- Listener and WAF policy nodes for App Gateways ---
     # Maps gw_nid → list of (listener_nid, is_insecure_http)
@@ -19549,6 +19632,9 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         if _waf_nids_by_gateway.get(gw_nid):
             _waf_nids[gw_nid] = _waf_nids_by_gateway[gw_nid][0]
 
+    # Close the 🛡️ Networks / VNet subgraph before non-network nodes
+    lines.append('    end')
+
     for item in shown_api:
         node_id = _get_node_id(item)
         arm_type = item.get("arm_type") or item["type"]
@@ -19557,6 +19643,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     
     for item in shown_backend:
         node_id = _get_node_id(item)
+        if node_id in _network_backend_node_ids:
+            continue
         arm_type = item.get("arm_type") or item["type"]
         label = item.get("label") or item.get("type") or _friendly_type(arm_type)
         access_indicator = " 🌐" if item.get("public") and not item.get("is_restricted") else " 🔒"
@@ -20486,6 +20574,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     lines.append('    classDef listenerHttp stroke:#d32f2f,stroke-width:2px,fill:#3b0a0a,stroke-dasharray:4,2;')  # Red dashed = HTTP listener
     lines.append('    classDef listenerHttps stroke:#00897b,stroke-width:2px,fill:#0f2f2b;')  # Teal = HTTPS listener
     lines.append('    classDef wafPolicy stroke:#e65100,stroke-width:2px,fill:#3d1c0d;')  # Deep orange = WAF policy
+    lines.append('    style NetworkBoundary stroke:#1971c2,stroke-width:2px,fill:none;')  # Blue border, no fill = Network boundary
     
     for item in shown_entry:
         if item.get("parent_lb_key"):
@@ -20831,7 +20920,86 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
         }
         if empty_message:
             result["empty_message"] = empty_message
+        if parent_resource:
+            result["parent_resource"] = parent_resource
         return result
+
+    def _lookup_parent_resource(resource: dict | None, expected_arm_type: str | None = None) -> dict | None:
+        if not isinstance(resource, dict):
+            return None
+        parent_name = str(resource.get("name") or "").strip()
+        if not parent_name:
+            return None
+        parent_rg = str(resource.get("rg") or resource.get("resource_group") or "").strip()
+        expected_arm_type_lc = str(expected_arm_type or "").lower()
+        import sqlite3 as _sqlite3
+        def _row_value(row, key: str):
+            try:
+                return row[key] if row and key in row.keys() else None
+            except Exception:
+                return None
+
+        def _query_parent(with_type_filter: bool):
+            sql = [
+                """
+                SELECT *
+                FROM provisioned_assets
+                WHERE subscription_id = ?
+                  AND LOWER(name) = LOWER(?)
+                """
+            ]
+            params: list[str] = [sub_id, parent_name]
+            if parent_rg:
+                sql.append("AND LOWER(COALESCE(resource_group, '')) = LOWER(?)")
+                params.append(parent_rg)
+            if with_type_filter and expected_arm_type_lc:
+                if "serverfarms" in expected_arm_type_lc:
+                    sql.append("AND LOWER(type) LIKE '%serverfarms%'")
+                elif "hostingenvironment" in expected_arm_type_lc:
+                    sql.append("AND LOWER(type) LIKE '%hostingenvironments%'")
+                elif "applicationgateway" in expected_arm_type_lc:
+                    sql.append("AND LOWER(type) LIKE '%applicationgateways%'")
+                elif "apimanagement" in expected_arm_type_lc:
+                    sql.append("AND LOWER(type) LIKE '%apimanagement/service%'")
+            sql.append("LIMIT 1")
+            return conn.execute("\n".join(sql), params).fetchone()
+
+        try:
+            original_row_factory = getattr(conn, "row_factory", None)
+            conn.row_factory = _sqlite3.Row
+            row = _query_parent(True)
+        except Exception:
+            try:
+                conn.row_factory = _sqlite3.Row
+                row = _query_parent(True)
+                if not row:
+                    row = _query_parent(False)
+            except Exception:
+                return None
+        finally:
+            try:
+                conn.row_factory = original_row_factory
+            except Exception:
+                pass
+        if not row:
+            return None
+        parent_type = str(_row_value(row, "type") or "")
+        return {
+            "id": _row_value(row, "id"),
+            "name": _row_value(row, "name"),
+            "type": parent_type,
+            "type_label": _friendly_type(parent_type),
+            "resource_group": _row_value(row, "resource_group"),
+            "location": _row_value(row, "location"),
+            "sku": _row_value(row, "sku"),
+            "fqdn": _row_value(row, "fqdn"),
+            "is_public": bool(_row_value(row, "is_public")),
+            "is_restricted": bool(_row_value(row, "is_restricted")),
+            "waf_mode": _row_value(row, "waf_mode"),
+            "icon_path": _get_icon_path(parent_type),
+        }
+
+    parent_resource = _lookup_parent_resource(resources[0] if resources else None, arm_type)
 
     # ── Internet exposure summary ──────────────────────────────────────────────
     if arm_type_lc == "internet":
@@ -21443,7 +21611,7 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
     # ── App Service Plan → hosted App Services ────────────────────────────────
     elif "serverfarms" in arm_type_lc:
         n = len(names)
-        title   = f"App Service Plan — Hosted Apps ({n} plan{'s' if n != 1 else ''})"
+        title   = "App Service Plan — Hosted Apps"
         columns = ["App Service", "Resource Group", "URL / FQDN", "Exposure", "Kind", "Plan"]
         ph_plans = ",".join("?" * len(names)) if names else "''"
 
@@ -21486,7 +21654,7 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
     # ── App Service Environment → hosted App Services / Function Apps ─────────
     elif "hostingenvironment" in arm_type_lc:
         n = len(names)
-        title   = f"App Service Environment — Hosted Apps ({n} environment{'s' if n != 1 else ''})"
+        title   = "App Service Environment — Hosted Apps"
         columns = ["App Service / Function App", "Resource Group", "URL / FQDN", "Exposure", "Kind", "Environment"]
         ph_envs = ",".join("?" * len(names)) if names else "''"
 
@@ -22084,20 +22252,56 @@ def _build_subscription_diagrams_by_rg(sub_name: str, environment: str, rows: li
     )
 
 
+_NETWORK_ARM_PREFIXES = (
+    "microsoft.network/",
+    "microsoft.peering/",
+    "aws_vpc",
+    "aws_subnet",
+    "aws_security_group",
+    "aws_route_table",
+    "aws_network_acl",
+    "aws_internet_gateway",
+    "aws_nat_gateway",
+    "aws_vpc_endpoint",
+    "google_compute_network",
+    "google_compute_subnetwork",
+    "google_compute_firewall",
+    "oci_core_vcn",
+    "oci_core_subnet",
+    "alicloud_vpc",
+    "alicloud_vswitch",
+)
+
+
+def _is_network_arm_type(rtype: str) -> bool:
+    """Return True if the ARM/provider type belongs to the network boundary group."""
+    t = (rtype or "").lower()
+    return any(t.startswith(prefix) for prefix in _NETWORK_ARM_PREFIXES)
+
+
 def _build_subscription_mermaid(sub_name: str, environment: str, rows: list) -> str:
-    """Build a Mermaid graph grouping live assets by resource group."""
+    """Build a Mermaid graph grouping live assets by resource group.
+
+    Network assets (VNets, NSGs, subnets, firewalls, etc.) are placed inside a
+    dedicated 🛡️ Networks / VNet subgraph with a blue border and no fill.
+    """
     from collections import defaultdict as _dd
-    import re as _re
 
     lines = ["graph TD", f'    subgraph SUB["{sub_name} ({environment})"]']
     groups: dict[str, list] = _dd(list)
     for name, rtype, rg, fqdn, is_public, sku in rows:
         groups[rg or "default"].append((name, rtype, fqdn, is_public, sku))
 
+    network_subgraph_ids: list[str] = []
+
     for rg, assets in sorted(groups.items()):
         rg_id = _sanitise_node_id(rg)
         lines.append(f'        subgraph {rg_id}["{rg}"]')
-        for name, rtype, fqdn, is_public, sku in assets:
+
+        network_assets = [(n, rt, fq, ip, sk) for n, rt, fq, ip, sk in assets if _is_network_arm_type(rt)]
+        other_assets   = [(n, rt, fq, ip, sk) for n, rt, fq, ip, sk in assets if not _is_network_arm_type(rt)]
+
+        def _render_asset(name: str, rtype: str, fqdn: str | None, is_public: bool, indent: str) -> str:
             node_id = _sanitise_node_id(f"{rg}_{name}")
             label_parts = [_friendly_type(rtype), name]
             if fqdn:
@@ -22106,7 +22310,19 @@ def _build_subscription_mermaid(sub_name: str, environment: str, rows: list) -> 
                 label_parts.append("🌐 public")
             label = "<br/>".join(label_parts)
             shape_open, shape_close = ("([", "])") if is_public else ("[", "]")
-            lines.append(f'            {node_id}{shape_open}"{label}"{shape_close}')
+            return f'{indent}{node_id}{shape_open}"{label}"{shape_close}'
+
+        for name, rtype, fqdn, is_public, sku in other_assets:
+            lines.append(_render_asset(name, rtype, fqdn, is_public, "            "))
+
+        if network_assets:
+            net_id = f"{rg_id}_network"
+            network_subgraph_ids.append(net_id)
+            lines.append(f'            subgraph {net_id}["🛡️ Networks / VNet"]')
+            for name, rtype, fqdn, is_public, sku in network_assets:
+                lines.append(_render_asset(name, rtype, fqdn, is_public, "                "))
+            lines.append("            end")
+
         lines.append("        end")
 
     lines.append("    end")
@@ -22116,6 +22332,9 @@ def _build_subscription_mermaid(sub_name: str, environment: str, rows: list) -> 
         if is_public:
             node_id = _sanitise_node_id(f"{rg or 'default'}_{name}")
             lines.append(f"    class {node_id} publicNode;")
+
+    for net_id in network_subgraph_ids:
+        lines.append(f"    style {net_id} stroke:#1971c2,stroke-width:2px,fill:none;")
 
     return "\n".join(lines)
 

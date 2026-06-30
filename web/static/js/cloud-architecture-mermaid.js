@@ -654,6 +654,10 @@ function buildMermaidGraph(payload, subscriptionName) {
       /\bvnet\b/,
       /\bnetwork\b/,
       /\bsubnet\b/,
+      /\bvirtual[_\s-]*machine[_\s-]*scale[_\s-]*set(s)?\b/,
+      /\bvirtualmachinescalesets\b/,
+      /\bapp[_\s-]*service[_\s-]*environment\b/,
+      /\bhostingenvironment(s)?\b/,
       /\bnsg\b/,
       /\bnetwork[_\s-]*security[_\s-]*group\b/,
       /\broute[_\s-]*table\b/,
@@ -850,12 +854,31 @@ function closeModal() {
 function openNodePopup(resourceId, nodeData) {
   const resources = Array.isArray(nodeData?.resources) ? nodeData.resources.filter(Boolean) : [];
   const isGroupedNode = Boolean(nodeData?.is_group || nodeData?.isGroupNode || nodeData?.summaryNode || nodeData?.groupType);
+  const armType = String(nodeData?.arm_type || nodeData?.type || nodeData?.resourceType || "").toLowerCase();
+  const prefersChildDrilldown = armType.includes("serverfarms") || armType.includes("hostingenvironments");
   if (resources.length > 1 || (isGroupedNode && resources.length > 0)) {
+    if (currentMermaidSubscriptionId) {
+      openDrilldownModal(nodeData, currentMermaidSubscriptionId);
+      return;
+    }
     renderGroupedResourcesModal(nodeData);
     return;
   }
   if (resources.length === 1) {
     const resource = resources[0] || {};
+    if (prefersChildDrilldown && currentMermaidSubscriptionId) {
+      openDrilldownModal(nodeData, currentMermaidSubscriptionId, () => {
+        openModal(resourceId, nodeData, {
+          id: resource.id,
+          name: resource.name,
+          resourceGroup: resource.rg,
+          type: nodeData?.arm_type || nodeData?.type || nodeData?.resourceType || "",
+          subscription: currentMermaidSubscriptionId,
+          nodeId: resourceId,
+        });
+      });
+      return;
+    }
     openModal(resourceId, nodeData, {
       id: resource.id,
       name: resource.name,
@@ -867,6 +890,48 @@ function openNodePopup(resourceId, nodeData) {
     return;
   }
   openModal(resourceId, nodeData, { nodeId: resourceId });
+}
+
+function openDrilldownModal(nodeData, subId, fallback = null) {
+  if (!modalOverlay || !subId) return;
+  const controller = startModalRequest();
+  const url = new URL(`/api/subscriptions/${encodeURIComponent(subId)}/drilldown`, window.location.origin);
+  fetch(url.toString(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ arm_type: nodeData?.arm_type || nodeData?.type || "", resources: nodeData?.resources || [] }),
+    signal: controller.signal,
+  })
+    .then(async (resp) => {
+      if (controller.signal.aborted) return;
+      const data = await readJsonResponse(resp);
+      if (!resp.ok) {
+        throw new Error(data?.error || `Request failed with status ${resp.status}`);
+      }
+      if (!data || data.error) {
+        throw new Error(data?.error || "No drilldown data available");
+      }
+      if (controller.signal.aborted) return;
+      const hasRows =
+        (Array.isArray(data?.rows) && data.rows.length > 0) ||
+        (Array.isArray(data?.sections) && data.sections.some((section) => Array.isArray(section?.rows) && section.rows.length > 0));
+      if (!hasRows && typeof fallback === "function") {
+        fallback();
+        activeModalRequest = null;
+        return;
+      }
+      if ((data.view_type === "table" || data.view_type === "tree_table") && Array.isArray(data.columns)) {
+        renderTabularModalContent(data);
+      } else {
+        renderModalContent(data);
+      }
+      activeModalRequest = null;
+    })
+    .catch((err) => {
+      if (err?.name === "AbortError") return;
+      renderGroupedResourcesModal(nodeData);
+      activeModalRequest = null;
+    });
 }
 
 function renderGroupedResourcesModal(nodeData) {
@@ -1105,6 +1170,146 @@ function collectRoutingTargets(data) {
   return values;
 }
 
+function renderTabularModalContent(data) {
+  if (!modalOverlay || !modalTitle || !modalBody) return;
+  modalOverlay.hidden = false;
+  modalTitle.textContent = firstNonEmpty(data?.title, data?.name, "Details");
+  if (modalSubtitle) modalSubtitle.textContent = "";
+  setModalHeaderIcon(data?.icon_path || data?.parent_resource?.icon_path || "", "☁");
+
+  const parentResource = data?.parent_resource && typeof data.parent_resource === "object" ? data.parent_resource : null;
+  const parentResourceSection = parentResource
+    ? `
+      <div class="cloud-arch-modal-section">
+        <div class="cloud-arch-modal-section-title">
+          <span class="cloud-arch-modal-section-icon">🧭</span>
+          Parent Resource
+        </div>
+        <div class="cloud-arch-modal-grid">
+          ${[
+            parentResource.name ? `<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Asset Name</div><div class="cloud-arch-modal-field-value">${escapeHtml(String(parentResource.name))}</div></div>` : "",
+            parentResource.type_label || parentResource.type ? `<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Service Type</div><div class="cloud-arch-modal-field-value">${escapeHtml(String(parentResource.type_label || parentResource.type))}</div></div>` : "",
+            parentResource.resource_group ? `<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Resource Group</div><div class="cloud-arch-modal-field-value">${escapeHtml(String(parentResource.resource_group))}</div></div>` : "",
+            parentResource.location ? `<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Location</div><div class="cloud-arch-modal-field-value">${escapeHtml(String(parentResource.location))}</div></div>` : "",
+            parentResource.sku ? `<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">SKU</div><div class="cloud-arch-modal-field-value">${escapeHtml(String(parentResource.sku))}</div></div>` : "",
+            parentResource.fqdn ? `<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">FQDN</div><div class="cloud-arch-modal-field-value"><code>${escapeHtml(String(parentResource.fqdn))}</code></div></div>` : "",
+          ].filter(Boolean).join("")}
+        </div>
+      </div>
+    `
+    : "";
+
+  const columns = Array.isArray(data?.columns) ? data.columns : [];
+  if (!columns.length) {
+    modalBody.innerHTML = `<div class="cloud-arch-modal-empty">${escapeHtml(data?.empty_message || "No tabular data available.")}</div>`;
+    return;
+  }
+
+  const renderCell = (cell, depth = 0, isFirstCol = false) => {
+    if (cell == null) {
+      return "<span style=\"color: var(--text-muted);\">—</span>";
+    }
+    if (typeof cell === "object") {
+      const label = escapeHtml(String(cell.label || "—"));
+      const style = cell.style ? String(cell.style) : "";
+      if (cell.href) {
+        const href = escapeHtml(String(cell.href));
+        const title = cell.title ? ` title="${escapeHtml(String(cell.title))}"` : "";
+        return `<a href="${href}" target="_blank" rel="noopener noreferrer"${title} style="color:#60a5fa;text-decoration:underline;${isFirstCol ? `padding-left:${depth * 16}px;display:inline-block;` : ""}">${label}</a>`;
+      }
+      return `<span style="${style}${isFirstCol ? `;padding-left:${depth * 16}px;display:inline-block;` : ""}">${label}</span>`;
+    }
+    const text = escapeHtml(String(cell));
+    if (!isFirstCol || depth <= 0) return text;
+    return `<span style="padding-left:${depth * 16}px;display:inline-block;">${text}</span>`;
+  };
+
+  const buildTable = (rows) => {
+    const rowList = Array.isArray(rows) ? rows : [];
+    const rowById = new Map(
+      rowList
+        .filter((row) => row && typeof row === "object" && row.id)
+        .map((row) => [String(row.id), row])
+    );
+    const calcDepth = (row) => {
+      if (!row || typeof row !== "object") return 0;
+      let depth = 0;
+      let parentId = String(row.parent_id || "").trim();
+      const seen = new Set();
+      while (parentId && rowById.has(parentId) && !seen.has(parentId)) {
+        depth += 1;
+        seen.add(parentId);
+        const parent = rowById.get(parentId);
+        parentId = String(parent?.parent_id || "").trim();
+      }
+      return depth;
+    };
+
+    return `
+      <div style="overflow:auto;border:1px solid var(--border);border-radius:8px;">
+        <table style="width:100%;border-collapse:collapse;font-size:0.84rem;">
+          <thead>
+            <tr>
+              ${columns
+                .map(
+                  (col) =>
+                    `<th style="padding:8px 10px;text-align:left;background:var(--bg-base);border-bottom:1px solid var(--border);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.03em;color:var(--text-muted);">${escapeHtml(String(col || ""))}</th>`
+                )
+                .join("")}
+            </tr>
+          </thead>
+          <tbody>
+            ${rowList
+              .map((row) => {
+                const isObjectRow = row && typeof row === "object" && Array.isArray(row.cells);
+                const cells = isObjectRow ? row.cells : (Array.isArray(row) ? row : []);
+                const depth = isObjectRow ? calcDepth(row) : 0;
+                return `
+                  <tr style="border-bottom:1px solid var(--border);">
+                    ${columns
+                      .map((_, idx) => {
+                        const cell = cells[idx];
+                        return `<td style="padding:8px 10px;vertical-align:top;">${renderCell(cell, depth, idx === 0)}</td>`;
+                      })
+                      .join("")}
+                  </tr>
+                `;
+              })
+              .join("")}
+          </tbody>
+        </table>
+      </div>
+    `;
+  };
+
+  if (data.view_type === "tree_table" && Array.isArray(data.sections) && data.sections.length > 0) {
+    modalBody.innerHTML = `${parentResourceSection}${data.sections
+      .map((section) => {
+        const title = escapeHtml(String(section?.title || ""));
+        const subtitle = escapeHtml(String(section?.subtitle || ""));
+        return `
+          <div class="cloud-arch-modal-section">
+            <div class="cloud-arch-modal-section-title">
+              <span class="cloud-arch-modal-section-icon">📋</span>
+              ${title}
+            </div>
+            ${subtitle ? `<div class="cloud-arch-modal-subtitle" style="margin-bottom:10px;">${subtitle}</div>` : ""}
+            ${buildTable(section?.rows)}
+          </div>
+        `;
+      })
+      .join("")}`;
+    return;
+  }
+
+  const rows = Array.isArray(data.rows) ? data.rows : [];
+  if (!rows.length) {
+    modalBody.innerHTML = `<div class="cloud-arch-modal-empty">${escapeHtml(data.empty_message || "No data available.")}</div>`;
+    return;
+  }
+  modalBody.innerHTML = `${parentResourceSection}${buildTable(rows)}`;
+}
+
 function renderModalContent(data) {
   if (!modalOverlay || !modalTitle || !modalBody) return;
   modalOverlay.hidden = false;
@@ -1294,7 +1499,7 @@ async function loadMermaidView(subscriptionName) {
     return true;
   }
 
-  currentMermaidSubscriptionId = subscriptionName;
+  currentMermaidSubscriptionId = String(subscriptionName || "").trim();
   mermaidViewEl.hidden = false;
 
   const resolveSubscriptionId = async (selector) => {
@@ -1333,6 +1538,9 @@ async function loadMermaidView(subscriptionName) {
     let summaryPayload = null;
 
     const subscriptionId = await resolveSubscriptionId(subscriptionName);
+    if (subscriptionId) {
+      currentMermaidSubscriptionId = String(subscriptionId);
+    }
     if (subscriptionId) {
       const previewResp = await fetch(
         `/api/subscriptions/${encodeURIComponent(subscriptionId)}/diagram`,
