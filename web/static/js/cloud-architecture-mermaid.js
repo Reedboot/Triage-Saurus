@@ -1,12 +1,13 @@
 import {
   sanitizeMermaidSource,
   injectDiagramIconsIntoSvg,
-} from "./diagram-shared.js?v=2";
+} from "./diagram-shared.js?v=3";
 import {
   enhancePlaceholderGlyphs,
   applyEmojiIconFallback,
-} from "./diagram-base.js?v=2";
-import { renderMermaidDiagram, postProcessSvg } from "./subscription-diagrams.js?v=2";
+} from "./diagram-base.js?v=3";
+import { renderMermaidDiagram, postProcessSvg } from "./subscription-diagrams.js?v=3";
+import { autoFitDiagram } from "./diagram-base.js?v=3";
 import {
   CONFIG,
   PROVIDER_THEMES,
@@ -102,19 +103,16 @@ async function renderFirefoxIconOverlay(svgEl) {
       } else {
         const iconClass =
           String(nodeData.iconClass || nodeData.icon_class || "").trim() ||
-          normalizeIconClass(nodeData.resourceType || nodeData.resource_type || "", nodeData.providerKey || "azure");
+          normalizeIconClass(
+            nodeData.resourceType || nodeData.resource_type || nodeData.arm_type || nodeData.type || "",
+            nodeData.providerKey || "azure"
+          );
         const iconKey = iconClass.startsWith("icon-")
           ? iconClass.slice(5).replace(/-/g, "_")
           : "";
         if (iconKey && iconMap && typeof iconMap === "object") {
           src = String(iconMap[iconKey] || "").trim();
         }
-      }
-    }
-    if (!src) {
-      const nodeText = String(nodeEl.textContent || "").toLowerCase();
-      if (nodeText.includes("bastion")) {
-        src = "/static/assets/icons/azure/other/public-ip.svg";
       }
     }
     if (!src) return;
@@ -497,8 +495,8 @@ const ARM_TO_ICON_CLASS = {
   "microsoft.network/networksecuritygroups": "azurerm_network_security_group",
   "microsoft.network/routetables": "azurerm_route_table",
   "microsoft.network/publicipaddresses": "azurerm_public_ip",
-  "microsoft.network/loadbalancers": "azurerm_lb",
-  "microsoft.network/bastionhosts": "azurerm_bastion_host",
+  "microsoft.network/loadbalancers": "azurerm_load_balancer",
+  "microsoft.network/bastionhosts": "azurerm_bastions",
   "microsoft.apimanagement/service": "azurerm_apim",
   "microsoft.containerservice/managedclusters": "azurerm_aks",
   "microsoft.storage/storageaccounts": "azurerm_storage_account",
@@ -516,7 +514,7 @@ const ARM_TO_ICON_CLASS = {
   "microsoft.eventhub/namespaces": "azurerm_event_hub",
   "microsoft.servicebus/namespaces": "azurerm_service_bus",
   "microsoft.managedidentity/userassignedidentities": "azurerm_user_assigned_identity",
-  "microsoft.compute/virtualmachinescalesets": "azurerm_virtual_machine_scale_set",
+  "microsoft.compute/virtualmachinescalesets": "azurerm_vm_scale_sets",
   "microsoft.compute/images": "azurerm_image",
   "microsoft.operationalinsights/workspaces": "azurerm_log_analytics_workspace",
   "microsoft.insights/actiongroups": "azurerm_monitor_action_group",
@@ -705,10 +703,12 @@ async function renderMermaidGraph(payload, subscriptionName) {
         applyEmojiIconFallback(svgEl);
         attachMermaidDrilldownHandlers(svgEl);
         ensureMermaidClickHandler(svgEl);
-        renderFirefoxIconOverlay(svgEl);
-        bindFirefoxOverlaySync(svgEl);
         await injectDiagramIconsIntoSvg(svgEl, "all");
-        scheduleFirefoxOverlayRefresh();
+        const scrollEl = document.getElementById("cloud-arch-mermaid-scroll");
+        if (scrollEl) {
+          const fitScale = autoFitDiagram(mermaidRootEl, scrollEl);
+          mermaidRootEl.dataset.diagramScale = String(fitScale || 1);
+        }
       },
     });
     return Boolean(svg);
@@ -832,7 +832,7 @@ function openModal(resourceId, nodeData, lookup = {}) {
   if (resolvedResourceId) url.searchParams.set("id", resolvedResourceId);
   const name = String(lookup.name || lookup.resourceName || lookup.label || nodeData?.label || "").trim();
   const resourceGroup = String(lookup.resourceGroup || lookup.rg || nodeData?.resourceGroup || "").trim();
-  const type = String(lookup.type || lookup.armType || lookup.resourceType || nodeData?.type || "").trim();
+  const type = String(lookup.type || lookup.armType || lookup.resourceType || nodeData?.arm_type || nodeData?.type || "").trim();
   const subscription = String(lookup.subscription || lookup.sub || currentMermaidSubscriptionId || "").trim();
   if (name) url.searchParams.set("name", name);
   if (resourceGroup) url.searchParams.set("resource_group", resourceGroup);
@@ -935,6 +935,29 @@ function collectFqdns(data) {
     });
 }
 
+function collectRoutingTargets(data) {
+  const candidates = [
+    ...(Array.isArray(data?.routing_targets) ? data.routing_targets : []),
+    ...(Array.isArray(data?.network?.routing_targets) ? data.network.routing_targets : []),
+  ];
+  const seen = new Set();
+  const values = [];
+  for (const item of candidates) {
+    const raw =
+      typeof item === "string"
+        ? item
+        : (item && typeof item === "object"
+          ? String(item.target || item.name || "").trim()
+          : "");
+    const value = String(raw || "").trim();
+    const key = value.toLowerCase();
+    if (!value || seen.has(key)) continue;
+    seen.add(key);
+    values.push(value);
+  }
+  return values;
+}
+
 function renderModalContent(data) {
   if (!modalOverlay || !modalTitle || !modalBody) return;
   modalOverlay.hidden = false;
@@ -953,6 +976,7 @@ function renderModalContent(data) {
   const resourceType = firstNonEmpty(data.type_label, data.type, data.resourceType);
   const fqdns = collectFqdns(data);
   const publicIps = collectPublicIps(data);
+  const routingTargets = collectRoutingTargets(data);
 
   const fields = [];
   if (resourceName) fields.push({ label: "Resource Name", value: escapeHtml(resourceName) });
@@ -969,6 +993,13 @@ function renderModalContent(data) {
     fields.push({
       label: "Public IP",
       value: publicIps.map((ip) => `<code>${escapeHtml(ip)}</code>`).join("<br/>"),
+      isHtml: true,
+    });
+  }
+  if (routingTargets.length > 0) {
+    fields.push({
+      label: "Routes To",
+      value: routingTargets.map((target) => `<code>${escapeHtml(target)}</code>`).join("<br/>"),
       isHtml: true,
     });
   }
@@ -1050,28 +1081,92 @@ async function loadMermaidView(subscriptionName) {
   currentMermaidSubscriptionId = subscriptionName;
   mermaidViewEl.hidden = false;
 
+  const resolveSubscriptionId = async (selector) => {
+    const raw = String(selector || "").trim();
+    if (!raw) return "";
+    try {
+      const resp = await fetch("/api/subscriptions", { headers: { Accept: "application/json" } });
+      if (!resp.ok) return raw;
+      const data = await readJsonResponse(resp);
+      const subs = Array.isArray(data?.subscriptions) ? data.subscriptions : [];
+      const exact = subs.find((s) => String(s?.id || "").toLowerCase() === raw.toLowerCase());
+      if (exact?.id) return String(exact.id);
+      const byName = subs.find((s) => String(s?.display_name || "").toLowerCase() === raw.toLowerCase());
+      if (byName?.id) return String(byName.id);
+    } catch (_) {
+      // Fall back to raw selector and let API resolve if possible.
+    }
+    return raw;
+  };
+
+  const pickIngressView = (subscriptionPayload) => {
+    const ingress = subscriptionPayload?.ingress_diagram || {};
+    const views = ingress?.views || {};
+    const preferredMode = ingress?.default_view === "attack_paths" ? "attack_paths" : "connectivity";
+    const chosen = views[preferredMode] || views.connectivity || ingress;
+    return {
+      mermaid: chosen?.mermaid || ingress?.mermaid || "",
+      css_code: chosen?.css_code || ingress?.css_code || "",
+      node_drilldown_map: chosen?.node_drilldown_map || ingress?.node_drilldown_map || {},
+    };
+  };
+
   try {
-    const resp = await fetch(
-      `/api/cloud/architecture?sub=${encodeURIComponent(subscriptionName)}&view=mermaid`
-    );
-    if (!resp.ok) {
-      throw new Error(`HTTP ${resp.status}`);
+    let payload = null;
+    let renderPayload = null;
+    let summaryPayload = null;
+
+    const subscriptionId = await resolveSubscriptionId(subscriptionName);
+    if (subscriptionId) {
+      const previewResp = await fetch(
+        `/api/subscriptions/${encodeURIComponent(subscriptionId)}/diagram`,
+        { headers: { Accept: "application/json" } }
+      );
+      if (previewResp.ok) {
+        payload = await readJsonResponse(previewResp);
+        renderPayload = pickIngressView(payload);
+        summaryPayload = {
+          summary: {
+            resource_count: payload?.total_assets || 0,
+            displayed_resource_count: payload?.total_assets || 0,
+            omitted_resource_count: 0,
+            connection_count: (payload?.ingress_diagram?.attack_paths || []).length || 0,
+            provider_counts: [{ key: "azure", label: "Azure", count: payload?.total_assets || 0 }],
+            layout_mode: "mermaid",
+          },
+          subscription_name: payload?.subscription_name || subscriptionName,
+        };
+      }
     }
 
-    const payload = await readJsonResponse(resp);
+    if (!renderPayload) {
+      const resp = await fetch(
+        `/api/cloud/architecture?sub=${encodeURIComponent(subscriptionName)}&view=mermaid`,
+        { headers: { Accept: "application/json" } }
+      );
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}`);
+      }
+      payload = await readJsonResponse(resp);
+      renderPayload = payload;
+      summaryPayload = payload;
+    }
+
     if (!payload) {
       return false;
     }
 
-    const isEmpty = (!payload?.nodes || payload.nodes.length === 0) && !String(payload?.mermaid || "").trim();
+    const isEmpty =
+      !String(renderPayload?.mermaid || "").trim() &&
+      (!renderPayload?.nodes || renderPayload.nodes.length === 0);
 
     if (isEmpty) {
       mermaidRootEl.innerHTML = "";
     } else {
-      await renderMermaidGraph(payload, subscriptionName);
+      await renderMermaidGraph(renderPayload, subscriptionName);
     }
 
-    renderSummary(payload, subscriptionName, activeViewMode);
+    renderSummary(summaryPayload, summaryPayload?.subscription_name || subscriptionName, activeViewMode);
     return !isEmpty;
   } catch (err) {
     console.error("[cloud-architecture] Mermaid load failed:", err);
@@ -1131,26 +1226,10 @@ for (const button of viewButtons) {
       if (container && window.applyDiagramScale) {
         const current = parseFloat(container.dataset.diagramScale || "1") || 1;
         window.applyDiagramScale(container, current * (e.deltaY > 0 ? 0.9 : 1.1));
-        scheduleFirefoxOverlayRefresh();
       }
     }
   }, { passive: false });
 })();
-
-if (isFirefox) {
-  document.addEventListener("click", (event) => {
-    const target = event.target;
-    if (!target || !target.closest) return;
-    if (
-      target.closest('[data-diagram-zoom-in="cloud-arch-mermaid-root"]') ||
-      target.closest('[data-diagram-zoom-out="cloud-arch-mermaid-root"]') ||
-      target.closest('[data-diagram-fit="cloud-arch-mermaid-root"]')
-    ) {
-      setTimeout(() => scheduleFirefoxOverlayRefresh(), 0);
-      setTimeout(() => scheduleFirefoxOverlayRefresh(), 80);
-    }
-  });
-}
 
 if (mermaidViewEl) {
   mermaidViewEl.hidden = activeViewMode !== "mermaid";
