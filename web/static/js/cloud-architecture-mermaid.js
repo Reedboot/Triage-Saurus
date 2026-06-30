@@ -231,6 +231,10 @@ function buildFallbackModalData(resourceId, nodeData, lookup = {}) {
   public_ip: firstNonEmpty(nodeData?.public_ip, primary?.public_ip),
   public_ips: fallbackIps,
   icon_path: firstNonEmpty(nodeData?.icon_path, nodeData?.iconPath),
+  network: {
+    vnet: firstNonEmpty(nodeData?.vnet, nodeData?.vnet_name) || null,
+    subnet: firstNonEmpty(nodeData?.subnet, nodeData?.subnet_name) || null,
+  },
   };
 }
 
@@ -935,6 +939,26 @@ function collectFqdns(data) {
     });
 }
 
+function collectVnet(data) {
+  const value = firstNonEmpty(
+    data?.network?.vnet,
+    data?.vnet,
+    data?.vnetName,
+    data?.vnet_name
+  );
+  return value || "";
+}
+
+function collectSubnet(data) {
+  const value = firstNonEmpty(
+    data?.network?.subnet,
+    data?.subnet,
+    data?.subnetName,
+    data?.subnet_name
+  );
+  return value || "";
+}
+
 function collectRoutingTargets(data) {
   const candidates = [
     ...(Array.isArray(data?.routing_targets) ? data.routing_targets : []),
@@ -977,11 +1001,15 @@ function renderModalContent(data) {
   const fqdns = collectFqdns(data);
   const publicIps = collectPublicIps(data);
   const routingTargets = collectRoutingTargets(data);
+  const vnet = collectVnet(data);
+  const subnet = collectSubnet(data);
 
   const fields = [];
   if (resourceName) fields.push({ label: "Resource Name", value: escapeHtml(resourceName) });
   if (resourceGroup) fields.push({ label: "Resource Group", value: escapeHtml(resourceGroup) });
   if (resourceType) fields.push({ label: "Type", value: escapeHtml(resourceType) });
+  if (vnet) fields.push({ label: "VNet", value: escapeHtml(vnet) });
+  if (subnet) fields.push({ label: "Subnet", value: escapeHtml(subnet) });
   if (fqdns.length > 0) {
     fields.push({
       label: "FQDN",
