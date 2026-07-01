@@ -15231,6 +15231,13 @@ def api_cloud_resource_details():
             raw_for_lookup,
             str(asset_row["type"] or ""),
         )
+        operating_system = _extract_operating_system(raw_json)
+        if not operating_system and parent_row:
+            try:
+                parent_raw = json.loads(parent_row.get("raw_json") or "{}")
+            except Exception:
+                parent_raw = {}
+            operating_system = _extract_operating_system(parent_raw)
         if associated_dns_names and not asset_row["fqdn"]:
             fqdn_value = associated_dns_names[0]
         else:
@@ -15253,6 +15260,7 @@ def api_cloud_resource_details():
             "configuration": {
                 "sku_name": asset_row["sku"],
                 "sku_tier": _extract_sku_tier(raw_json),
+                "operating_system": operating_system,
                 "kind": raw_json.get("kind"),
                 "tags": raw_json.get("tags", {}),
             },
@@ -15326,6 +15334,61 @@ def _extract_sku_tier(raw_json: dict) -> str | None:
     if not isinstance(sku, dict):
         return None
     return sku.get("tier")
+
+
+def _extract_operating_system(raw_json: dict) -> str | None:
+    """Extract OS type from resource configuration."""
+    if not isinstance(raw_json, dict):
+        return None
+    extra = raw_json.get("_extra")
+    if isinstance(extra, dict):
+        os_type = extra.get("os_type") or extra.get("operating_system")
+        if isinstance(os_type, str) and os_type.strip():
+            return os_type.strip()
+
+    candidates = [
+        ((raw_json.get("properties") or {}).get("virtualMachineProfile") or {}).get("storageProfile"),
+        (raw_json.get("properties") or {}).get("storageProfile"),
+        raw_json.get("storageProfile"),
+    ]
+    for storage_profile in candidates:
+        if not isinstance(storage_profile, dict):
+            continue
+        os_disk = storage_profile.get("osDisk") or {}
+        if isinstance(os_disk, dict):
+            os_type = os_disk.get("osType")
+            if isinstance(os_type, str) and os_type.strip():
+                return os_type.strip()
+
+    for pool in raw_json.get("agentPoolProfiles") or []:
+        if not isinstance(pool, dict):
+            continue
+        os_type = pool.get("osType") or pool.get("os_type")
+        if isinstance(os_type, str) and os_type.strip():
+            return os_type.strip()
+
+    props = raw_json.get("properties") or {}
+    if isinstance(props, dict):
+        for pool in props.get("workerPools") or []:
+            if not isinstance(pool, dict):
+                continue
+            os_type = pool.get("osType") or pool.get("os_type")
+            if isinstance(os_type, str) and os_type.strip():
+                return os_type.strip()
+            pool_props = pool.get("properties") or {}
+            if isinstance(pool_props, dict):
+                os_type = pool_props.get("osType") or pool_props.get("os_type")
+                if isinstance(os_type, str) and os_type.strip():
+                    return os_type.strip()
+
+    kind = raw_json.get("kind")
+    if isinstance(kind, str):
+        kind_l = kind.lower()
+        if "linux" in kind_l:
+            return "Linux"
+        if "windows" in kind_l:
+            return "Windows"
+    return None
 
 
 def _extract_managed_identity(raw_json: dict) -> bool:
@@ -15543,7 +15606,11 @@ def _collect_subnet_ids(raw_json: dict) -> list[str]:
                 for nic_cfg in net_profile.get("networkInterfaceConfigurations") or []:
                     if not isinstance(nic_cfg, dict):
                         continue
-                    for ip_cfg in nic_cfg.get("ipConfigurations") or []:
+                    nic_props = nic_cfg.get("properties") if isinstance(nic_cfg.get("properties"), dict) else {}
+                    ip_configs = list(nic_cfg.get("ipConfigurations") or [])
+                    if isinstance(nic_props, dict):
+                        ip_configs.extend(nic_props.get("ipConfigurations") or [])
+                    for ip_cfg in ip_configs:
                         if not isinstance(ip_cfg, dict):
                             continue
                         sub = ip_cfg.get("subnet")
@@ -17189,7 +17256,7 @@ _SUBSCRIPTION_DIAGRAM_CACHE: dict[str, tuple[float, str, dict]] = {}
 _SUBSCRIPTION_DIAGRAM_CACHE_TTL = 600  # 10 minutes
 # Bump this whenever diagram rendering logic changes (listener icons, pool icons, edge labels, etc.)
 # so the DB cache is automatically invalidated for all subscriptions.
-_DIAGRAM_CODE_VERSION = "v14"  # bumped: invalidate cached subscription diagrams after routing target resolution fix
+_DIAGRAM_CODE_VERSION = "v15"  # bumped: invalidate cached subscription diagrams after VNet grouping fix
 
 
 def _subscription_diagram_cache_signature(conn, sub_id: str) -> tuple[str | None, tuple[str, str] | None]:
@@ -18630,6 +18697,19 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         """
         if not isinstance(parsed_raw, dict):
             return None
+        extra = parsed_raw.get("_extra") or {}
+        if isinstance(extra, dict):
+            for candidate in (
+                extra.get("vnet_name"),
+                extra.get("parent_vnet_name"),
+            ):
+                if isinstance(candidate, str) and candidate.strip():
+                    return candidate.strip()
+            subnet_id = extra.get("subnet_id")
+            if isinstance(subnet_id, str) and subnet_id.strip():
+                vnet_name = _vnet_name_from_subnet_id(subnet_id.strip())
+                if vnet_name:
+                    return vnet_name
         return _extract_vnet(parsed_raw)
 
     def _iter_appgw_route_rows():
@@ -18698,7 +18778,19 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             "auth_summary": _auth_summary(auth_methods),
             "rbac_label": rbac_label,
             "vnet_name": _extract_vnet_name(parsed_raw),
+            "vnet_resource_group": None,
+            "subnet_name": None,
+            "subnet_id": None,
         }
+        if isinstance(parsed_raw, dict):
+            extra = parsed_raw.get("_extra") or {}
+            if isinstance(extra, dict):
+                if isinstance(extra.get("vnet_resource_group"), str) and extra.get("vnet_resource_group").strip():
+                    item["vnet_resource_group"] = extra.get("vnet_resource_group").strip()
+                if isinstance(extra.get("subnet_name"), str) and extra.get("subnet_name").strip():
+                    item["subnet_name"] = extra.get("subnet_name").strip()
+                if isinstance(extra.get("subnet_id"), str) and extra.get("subnet_id").strip():
+                    item["subnet_id"] = extra.get("subnet_id").strip()
         routing_targets = _parse_routing_targets(routing_targets_raw)
         extracted_targets = _extract_routing_targets(parsed_raw) if isinstance(parsed_raw, dict) else []
         merged_targets: list[dict] = []
@@ -18940,6 +19032,39 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         # A resource explicitly linked to one or more Public IP resources is internet-exposed.
         item["public"] = True
 
+    def _bastion_private_target(item: dict) -> dict | None:
+        """Find the VNet node a bastion sits in so the private-side hop is visible."""
+        if "bastionhost" not in (item.get("arm_type") or item.get("type") or "").lower():
+            return None
+
+        vnet_name = str(item.get("vnet_name") or "").strip().lower()
+        if not vnet_name:
+            return None
+
+        rg = str(item.get("rg") or "").strip().lower()
+        vnet_candidates = type_groups.get("microsoft.network/virtualnetworks", [])
+        matched = [
+            candidate
+            for candidate in vnet_candidates
+            if str(candidate.get("name") or "").strip().lower() == vnet_name
+            and (
+                not rg
+                or not str(candidate.get("rg") or "").strip()
+                or str(candidate.get("rg") or "").strip().lower() == rg
+            )
+        ]
+        if matched:
+            return matched[0]
+
+        return next(
+            (
+                candidate
+                for candidate in vnet_candidates
+                if str(candidate.get("name") or "").strip().lower() == vnet_name
+            ),
+            None,
+        )
+
     # Build simplified Mermaid diagram focusing on entry flow
     lines = [
         '%%{init: {"flowchart": {"diagramPadding": 60}}}%%',
@@ -19112,6 +19237,21 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         from collections import defaultdict
         grouped = defaultdict(list)
 
+        def _network_identity(item: dict) -> tuple[str, str]:
+            vnet_name = str(item.get("vnet_name") or item.get("parent_vnet_name") or "").strip().lower()
+            if not vnet_name:
+                subnet_id = str(item.get("subnet_id") or "").strip()
+                if subnet_id:
+                    vnet_name = str(_vnet_name_from_subnet_id(subnet_id) or "").strip().lower()
+            vnet_rg = str(
+                item.get("vnet_resource_group")
+                or item.get("parent_vnet_resource_group")
+                or item.get("resource_group")
+                or item.get("rg")
+                or ""
+            ).strip().lower()
+            return vnet_rg, vnet_name
+
         for item in backend_items:
             type_key = (item.get("type") or "").lower()
             if "sites" in type_key:
@@ -19142,10 +19282,15 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 category = "App Insights"
             else:
                 category = _friendly_type(item.get("type"))
-            grouped[category].append(item)
+            vnet_rg, vnet_name = _network_identity(item)
+            group_key = category
+            if vnet_name:
+                group_key = f"{category}|{vnet_rg}|{vnet_name}"
+            grouped[group_key].append(item)
 
         result = []
-        for category, items in sorted(grouped.items()):
+        for group_key, items in sorted(grouped.items()):
+            category = group_key.split("|", 1)[0]
             # Use virtual ARM type for Function Apps so icon resolver returns function-app icon
             effective_arm_type = lambda item, cat: (
                 "Microsoft.Web/functionApps" if cat == "Function App" else item["type"]
@@ -19173,6 +19318,10 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                         "has_waf": item.get("has_waf"),
                         "hosted_site_count": hosted_site_count,
                         "acr_requires_credentials": item.get("acr_requires_credentials"),
+                        "vnet_name": item.get("vnet_name") or item.get("parent_vnet_name"),
+                        "vnet_resource_group": item.get("vnet_resource_group") or item.get("parent_vnet_resource_group"),
+                        "subnet_name": item.get("subnet_name"),
+                        "subnet_id": item.get("subnet_id"),
                     })
             else:
                 _acr_req_values = {i.get("acr_requires_credentials") for i in items if i.get("acr_requires_credentials") is not None}
@@ -19196,6 +19345,10 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     "is_restricted": any(i.get("is_restricted") for i in items),
                     "rg": "",
                     "acr_requires_credentials": _group_acr_req,
+                    "vnet_name": next((i.get("vnet_name") or i.get("parent_vnet_name") for i in items if i.get("vnet_name") or i.get("parent_vnet_name")), None),
+                    "vnet_resource_group": next((i.get("vnet_resource_group") or i.get("parent_vnet_resource_group") for i in items if i.get("vnet_name") or i.get("parent_vnet_name")), None),
+                    "subnet_name": next((i.get("subnet_name") for i in items if i.get("subnet_name")), None),
+                    "subnet_id": next((i.get("subnet_id") for i in items if i.get("subnet_id")), None),
                 })
         return result
     
@@ -19455,33 +19608,51 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     appgw_node_resources_by_id: dict[str, list[dict]] = {}
     appgw_node_title_by_id: dict[str, str] = {}
 
-    # Add nodes with icon classes
+    # Add nodes with icon classes.
     # Entry-point nodes plus network-attached backend infrastructure (VMSS/ASE)
-    # are wrapped in a 🔒 VNet subgraph.
+    # are wrapped in per-VNet subgraphs so distinct spokes don't collapse into
+    # a single visual network boundary.
     def _is_network_backend(item: dict) -> bool:
         t = str(item.get("arm_type") or item.get("type") or "").lower()
-        return ("virtualmachinescalesets" in t) or ("hostingenvironment" in t)
+        return (
+            "virtualmachinescalesets" in t
+            or "hostingenvironment" in t
+            or bool(item.get("vnet_name"))
+            or bool(item.get("subnet_id"))
+        )
 
     _network_backend_items = [item for item in shown_backend if _is_network_backend(item)]
+    _network_backend_item_ids = {id(item) for item in _network_backend_items}
 
-    # Collect unique VNet names from all assets that are rendered in this subgraph.
-    _network_vnet_names = sorted({
-        item.get("vnet_name") or ""
-        for item in (shown_entry + _network_backend_items)
-        if item.get("vnet_name") and not item.get("parent_bastion_key") and not item.get("parent_lb_key")
-    } - {""})
-    if _network_vnet_names:
-        _vnet_label_part = ", ".join(_network_vnet_names[:2])
-        if len(_network_vnet_names) > 2:
-            _vnet_label_part += f" (+{len(_network_vnet_names) - 2} more)"
-        _network_subgraph_label = f"🔒 VNet: {_vnet_label_part}"
-    else:
-        _network_subgraph_label = "🔒 Networks / VNet"
-    lines.append(f'    subgraph NetworkBoundary["{_network_subgraph_label}"]')
-    bastion_child_edges: list[tuple[str, str]] = []
-    for item in shown_entry:
-        if item.get("parent_bastion_key") or item.get("parent_lb_key"):
-            continue
+    def _network_identity(item: dict) -> tuple[str, str]:
+        vnet_name = str(item.get("vnet_name") or item.get("parent_vnet_name") or "").strip()
+        if not vnet_name:
+            subnet_id = str(item.get("subnet_id") or "").strip()
+            if subnet_id:
+                vnet_name = str(_vnet_name_from_subnet_id(subnet_id) or "").strip()
+        vnet_rg = str(
+            item.get("vnet_resource_group")
+            or item.get("parent_vnet_resource_group")
+            or (str(item.get("subnet_id") or "").split("/resourceGroups/")[1].split("/")[0] if "/resourceGroups/" in str(item.get("subnet_id") or "") else "")
+            or item.get("resource_group")
+            or item.get("rg")
+            or ""
+        ).strip()
+        return vnet_rg, vnet_name
+
+    def _network_group_key(item: dict) -> str | None:
+        vnet_rg, vnet_name = _network_identity(item)
+        if not vnet_name:
+            return None
+        return f"{vnet_rg.lower()}::{vnet_name.lower()}"
+
+    def _network_group_label(item: dict) -> str:
+        _, vnet_name = _network_identity(item)
+        if not vnet_name:
+            return "🔒 Network"
+        return f"🔒 Network: {vnet_name}"
+
+    def _render_entry_item(item: dict) -> None:
         node_id = _get_node_id(item)
         arm_type = item.get("arm_type") or item["type"]
         label = item.get("label") or item.get("type") or _friendly_type(arm_type)
@@ -19512,9 +19683,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     "policy": policy,
                 })
 
-    # Network-attached backends that should be represented inside the VNet boundary.
-    _network_backend_node_ids: set[str] = set()
-    for item in _network_backend_items:
+    def _render_network_backend_item(item: dict) -> None:
         node_id = _get_node_id(item)
         arm_type = item.get("arm_type") or item["type"]
         label = item.get("label") or item.get("type") or _friendly_type(arm_type)
@@ -19525,6 +19694,53 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             access_indicator += " ⚠️"
         lines.append(_node_line(node_id, f"{label}{access_indicator}", arm_type))
         _network_backend_node_ids.add(node_id)
+
+    network_groups: dict[str, list[dict]] = defaultdict(list)
+    network_group_order: list[str] = []
+    standalone_entry_items: list[dict] = []
+    standalone_network_backend_items: list[dict] = []
+    for item in shown_entry:
+        if item.get("parent_bastion_key") or item.get("parent_lb_key"):
+            continue
+        group_key = _network_group_key(item)
+        if group_key is None:
+            standalone_entry_items.append(item)
+            continue
+        if group_key not in network_groups:
+            network_group_order.append(group_key)
+        network_groups[group_key].append(item)
+    for item in _network_backend_items:
+        group_key = _network_group_key(item)
+        if group_key is None:
+            standalone_network_backend_items.append(item)
+            continue
+        if group_key not in network_groups:
+            network_group_order.append(group_key)
+        network_groups[group_key].append(item)
+
+    network_subgraph_ids: list[str] = []
+    bastion_child_edges: list[tuple[str, str]] = []
+    # Network-attached backends that should be represented inside the VNet boundary.
+    _network_backend_node_ids: set[str] = set()
+    for group_key in network_group_order:
+        group_items = network_groups[group_key]
+        label_item = next((item for item in group_items if _network_group_key(item)), group_items[0])
+        net_id = f'net_{_sanitise_node_id(group_key)}'
+        network_subgraph_ids.append(net_id)
+        lines.append(f'    subgraph {net_id}["{_network_group_label(label_item)}"]')
+
+        for item in group_items:
+            if id(item) in _network_backend_item_ids:
+                _render_network_backend_item(item)
+                continue
+            _render_entry_item(item)
+
+        lines.append("    end")
+
+    for item in standalone_entry_items:
+        _render_entry_item(item)
+    for item in standalone_network_backend_items:
+        _render_network_backend_item(item)
 
     # --- Listener and WAF policy nodes for App Gateways ---
     # Maps gw_nid → list of (listener_nid, is_insecure_http)
@@ -19631,9 +19847,6 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         # for gateways without explicit WAF policies (disabled WAFs or no WAF configured)
         if _waf_nids_by_gateway.get(gw_nid):
             _waf_nids[gw_nid] = _waf_nids_by_gateway[gw_nid][0]
-
-    # Close the 🛡️ Networks / VNet subgraph before non-network nodes
-    lines.append('    end')
 
     for item in shown_api:
         node_id = _get_node_id(item)
@@ -20053,6 +20266,19 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             node_id = _get_node_id(item)
             label_text = _public_ip_label(public_ips)
             _add_link(f'    Internet -->|"{label_text}"| {node_id}', "orange")
+
+    # Bastion → VNet (private-side hop — makes the admin path visible after ingress)
+    if shown_entry:
+        for item in shown_entry:
+            if "bastionhost" not in (item.get("arm_type") or item.get("type") or "").lower():
+                continue
+            vnet_target = _bastion_private_target(item)
+            if not vnet_target:
+                continue
+            _add_link(
+                f'    {_get_node_id(item)} -->|"Private access"| {_get_node_id(vnet_target)}',
+                "white",
+            )
 
     # Internet → Public backends / storage with associated public IPs.
     if shown_backend or shown_data:
@@ -20574,8 +20800,6 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     lines.append('    classDef listenerHttp stroke:#d32f2f,stroke-width:2px,fill:#3b0a0a,stroke-dasharray:4,2;')  # Red dashed = HTTP listener
     lines.append('    classDef listenerHttps stroke:#00897b,stroke-width:2px,fill:#0f2f2b;')  # Teal = HTTPS listener
     lines.append('    classDef wafPolicy stroke:#e65100,stroke-width:2px,fill:#3d1c0d;')  # Deep orange = WAF policy
-    lines.append('    style NetworkBoundary stroke:#1971c2,stroke-width:2px,fill:none;')  # Blue border, no fill = Network boundary
-    
     for item in shown_entry:
         if item.get("parent_lb_key"):
             continue

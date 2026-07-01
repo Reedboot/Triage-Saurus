@@ -983,6 +983,7 @@ function renderModalContent(data) {
     const configFields = [];
     if (data.configuration.sku_name) configFields.push({ label: "SKU", value: data.configuration.sku_name });
     if (data.configuration.sku_tier) configFields.push({ label: "Tier", value: data.configuration.sku_tier });
+    if (data.configuration.operating_system) configFields.push({ label: "Operating System", value: data.configuration.operating_system });
     if (data.location) configFields.push({ label: "Location", value: data.location });
     if (data.subscription) configFields.push({ label: "Subscription", value: data.subscription });
     if (data.environment) configFields.push({ label: "Environment", value: data.environment });
@@ -1088,7 +1089,7 @@ function renderModalContent(data) {
       networkFields.push({ label: "Exposed Port", value: portBadge, isHtml: true });
     }
     
-    if (net.vnet) networkFields.push({ label: "Virtual Network", value: net.vnet });
+    if (net.vnet) networkFields.push({ label: "Network", value: net.vnet });
     if (net.subnet) networkFields.push({ label: "Subnet", value: net.subnet });
     
     if (net.private_endpoints && net.private_endpoints.length > 0) {

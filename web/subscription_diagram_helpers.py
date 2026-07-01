@@ -210,6 +210,18 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
                 asset["subnet_id"] = subnet_id
             extra = parsed_raw.get("_extra") or {}
             if isinstance(extra, dict):
+                if extra.get("subnet_id"):
+                    asset["subnet_id"] = extra.get("subnet_id")
+                if extra.get("subnet_ids"):
+                    asset["subnet_ids"] = extra.get("subnet_ids") or []
+                if extra.get("vnet_name"):
+                    asset["vnet_name"] = extra.get("vnet_name")
+                    asset["parent_vnet_name"] = extra.get("vnet_name")
+                if extra.get("subnet_name"):
+                    asset["subnet_name"] = extra.get("subnet_name")
+                if extra.get("vnet_resource_group"):
+                    asset["vnet_resource_group"] = extra.get("vnet_resource_group")
+                    asset["parent_vnet_resource_group"] = extra.get("vnet_resource_group")
                 if extra.get("parent_vnet_id"):
                     asset["parent_vnet_id"] = extra.get("parent_vnet_id")
                     asset["parent_vnet_name"] = extra.get("parent_vnet_name")
@@ -221,6 +233,13 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
                     asset["route_table_id"] = extra.get("route_table_id")
                     asset["route_table_name"] = extra.get("route_table_name")
                     asset["delegations"] = extra.get("delegations") or []
+                if asset.get("subnet_id") and not asset.get("subnet_name"):
+                    asset["subnet_name"] = asset["subnet_id"].split("/subnets/")[-1] if "/subnets/" in str(asset["subnet_id"]) else None
+                if asset.get("subnet_id") and not asset.get("vnet_name"):
+                    parts = str(asset["subnet_id"]).split("/virtualNetworks/")
+                    if len(parts) > 1:
+                        asset["vnet_name"] = parts[1].split("/")[0]
+                        asset["parent_vnet_name"] = asset["vnet_name"]
                 elif (rtype or "").lower().endswith("/virtualnetworks"):
                     subnets = extra.get("subnets") or []
                     for subnet in subnets:

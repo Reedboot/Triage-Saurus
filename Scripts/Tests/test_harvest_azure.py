@@ -567,7 +567,6 @@ class TestVirtualNetworkHarvest:
         assert extra["route_table_name"] == "app-rt"
         assert extra["delegations"] == ["Microsoft.Web/serverFarms"]
 
-
 class TestVirtualMachineHarvest:
     def test_emits_vms_with_public_ip_metadata(self, monkeypatch):
         vm_id = "/subscriptions/sub-1/resourceGroups/rg-compute/providers/Microsoft.Compute/virtualMachines/vm-one"
@@ -599,6 +598,82 @@ class TestVirtualMachineHarvest:
         assert extra["public_ips"] == "20.30.40.50"
         assert extra["private_ips"] == "10.1.0.4"
         assert extra["os_type"] == "Linux"
+
+
+class TestVirtualMachineScaleSetHarvest:
+    def test_emits_vnet_and_subnet_metadata(self, monkeypatch):
+        vmss_id = "/subscriptions/sub-1/resourceGroups/rg-compute/providers/Microsoft.Compute/virtualMachineScaleSets/vmss-one"
+        subnet_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-one/subnets/app"
+
+        def fake_az(args, subscription_id):
+            if args[:3] == ["resource", "list", "--resource-type"]:
+                return [{
+                    "id": vmss_id,
+                    "name": "vmss-one",
+                    "resourceGroup": "rg-compute",
+                    "location": "westus",
+                    "type": "Microsoft.Compute/virtualMachineScaleSets",
+                    "sku": {"capacity": 2},
+                    "properties": {},
+                }]
+            if args[:3] == ["resource", "show", "--ids"]:
+                return {
+                    "id": vmss_id,
+                    "name": "vmss-one",
+                    "resourceGroup": "rg-compute",
+                    "location": "westus",
+                    "type": "Microsoft.Compute/virtualMachineScaleSets",
+                    "properties": {
+                        "virtualMachineProfile": {
+                            "networkProfile": {
+                                "networkInterfaceConfigurations": [
+                                    {
+                                        "properties": {
+                                            "ipConfigurations": [
+                                                {
+                                                    "properties": {
+                                                        "subnet": {"id": subnet_id},
+                                                        "publicIPAddressConfiguration": None,
+                                                    }
+                                                }
+                                            ]
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                }
+            raise AssertionError(f"unexpected args: {args}")
+
+        monkeypatch.setattr(virtual_machine_scale_set, "harvest_resource_list", lambda *args, **kwargs: [{
+            "id": vmss_id,
+            "subscription_id": "sub-1",
+            "resource_group": "rg-compute",
+            "name": "vmss-one",
+            "type": "Microsoft.Compute/virtualMachineScaleSets",
+            "location": "westus",
+            "sku": "2",
+            "tags": json.dumps({}),
+            "is_public": 0,
+            "is_restricted": 0,
+            "ip_restrictions": json.dumps([]),
+            "endpoints": json.dumps([]),
+            "auth_methods": json.dumps([]),
+            "fqdn": None,
+            "pipeline_tag": None,
+            "raw_json": json.dumps({}),
+        }])
+        monkeypatch.setattr(virtual_machine_scale_set, "az", fake_az)
+        rows = virtual_machine_scale_set.harvest("sub-1")
+
+        assert len(rows) == 1
+        raw = json.loads(rows[0]["raw_json"])
+        extra = raw["_extra"]
+        assert extra["subnet_id"] == subnet_id
+        assert extra["subnet_name"] == "app"
+        assert extra["vnet_name"] == "vnet-one"
+        assert extra["vnet_resource_group"] == "rg-net"
 
 
 # ---------------------------------------------------------------------------
@@ -2352,6 +2427,44 @@ class TestSubscriptionAssetsFromRows:
         assets = mod.subscription_assets_from_rows([row], lambda t: t)
         assert assets[0]["is_restricted"] is False
         assert assets[0]["waf_mode"] is None
+
+    def test_vmss_exposes_vnet_and_subnet_from_extra_metadata(self):
+        mod = self._import_helper()
+        vmss_row = (
+            "vmss-one",
+            "Microsoft.Compute/virtualMachineScaleSets",
+            "rg-compute",
+            "",
+            0,
+            "Standard_B2s",
+            "/subscriptions/sub-1/resourceGroups/rg-compute/providers/Microsoft.Compute/virtualMachineScaleSets/vmss-one",
+            0,
+            None,
+            0,
+            None,
+            None,
+            json.dumps({
+                "properties": {},
+                "_extra": {
+                    "subnet_id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-one/subnets/app",
+                    "subnet_name": "app",
+                    "vnet_name": "vnet-one",
+                    "vnet_resource_group": "rg-net",
+                    "subnet_ids": [
+                        "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-one/subnets/app",
+                    ],
+                },
+            }),
+            None,
+        )
+
+        assets = mod.subscription_assets_from_rows([vmss_row], lambda t: t)
+
+        assert assets[0]["subnet_id"].endswith("/subnets/app")
+        assert assets[0]["subnet_name"] == "app"
+        assert assets[0]["vnet_name"] == "vnet-one"
+        assert assets[0]["parent_vnet_name"] == "vnet-one"
+        assert assets[0]["parent_vnet_resource_group"] == "rg-net"
 
 
 class TestSubscriptionOverlayPlanLinks:

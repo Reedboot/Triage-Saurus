@@ -14,6 +14,30 @@ from ._helpers import az, safe_str
 RESOURCE_TYPE = "Microsoft.Web/hostingEnvironments"
 
 
+def _worker_os_type(ase: dict[str, Any]) -> str | None:
+    props = ase.get("properties") or ase
+    os_types: list[str] = []
+    seen: set[str] = set()
+    for pool in props.get("workerPools") or []:
+        if not isinstance(pool, dict):
+            continue
+        candidates = [
+            pool.get("osType"),
+            pool.get("os_type"),
+        ]
+        pool_props = pool.get("properties") if isinstance(pool.get("properties"), dict) else {}
+        if isinstance(pool_props, dict):
+            candidates.extend([pool_props.get("osType"), pool_props.get("os_type")])
+        for candidate in candidates:
+            os_type = safe_str(candidate)
+            if os_type and os_type.lower() not in seen:
+                seen.add(os_type.lower())
+                os_types.append(os_type)
+    if not os_types:
+        return None
+    return os_types[0] if len(os_types) == 1 else ", ".join(os_types)
+
+
 def harvest(subscription_id: str) -> list[dict[str, Any]]:
     raw = az(["appservice", "ase", "list"], subscription_id)
     results = []
@@ -38,6 +62,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "upgrade_availability": props.get("upgradeAvailability"),
             "hosted_service_families": ["App Service", "Function App"],
             "hosted_resource_types": ["Microsoft.Web/sites"],
+            "os_type": _worker_os_type(ase),
         }
 
         # ILB ASE = no public internet ingress

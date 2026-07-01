@@ -3828,6 +3828,7 @@ class TestCloudPosture:
             "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
             ("sub-1", "Test Subscription", "production", "Enabled"),
         )
+        public_ip_id = "/subscriptions/sub-1/resourceGroups/blue-network-ukwest/providers/Microsoft.Network/publicIPAddresses/bastion"
         conn.executemany(
             """
             INSERT INTO provisioned_assets (
@@ -3851,12 +3852,45 @@ class TestCloudPosture:
                     None,
                     "2026-06-01T00:00:00Z",
                     "2026-06-01T00:00:00Z",
+                    json.dumps(
+                        {
+                            "properties": {
+                                "ipConfigurations": [
+                                    {
+                                        "properties": {
+                                            "subnet": {
+                                                "id": "/subscriptions/sub-1/resourceGroups/blue-network-ukwest/providers/Microsoft.Network/virtualNetworks/blue-vnet/subnets/AzureBastionSubnet"
+                                            },
+                                            "publicIPAddress": {"id": public_ip_id},
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ),
+                    0,
+                    None,
+                ),
+                (
+                    "/subscriptions/sub-1/resourceGroups/blue-network-ukwest/providers/Microsoft.Network/virtualNetworks/blue-vnet",
+                    "sub-1",
+                    "blue-network-ukwest",
+                    "blue-vnet",
+                    "Microsoft.Network/virtualNetworks",
+                    "uksouth",
+                    "Standard",
+                    None,
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
                     "{}",
                     0,
                     None,
                 ),
                 (
-                    "/subscriptions/sub-1/resourceGroups/blue-network-ukwest/providers/Microsoft.Network/publicIPAddresses/bastion",
+                    public_ip_id,
                     "sub-1",
                     "blue-network-ukwest",
                     "bastion",
@@ -3893,6 +3927,10 @@ class TestCloudPosture:
         # Internet should connect to bastion with public IP
         assert f"Internet -->|\"Public IP" in mermaid, f"Internet should connect to bastion with public IP. Mermaid: {mermaid}"
         assert f"| {bastion_id}" in mermaid, f"Connection should target bastion node. Mermaid: {mermaid}"
+        # Bastion should also show the private-side hop into the VNet
+        private_edge_line = next(line for line in mermaid.splitlines() if "Private access" in line)
+        assert bastion_id in private_edge_line, mermaid
+        assert "blue_vnet" in private_edge_line, mermaid
         bastion_node_line = next(line for line in mermaid.splitlines() if f"{bastion_id}[" in line)
         assert "WAF" not in bastion_node_line, mermaid
 
@@ -4582,6 +4620,11 @@ class TestCloudPosture:
                         {
                             "properties": {
                                 "virtualMachineProfile": {
+                                    "storageProfile": {
+                                        "osDisk": {
+                                            "osType": "Linux"
+                                        }
+                                    },
                                     "networkProfile": {
                                         "networkInterfaceConfigurations": [
                                             {
@@ -4589,6 +4632,9 @@ class TestCloudPosture:
                                                     "ipConfigurations": [
                                                         {
                                                             "properties": {
+                                                                "subnet": {
+                                                                    "id": "/subscriptions/sub-1/resourceGroups/rg-compute/providers/Microsoft.Network/virtualNetworks/rg-vnet/subnets/vmss-subnet"
+                                                                },
                                                                 "publicIPAddress": {"id": public_ip_id}
                                                             }
                                                         }
@@ -4649,7 +4695,299 @@ class TestCloudPosture:
         assert details_resp.status_code == 200, details_resp.get_data(as_text=True)
         details = details_resp.get_json()
         assert details["name"] == "scale-set-one"
+        assert details["configuration"]["operating_system"] == "Linux"
+        assert details["network"]["vnet"] == "rg-vnet"
+        assert details["network"]["subnet"] == "vmss-subnet"
         assert "20.30.40.60" in details["network"]["public_ips"]
+
+        os.unlink(tmp.name)
+
+    def test_api_cloud_resource_details_surfaces_aks_os_type(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+        import tempfile
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        conn = sqlite3.connect(tmp.name)
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+        aks_id = "/subscriptions/sub-1/resourceGroups/rg-k8s/providers/Microsoft.ContainerService/managedClusters/cluster-one"
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                aks_id,
+                "sub-1",
+                "rg-k8s",
+                "cluster-one",
+                "Microsoft.ContainerService/managedClusters",
+                "ukwest",
+                "Standard",
+                None,
+                0,
+                "active",
+                None,
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+                json.dumps({
+                    "agentPoolProfiles": [
+                        {"name": "nodepool1", "osType": "Linux", "count": 3},
+                    ]
+                }),
+                0,
+                None,
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/resource-details", query_string={"id": aks_id})
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        details = resp.get_json()
+        assert details["configuration"]["operating_system"] == "Linux"
+
+        os.unlink(tmp.name)
+
+    def test_api_cloud_resource_details_surfaces_ase_worker_os_type(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+        import tempfile
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        conn = sqlite3.connect(tmp.name)
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+        ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/ase-one"
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ase_id,
+                "sub-1",
+                "rg-app",
+                "ase-one",
+                "Microsoft.Web/hostingEnvironments",
+                "ukwest",
+                "ASEv3",
+                "ase-one.appserviceenvironment.net",
+                1,
+                "active",
+                None,
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+                json.dumps({
+                    "properties": {
+                        "workerPools": [
+                            {"osType": "Windows", "workerCount": 2},
+                        ]
+                    }
+                }),
+                0,
+                None,
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/resource-details", query_string={"id": ase_id})
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        details = resp.get_json()
+        assert details["configuration"]["operating_system"] == "Windows"
+
+        os.unlink(tmp.name)
+
+    def test_api_cloud_resource_details_surfaces_function_app_os_type(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+        import tempfile
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        conn = sqlite3.connect(tmp.name)
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+        plan_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/serverfarms/plan-one"
+        fn_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/fn-one"
+        conn.executemany(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    plan_id,
+                    "sub-1",
+                    "rg-app",
+                    "plan-one",
+                    "Microsoft.Web/serverfarms",
+                    "ukwest",
+                    "Y1",
+                    None,
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({"properties": {"reserved": True}}),
+                    0,
+                    None,
+                ),
+                (
+                    fn_id,
+                    "sub-1",
+                    "rg-app",
+                    "fn-one",
+                    "Microsoft.Web/sites",
+                    "ukwest",
+                    "Y1",
+                    "fn-one.azurewebsites.net",
+                    1,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({"kind": "functionapp,linux", "serverFarmId": plan_id}),
+                    0,
+                    None,
+                ),
+            ],
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/resource-details", query_string={"id": fn_id})
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        details = resp.get_json()
+        assert details["configuration"]["operating_system"] == "Linux"
 
         os.unlink(tmp.name)
 

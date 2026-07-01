@@ -22,6 +22,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
         fqdn = safe_str(app.get("defaultHostName")) or infer_fqdn(app)
         pipeline_tag = _get_pipeline_tag(app, subscription_id)
         is_public, is_restricted, ip_restrictions = _classify_exposure(app, ase_ilb_map)
+        kind = safe_str(app.get("kind"))
 
         endpoints = build_endpoints(_get_endpoint_entries(app, fqdn))
         auth_methods = json.dumps(_get_auth_methods(app))
@@ -42,7 +43,12 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "auth_methods": auth_methods,
             "fqdn": fqdn,
             "pipeline_tag": pipeline_tag,
-            "raw_json": json.dumps(app),
+            "raw_json": json.dumps({
+                **app,
+                "_extra": {
+                    "os_type": _os_type_from_kind(kind),
+                },
+            }),
         })
 
     return results
@@ -136,4 +142,13 @@ def _get_pipeline_tag(app: dict[str, Any], subscription_id: str) -> str | None:
     for key in ("pipeline", "Pipeline", "ado-pipeline", "build-pipeline", "deploymentPipeline"):
         if key in tags:
             return safe_str(tags[key])
+    return None
+
+
+def _os_type_from_kind(kind: str | None) -> str | None:
+    kind_l = safe_str(kind).lower()
+    if "linux" in kind_l:
+        return "Linux"
+    if "windows" in kind_l:
+        return "Windows"
     return None

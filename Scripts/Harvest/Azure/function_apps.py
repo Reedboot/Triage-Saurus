@@ -33,6 +33,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
         is_public, is_restricted, ip_restrictions = _classify_exposure(app, ase_ilb_map)
         endpoints = build_endpoints([(fqdn, 443, "https")] if fqdn else [])
         auth_methods = json.dumps(_get_auth_methods(app))
+        kind = safe_str(app.get("kind"))
 
         results.append({
             "id": app["id"],
@@ -50,7 +51,12 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "auth_methods": auth_methods,
             "fqdn": fqdn,
             "pipeline_tag": pipeline_tag,
-            "raw_json": json.dumps(app),
+            "raw_json": json.dumps({
+                **app,
+                "_extra": {
+                    "os_type": _os_type_from_kind(kind),
+                },
+            }),
         })
 
     return results
@@ -111,6 +117,15 @@ def _get_auth_methods(app: dict[str, Any]) -> list[str]:
     methods.append("function_key")
 
     return methods
+
+
+def _os_type_from_kind(kind: str | None) -> str | None:
+    kind_l = safe_str(kind).lower()
+    if "linux" in kind_l:
+        return "Linux"
+    if "windows" in kind_l:
+        return "Windows"
+    return None
 
 
 def _extract_function_name(function_item: dict[str, Any]) -> str | None:

@@ -31,6 +31,21 @@ _K8S_RESOURCE_PATHS: dict[str, str] = {
 _AKS_CLUSTER_WORKERS = 4
 
 
+def _operating_system(cluster: dict[str, Any]) -> str | None:
+    os_types: list[str] = []
+    seen: set[str] = set()
+    for pool in cluster.get("agentPoolProfiles") or []:
+        if not isinstance(pool, dict):
+            continue
+        os_type = safe_str(pool.get("osType") or pool.get("os_type"))
+        if os_type and os_type.lower() not in seen:
+            seen.add(os_type.lower())
+            os_types.append(os_type)
+    if not os_types:
+        return None
+    return os_types[0] if len(os_types) == 1 else ", ".join(os_types)
+
+
 def harvest(subscription_id: str) -> list[dict[str, Any]]:
     raw = az(["aks", "list"], subscription_id)
     results = []
@@ -54,6 +69,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "public_fqdn": public_fqdn,
             "private_fqdn": private_fqdn,
             "public_network_access": cluster.get("publicNetworkAccess"),
+            "os_type": _operating_system(cluster),
         }
 
         results.append({
