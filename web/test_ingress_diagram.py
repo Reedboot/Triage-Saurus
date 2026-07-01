@@ -134,3 +134,52 @@ def test_vmss_with_only_subnet_id_stays_inside_vnet_subgraph():
     assert 'app-vmss-01' in mermaid
     assert mermaid.index('subgraph net_rg_network__blue_spoke_ukwest["🔒 Network: blue-spoke-ukwest"]') < mermaid.index('app-vmss-01')
     assert mermaid.index('app-vmss-01') < mermaid.index('    end')
+
+
+def test_subnet_subgraph_contains_network_resources():
+    subnet_id = "/subscriptions/000/resourceGroups/rg-network/providers/Microsoft.Network/virtualNetworks/blue-spoke-ukwest/subnets/app"
+    rows = [
+        (
+            "app",
+            "microsoft.network/virtualnetworks/subnets",
+            "rg-network",
+            "",
+            False,
+            "",
+            1,
+            False,
+            None,
+            False,
+            None,
+            None,
+            '{"_extra":{"subnet_id":"%s","subnet_name":"app"}}' % subnet_id,
+            None,
+            None,
+        ),
+        (
+            "app-vmss-01",
+            "microsoft.compute/virtualmachinescalesets",
+            "rg-app",
+            "",
+            False,
+            "",
+            2,
+            False,
+            None,
+            False,
+            None,
+            None,
+            '{"_extra":{"subnet_id":"%s"}}' % subnet_id,
+            None,
+            None,
+        ),
+    ]
+
+    diagram = _build_ingress_diagram(rows)
+    mermaid = diagram["mermaid"]
+
+    assert 'subgraph net_rg_network__blue_spoke_ukwest["🔒 Network: blue-spoke-ukwest"]' in mermaid
+    assert 'Subnet: app' in mermaid
+    assert 'style sub_' in mermaid
+    assert 'stroke:#94a3b8' in mermaid
+    assert mermaid.index('Subnet: app') < mermaid.index('app-vmss-01')

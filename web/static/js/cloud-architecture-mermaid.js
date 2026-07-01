@@ -793,6 +793,25 @@ function buildMermaidGraph(payload, subscriptionName) {
     ].some((pattern) => pattern.test(joined));
   }
 
+  function isSubnetNode(node) {
+    const data = node?.data || {};
+    const fields = [
+      data?.resourceType,
+      data?.type,
+      data?.arm_type,
+      data?.typeLabel,
+    ]
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter(Boolean);
+    const joined = fields.join(" ");
+    if (!joined) return false;
+    return [
+      /\bsubnet\b/,
+      /\bsubnetwork\b/,
+      /\bvswitch\b/,
+    ].some((pattern) => pattern.test(joined));
+  }
+
   function renderNode(node, indent = "    ") {
     const mermaidId = sanitizeMermaidId(node?.id, `node_${autoIndex++}`);
     nodeIdMap.set(String(node?.id), mermaidId);
@@ -802,6 +821,17 @@ function buildMermaidGraph(payload, subscriptionName) {
     const repoLabel = node?.data?.repoName || "";
     const nodeLabel = buildNodeLabel(title, typeLabel, repoLabel);
 
+    const children = hierarchy.childrenByParent.get(String(node?.id)) || [];
+    if (children.length && isSubnetNode(node)) {
+      lines.push(`${indent}subgraph ${mermaidId}["${escapeMermaidText(nodeLabel)}"]`);
+      for (const child of children) {
+        renderNode(child, `${indent}  `);
+      }
+      lines.push(`${indent}end`);
+      subgraphStyleAssignments.push(`  style ${mermaidId} stroke:#94a3b8,stroke-width:2px;`);
+      return;
+    }
+
     lines.push(`${indent}${mermaidId}["${nodeLabel}"]`);
 
     const iconClass = String(node?.data?.iconClass || "").trim() || normalizeIconClass(node?.data?.resourceType || "", node?.data?.providerKey || "azure");
@@ -810,7 +840,6 @@ function buildMermaidGraph(payload, subscriptionName) {
       nodeClassAssignments.push(`  class ${mermaidId} ${mermaidSafeIconClass};`);
     }
 
-    const children = hierarchy.childrenByParent.get(String(node?.id)) || [];
     if (children.length) {
       const nestedLabel = escapeMermaidText(
         node?.data?.isGroupNode

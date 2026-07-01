@@ -2026,6 +2026,12 @@ class HierarchicalDiagramBuilder:
                       'http_listener', 'waf_policy']  # Add synthetic HTTP Listener and WAF Policy nodes
         return any(tok in rtype for tok in net_tokens)
 
+    def is_subnet_resource(self, resource: dict) -> bool:
+        """Check if resource is a subnet-like networking resource."""
+        rtype = (resource.get('resource_type') or '').lower()
+        subnet_tokens = ['subnet', 'vswitch', 'subnetwork']
+        return any(tok in rtype for tok in subnet_tokens) and 'security' not in rtype
+
     def _get_sg_protected_computes(self, sg: dict, candidate_computes: List[dict]) -> List[dict]:
         """Resolve which compute resources an SG/NSG should wrap in the diagram."""
         sg_children = self.children_by_parent.get(sg.get('id'), [])
@@ -2661,9 +2667,7 @@ class HierarchicalDiagramBuilder:
         vpcs = [r for r in network_resources if any(kw in (r.get('resource_type') or '').lower() for kw in vpc_keywords)
                 and 'security' not in (r.get('resource_type') or '').lower()]
         # Match subnet-like resources across providers: subnet, vswitch, subnetwork, vpc_subnet
-        subnet_keywords = ['subnet', 'vswitch', 'subnetwork']
-        subnets = [r for r in network_resources if any(kw in (r.get('resource_type') or '').lower() for kw in subnet_keywords)
-                   and 'security' not in (r.get('resource_type') or '').lower()]
+        subnets = [r for r in network_resources if self.is_subnet_resource(r)]
         security_groups = [r for r in network_resources if 'security_group' in (r.get('resource_type') or '').lower()
                            and 'rule' not in (r.get('resource_type') or '').lower()
                            and 'association' not in (r.get('resource_type') or '').lower()]
@@ -6369,8 +6373,11 @@ class HierarchicalDiagramBuilder:
             # Skip nodes that were never actually rendered in the diagram body
             if node_id not in all_rendered_ids:
                 continue
-            # Skip styling subgraph containers — Mermaid cannot style subgraph containers, only leaf nodes
+            # Style subnet subgraphs explicitly so nested subnet containers have the
+            # expected network-boundary border while leaving other subgraphs alone.
             if node_id in subgraph_ids:
+                if self.is_subnet_resource(resource):
+                    lines.append(f"  style {node_id} stroke:#94a3b8, stroke-width:2px")
                 continue
             priority, color, stroke_width = style_by_node_id[node_id]  # stroke_width is used as a variable, but output is always stroke-width
             lines.append(f"  style {node_id} stroke:{color}, stroke-width:{stroke_width}px")  # Always emit stroke-width, never stroke_width
@@ -6414,6 +6421,12 @@ class HierarchicalDiagramBuilder:
                         # Use actual node ID from override, or fallback to resource name
                         actual_node_id = self.node_id_override.get(resource_name, resource_name)
                         if actual_node_id not in all_rendered_ids:
+                            continue
+                        resource = self._get_primary_resource(resource_name)
+                        if resource and self.is_subnet_resource(resource):
+                            if actual_node_id not in already_styled:
+                                lines.append(f"  style {actual_node_id} stroke:#94a3b8,stroke-width:2px")
+                                already_styled.add(actual_node_id)
                             continue
                         if actual_node_id not in already_styled:
                             lines.append(f"  style {actual_node_id} stroke:{color},stroke-width:3px")

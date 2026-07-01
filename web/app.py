@@ -19697,6 +19697,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
 
     network_groups: dict[str, list[dict]] = defaultdict(list)
     network_group_order: list[str] = []
+    subnet_groups: dict[str, list[dict]] = defaultdict(list)
+    subnet_group_order: list[str] = []
     standalone_entry_items: list[dict] = []
     standalone_network_backend_items: list[dict] = []
     for item in shown_entry:
@@ -19718,7 +19720,20 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             network_group_order.append(group_key)
         network_groups[group_key].append(item)
 
+    subnet_assets = [
+        item for item in type_groups.get("microsoft.network/virtualnetworks/subnets", [])
+        if _network_group_key(item)
+    ]
+    for subnet in subnet_assets:
+        subnet_key = _network_group_key(subnet)
+        if subnet_key is None:
+            continue
+        if subnet_key not in subnet_groups:
+            subnet_group_order.append(subnet_key)
+        subnet_groups[subnet_key].append(subnet)
+
     network_subgraph_ids: list[str] = []
+    subnet_subgraph_ids: list[str] = []
     bastion_child_edges: list[tuple[str, str]] = []
     # Network-attached backends that should be represented inside the VNet boundary.
     _network_backend_node_ids: set[str] = set()
@@ -19729,7 +19744,68 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         network_subgraph_ids.append(net_id)
         lines.append(f'    subgraph {net_id}["{_network_group_label(label_item)}"]')
 
+        subnet_children: dict[str, list[dict]] = defaultdict(list)
+        direct_group_items: list[dict] = []
         for item in group_items:
+            subnet_id = str(item.get("subnet_id") or "").strip().lower()
+            if subnet_id:
+                subnet_children[subnet_id].append(item)
+            else:
+                direct_group_items.append(item)
+
+        group_subnets = subnet_groups.get(group_key, [])
+        rendered_subnet_ids: set[str] = set()
+
+        def _render_subnet_summary_node(subnet_item: dict, subnet_node_id: str) -> None:
+            subnet_name = str(subnet_item.get("subnet_name") or subnet_item.get("name") or "Subnet").strip()
+            subnet_rg = str(subnet_item.get("rg") or "").strip()
+            subnet_label = f"Subnet<br/>{subnet_name}"
+            if subnet_rg:
+                subnet_label = f"{subnet_label}<br/>{subnet_rg}"
+            lines.append(_node_line(subnet_node_id, subnet_label, subnet_item.get("arm_type") or subnet_item.get("type") or "microsoft.network/virtualNetworks/subnets"))
+
+        # Render subnet subgraphs first so child resources stay nested inside the
+        # correct VNet boundary. Resources without a subnet stay at the VNet level.
+        for subnet in group_subnets:
+            subnet_id = str(subnet.get("id") or "").strip().lower()
+            if not subnet_id:
+                continue
+            subnet_node_id = f"sub_{_sanitise_node_id(subnet.get('id') or subnet.get('name') or subnet_id)}"
+            rendered_children = subnet_children.pop(subnet_id, [])
+            subnet_subgraph_ids.append(subnet_node_id)
+            rendered_subnet_ids.add(subnet_id)
+            subnet_name = str(subnet.get("subnet_name") or subnet.get("name") or "Subnet").strip()
+            lines.append(f'        subgraph {subnet_node_id}["Subnet: {subnet_name}"]')
+            if rendered_children:
+                for item in rendered_children:
+                    if id(item) in _network_backend_item_ids:
+                        _render_network_backend_item(item)
+                    else:
+                        _render_entry_item(item)
+            else:
+                _render_subnet_summary_node(subnet, f"{subnet_node_id}_summary")
+            lines.append("        end")
+
+        # Render any remaining subnet buckets that were inferred from resources but
+        # do not have a harvested subnet asset row.
+        for subnet_id, rendered_children in sorted(subnet_children.items()):
+            if not rendered_children:
+                continue
+            subnet_node_id = f"sub_{_sanitise_node_id(subnet_id)}"
+            subnet_subgraph_ids.append(subnet_node_id)
+            subnet_name = subnet_id.split("/subnets/")[-1] if "/subnets/" in subnet_id else subnet_id
+            lines.append(f'        subgraph {subnet_node_id}["Subnet: {subnet_name}"]')
+            for item in rendered_children:
+                if id(item) in _network_backend_item_ids:
+                    _render_network_backend_item(item)
+                else:
+                    _render_entry_item(item)
+            lines.append("        end")
+
+        for item in group_items:
+            subnet_id = str(item.get("subnet_id") or "").strip().lower()
+            if subnet_id and (subnet_id in rendered_subnet_ids or subnet_id in subnet_children):
+                continue
             if id(item) in _network_backend_item_ids:
                 _render_network_backend_item(item)
                 continue
@@ -20825,8 +20901,12 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     for item in shown_data:
         style_class = "dataStorePublic" if item.get("public") else "dataStore"
         lines.append(f'    class {_get_node_id(item)} {style_class};')
-    
+
     lines.append('    class Internet internet;')
+    for net_id in network_subgraph_ids:
+        lines.append(f"    style {net_id} stroke:#1971c2,stroke-width:2px,fill:none;")
+    for subnet_id in subnet_subgraph_ids:
+        lines.append(f"    style {subnet_id} stroke:#94a3b8,stroke-width:2px,fill:none;")
      
     # Generate CSS styling for the diagram (matches architecture diagram styling)
     css_lines = [
@@ -22559,6 +22639,8 @@ def _build_subscription_mermaid(sub_name: str, environment: str, rows: list) -> 
 
     for net_id in network_subgraph_ids:
         lines.append(f"    style {net_id} stroke:#1971c2,stroke-width:2px,fill:none;")
+    for subnet_id in subnet_subgraph_ids:
+        lines.append(f"    style {subnet_id} stroke:#94a3b8,stroke-width:2px,fill:none;")
 
     return "\n".join(lines)
 
