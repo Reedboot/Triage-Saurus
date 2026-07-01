@@ -61,6 +61,10 @@ function applyRelativeZoom(container, factor) {
   if (!container) return;
   const nextScale = getCurrentScale(container) * factor;
   setScale(container, nextScale);
+  container.dataset.diagramManualZoom = 'true';
+  if (typeof window.__triageDiagramZoomStateChanged === 'function') {
+    window.__triageDiagramZoomStateChanged(container, 'zoom');
+  }
 }
 
 let controlsBound = false;
@@ -94,6 +98,10 @@ function bindControlHandlers() {
       const container = containerId ? document.getElementById(containerId) : null;
       const scrollEl = container?.parentElement;
       if (container && scrollEl) {
+        container.dataset.diagramManualZoom = 'false';
+        if (typeof window.__triageDiagramZoomStateChanged === 'function') {
+          window.__triageDiagramZoomStateChanged(container, 'fit');
+        }
         const fitScale = autoFitDiagram(container, scrollEl);
         container.dataset.diagramScale = String(fitScale || 1);
       }

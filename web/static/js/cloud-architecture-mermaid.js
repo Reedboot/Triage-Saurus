@@ -7,7 +7,7 @@ import {
   applyEmojiIconFallback,
 } from "./diagram-base.js?v=4";
 import { renderMermaidDiagram, postProcessSvg } from "./subscription-diagrams.js?v=4";
-import { autoFitDiagram } from "./diagram-base.js?v=4";
+import { autoFitDiagram, applyDiagramScale } from "./diagram-base.js?v=5";
 import {
   CONFIG,
   PROVIDER_THEMES,
@@ -19,6 +19,10 @@ import {
 } from "./cloud-architecture-shared.js?v=2";
 
 const MERMAID_STYLE_ID = "cloud-arch-mermaid-style";
+const FIREFOX_FIT_SAFETY = 0.96;
+const FIREFOX_VIEWBOX_PADDING_X = 18;
+const FIREFOX_VIEWBOX_PADDING_TOP = 150;
+const FIREFOX_VIEWBOX_PADDING_BOTTOM = 18;
 let mermaidNodeDataById = new Map();
 let mermaidClickHandler = null;
 let currentMermaidSubscriptionId = "";
@@ -46,6 +50,29 @@ let activeModalRequest = null;
 let mermaidFitRaf = null;
 let mermaidFitTimeout = null;
 let mermaidFitResizeObserver = null;
+let mermaidManualZoom = false;
+
+function cancelMermaidDiagramFit() {
+  if (mermaidFitRaf) cancelAnimationFrame(mermaidFitRaf);
+  if (mermaidFitTimeout) clearTimeout(mermaidFitTimeout);
+  mermaidFitRaf = null;
+  mermaidFitTimeout = null;
+}
+
+window.__triageDiagramZoomStateChanged = (container, action) => {
+  if (!container || container.id !== "cloud-arch-mermaid-root") {
+    return;
+  }
+  if (action === "zoom") {
+    mermaidManualZoom = true;
+    cancelMermaidDiagramFit();
+    return;
+  }
+  if (action === "fit") {
+    mermaidManualZoom = false;
+    cancelMermaidDiagramFit();
+  }
+};
 
 async function loadFirefoxIconMap() {
   if (!firefoxIconMapPromise) {
@@ -199,6 +226,23 @@ async function renderFirefoxIconOverlay(svgEl) {
   });
 }
 
+function addFirefoxViewBoxPadding(svgEl) {
+  if (!isFirefox || !svgEl) return;
+  const vb = svgEl.viewBox?.baseVal;
+  if (!vb || vb.width <= 0 || vb.height <= 0) return;
+
+  const x = vb.x - FIREFOX_VIEWBOX_PADDING_X;
+  const y = vb.y - FIREFOX_VIEWBOX_PADDING_TOP;
+  const width = vb.width + FIREFOX_VIEWBOX_PADDING_X * 2;
+  const height = vb.height + FIREFOX_VIEWBOX_PADDING_TOP + FIREFOX_VIEWBOX_PADDING_BOTTOM;
+
+  svgEl.setAttribute("viewBox", `${x} ${y} ${width} ${height}`);
+  svgEl.setAttribute("width", `${width}px`);
+  svgEl.setAttribute("height", `${height}px`);
+  svgEl.style.width = `${width}px`;
+  svgEl.style.height = `${height}px`;
+}
+
 function buildFallbackModalData(resourceId, nodeData, lookup = {}) {
   const resources = Array.isArray(nodeData?.resources) ? nodeData.resources : [];
   const primary = resources[0] || {};
@@ -252,13 +296,19 @@ function fitMermaidDiagram() {
   const scrollEl = document.getElementById("cloud-arch-mermaid-scroll");
   if (!scrollEl || !mermaidRootEl) return 1;
   const fitScale = autoFitDiagram(mermaidRootEl, scrollEl);
-  mermaidRootEl.dataset.diagramScale = String(fitScale || 1);
-  return fitScale;
+  const appliedScale = isFirefox ? Math.max(0.05, fitScale * FIREFOX_FIT_SAFETY) : fitScale;
+  if (isFirefox && Math.abs(appliedScale - fitScale) > 0.0001) {
+    applyDiagramScale(mermaidRootEl, appliedScale);
+  }
+  mermaidRootEl.dataset.diagramScale = String(appliedScale || fitScale || 1);
+  return appliedScale;
 }
 
 function scheduleMermaidDiagramFit() {
-  if (mermaidFitRaf) cancelAnimationFrame(mermaidFitRaf);
-  if (mermaidFitTimeout) clearTimeout(mermaidFitTimeout);
+  if (!mermaidRootEl || mermaidManualZoom || mermaidRootEl.dataset.diagramManualZoom === "true") {
+    return;
+  }
+  cancelMermaidDiagramFit();
 
   const getSvgBounds = (svgEl) => {
     if (!svgEl) return null;
@@ -320,8 +370,12 @@ function scheduleFirefoxOverlayRefresh() {
   if (firefoxOverlayTimeout) clearTimeout(firefoxOverlayTimeout);
   firefoxOverlayRaf = requestAnimationFrame(() => {
     refreshFirefoxOverlay();
+    scheduleMermaidDiagramFit();
     // One extra delayed pass after layout settles during zoom/fit.
-    firefoxOverlayTimeout = setTimeout(() => refreshFirefoxOverlay(), 60);
+    firefoxOverlayTimeout = setTimeout(() => {
+      refreshFirefoxOverlay();
+      scheduleMermaidDiagramFit();
+    }, 60);
   });
 }
 
@@ -863,11 +917,14 @@ async function renderMermaidGraph(payload, subscriptionName) {
   }
   applyMermaidCss(payload?.css_code || "");
   try {
+    mermaidManualZoom = false;
+    mermaidRootEl.dataset.diagramManualZoom = "false";
     const svg = await renderMermaidDiagram({
       source: mermaidSource,
       rootEl: mermaidRootEl,
       onRendered: async (svgEl) => {
         postProcessSvg(svgEl);
+        addFirefoxViewBoxPadding(svgEl);
         enhancePlaceholderGlyphs(svgEl);
         applyEmojiIconFallback(svgEl);
         attachMermaidDrilldownHandlers(svgEl);
@@ -1570,6 +1627,9 @@ async function loadMermaidView(subscriptionName) {
 
   currentMermaidSubscriptionId = String(subscriptionName || "").trim();
   mermaidViewEl.hidden = false;
+  mermaidManualZoom = false;
+  if (mermaidRootEl) mermaidRootEl.dataset.diagramManualZoom = "false";
+  cancelMermaidDiagramFit();
 
   const resolveSubscriptionId = async (selector) => {
     const raw = String(selector || "").trim();
@@ -1654,6 +1714,8 @@ async function loadMermaidView(subscriptionName) {
       (!renderPayload?.nodes || renderPayload.nodes.length === 0);
 
     if (isEmpty) {
+      mermaidManualZoom = false;
+      if (mermaidRootEl) mermaidRootEl.dataset.diagramManualZoom = "false";
       mermaidRootEl.innerHTML = "";
     } else {
       await renderMermaidGraph(renderPayload, subscriptionName);
@@ -1719,6 +1781,12 @@ for (const button of viewButtons) {
       const current = parseFloat(container.dataset.diagramScale || "1") || 1;
       const zoomFactor = Math.exp(-e.deltaY * 0.0015);
       window.applyDiagramScale(container, current * zoomFactor);
+      container.dataset.diagramManualZoom = "true";
+      mermaidManualZoom = true;
+      cancelMermaidDiagramFit();
+      if (typeof window.__triageDiagramZoomStateChanged === "function") {
+        window.__triageDiagramZoomStateChanged(container, "zoom");
+      }
     }
   }, { passive: false });
 })();
