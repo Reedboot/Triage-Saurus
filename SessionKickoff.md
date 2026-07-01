@@ -1,132 +1,26 @@
 # 🟣 Session Kick-off
 
-## Purpose
-This document provides the session initialization flow for Triage-Saurus. When the user starts `sessionkickoff` in the web UI at http://127.0.0.1:9000, the agent should:
-1. Load canonical operating rules from `AGENTS.md` and `Agents/Instructions.md`
-2. Check for experiment state (for cross-session continuity)
-3. Scan the workspace for existing context
-4. Check for outstanding refinement questions
-5. Present triage options to the user
+When `sessionkickoff` starts, do this:
 
-**Note:** This file contains only the kickoff flow. For detailed navigation flows and menu structures, see `Templates/Workflows.md`. All detailed operational rules (bulk processing, question formatting, repo scanning, knowledge recording, etc.) are in `Agents/Instructions.md`.
+1. Read `AGENTS.md` and `Agents/Instructions.md`.
+2. Check experiment state with `python3 Scripts/Experiments/triage_experiment.py resume`.
+3. Scan the workspace with `python3 Scripts/Scan/scan_workspace.py --skip-repos`.
+4. Check `Output/Knowledge/` for open questions.
+5. Present the next triage choice to the user.
 
-**Primary interface:** The web UI at http://127.0.0.1:9000 is the normal entrypoint; CLI wording is retained here for compatibility.
-
-## Helper Scripts
-
-Prefer the consolidated workspace scanner (stdout-only):
-- `python3 Scripts/Scan/scan_workspace.py` — scans Knowledge/, Findings/, and common Intake/Sample paths
-
-Experiment management (for self-optimizing triage):
-- `python3 Scripts/Experiments/triage_experiment.py resume` — check experiment state, continue from last position
-- `python3 Scripts/Experiments/triage_experiment.py status` — detailed experiment + learning status
-- `python3 Scripts/Experiments/triage_experiment.py list` — show all experiments with metrics
-- `python3 Scripts/Experiments/triage_experiment.py promote <id>` — promote experiment learnings to production (updates SessionKickoff.md, Instructions.md)
-- `python3 Scripts/learning_db.py status` — show SQLite learning database status
-
-Targeted helpers (stdout-only):
-- `python3 Scripts/Scan/pull_repo.py <repo_path> [--auto-pull] [--dry-run]` — fetch latest remote refs and optionally pull before scanning
+## Helper scripts
+- `python3 Scripts/Scan/scan_workspace.py`
+- `python3 Scripts/Experiments/triage_experiment.py resume`
+- `python3 Scripts/Experiments/triage_experiment.py status`
+- `python3 Scripts/Experiments/triage_experiment.py list`
+- `python3 Scripts/Experiments/triage_experiment.py promote <id>`
 - `python3 Scripts/scan_knowledge_refinement.py`
 - `python3 Scripts/scan_findings_files.py`
 - `python3 Scripts/scan_intake_files.py <Intake/Subfolder>`
-- `python3 Scripts/triage_queue.py` — use after bulk imports to identify common missing context
-- `python3 Scripts/get_cwd.py` — suggests repo root path based on current directory
-- `python3 Scripts/Utils/compare_intake_to_findings.py --intake <path> --findings <path>` — checks for duplicates before bulk processing
+- `python3 Scripts/Utils/compare_intake_to_findings.py --intake <path> --findings <path>`
+- `python3 Scripts/get_cwd.py`
 
-## Kickoff Flow
-
-```text
-1. **Load instructions:** Read AGENTS.md and Agents/Instructions.md for operating rules.
-
-2. **Request Output folder permission:** At the start of the session, ask user once to grant write access to the `Output/` folder. This covers all operations (audit logs, findings, knowledge, summaries). Do NOT ask again during the session.
-
-3. **Check experiment state:** Run `python3 Scripts/Experiments/triage_experiment.py resume` to check:
-   - If an experiment is in progress → offer to continue it
-   - If experiment awaiting review → prompt for review
-   - If learning pending → offer to apply learnings
-   - If fresh/no experiments → proceed to normal triage flow
-   - **Parallel experiments:** Multiple experiments can run simultaneously. If user wants to start a new experiment while another is running, create the new experiment without stopping the existing one. Use `python3 Scripts/Experiments/triage_experiment.py list` to see all experiments and their statuses.
-
-4. **Create audit log:** Create `Output/Audit/Session_YYYY-MM-DD_HHMMSS.md` using the template from `Templates/AuditLog.md`. Log session metadata (date, start time, triage type TBD).
-
-5. **Scan workspace:** Run `python3 Scripts/Scan/scan_workspace.py --skip-repos` to check:
-   - Output/Knowledge/ for refinement questions (## Unknowns / ## ❓ Open Questions)
-   - Output/Findings/ for existing findings
-   - Intake/ and Intake/Sample/ for available triage items
-   - **Note:** `--skip-repos` flag skips 1000+ repo discovery (~100s), improving kickoff to <1s. Repo discovery happens only when user selects "Scan a specific repo".
-
-6. **Check for refinement questions:**
-   - If outstanding questions exist: ask whether to resume answering those now (or proceed to new triage).
-   - If Knowledge/ is empty (0 knowledge files): treat as first run and say "🦖 Welcome to Triage-Saurus."
-
-7. **Present triage menu (automatically)** using ask_user tool with selectable choices:
-    - **Continue experiment** (if experiment in progress)
-    - **Start experiment mode** (for self-optimizing triage)
-    - **Answer questions to build context** (if existing knowledge/findings exist)
-    - **Copy/paste a single issue to triage**
-    - **Scan a specific repo**
-    - **Run a batch scan using Intake/ReposToScan.txt (Batch)**
-
-    > **Automation requirement:** Trigger this menu immediately after `sessionkickoff` completes without waiting for the user to type `mainmenu`.
-
-8. **Handle bulk intake selection:**
-   - If user chooses bulk intake, offer selectable folder paths (no numeric prefixes).
-   - Verify folders are non-empty using `python3 Scripts/scan_intake_files.py <path>` before offering.
-   - Common paths in this repo:
-     - Intake/Cloud
-     - Intake/Code
-     - Intake/Sample/Cloud
-     - Intake/Sample/Code
-   - Before starting bulk triage, check for duplicates:
-     `python3 Scripts/Utils/compare_intake_to_findings.py --intake <path> --findings Output/Findings/Cloud`
-   - If duplicates found: ask to proceed with new items only.
-   - If no new items: stop and notify user.
-
-8. **Infer triage type:**
-   - If folder path implies scope (Intake/Cloud, Intake/Code), use that.
-   - Otherwise, ask what to triage (Cloud / Code / Repo scan).
-
-9. **Cloud triage initialization:**
-   - Infer provider from folder name or skim intake titles.
-   - If provider strongly indicated, explain reasoning with 🤔 and confirm with ❓.
-   - Choices: Azure / AWS / GCP / Don't know
-   - See Agents/CloudContextAgent.md for targeted context questions.
-   - Create/update: Output/Knowledge/<Provider>.md and Output/Summary/Cloud/Architecture_<Provider>.md
-
-10. **Repo scan initialization:**
-   - **FIRST: Request repos folder access permission** — Before checking for repos or doing any repo operations, ask user once to grant read access to the repos directory (e.g., `/mnt/c/Repos` or wherever repos are stored). This covers discovery and scanning. Do NOT ask again for individual repos during the session.
-   - Check Output/Knowledge/Repos.md for known repo root path(s). (Default to current workspace repo '/mnt/c/Repos/Triage-Saurus' to avoid scanning the entire /mnt/c/Repos unless the user explicitly allows it.)
-   - If none recorded: suggest default using `python3 Scripts/get_cwd.py`
-   - Ask user to confirm the repos root directory path.
-   - Discover available repos: `ls -1 <confirmed_repos_root_path>`
-   - Present repos as selectable choices using ask_user tool:
-     - List all individual repo names as choices
-     - Add special choices like "Scan all terraform-* repos" or "Scan multiple repos (specify pattern)"
-     - Allow freeform input for custom repo names/patterns
-   - If wildcard pattern selected: expand to concrete names and confirm before scanning.
-   - **DO NOT hand off to general-purpose agent yet**
-   - **Phase 1 — Fast Context Discovery (~10 seconds):** Run `python3 Scripts/Context/discover_repo_context.py <repo_path> --repos-root <repos_root_path>`. Creates `Output/Summary/Repos/<RepoName>.md` and updates `Output/Knowledge/Repos.md`. See `Agents/ContextDiscoveryAgent.md` for full detection capabilities and output spec.
-   - **Phase 2a — .NET Enhancement:** For .NET repos, parse `.csproj` and `Startup.cs`/`Program.cs` for framework version, NuGet packages, middleware pipeline, and auth registration.
-   - **Phase 2 — Deeper Context Search (~30-60 seconds):** Launch ONE explore agent to complete Phase 2 TODO markers in the repo summary. See `Agents/ContextDiscoveryAgent.md` for the Phase 2 prompt template.
-   - **Phase 3 — Apply ALL Detection Rules (CRITICAL):** Run `opengrep scan --config Rules/ <repo>` immediately; log command in audit log. Apply ALL rules — Experiment 015 shows selective application achieves only 50% detection. For each finding, invoke DevSkeptic + PlatformSkeptic. Reference `detected_by_rule: rule-id` in finding metadata. Only fall back to manual grep if opengrep is unavailable (document the outage).
-   - **Phase 4 — Security Review:** Use Phase 1 + Phase 2 context for qualitative review (auth flows, IaC configs, routing, error handling, attack chains). See `Agents/SecurityAgent.md`. When Phase 3 produces 0 findings, Phase 4 manual review is CRITICAL — use `python3 Scripts/Persist/import_manual_finding.py` to store manual findings.
-   - **Phase 5 — Cloud Architecture Update (if IaC detected):** Launch ArchitectureAgent to update `Output/Summary/Cloud/Architecture_<Provider>.md`. See `Agents/ArchitectureAgent.md`.
-   - **Optional - Automated Vulnerability Scanning (if requested):**
-     - SCA (dependency vulnerabilities), SAST (code scanning), Secrets, IaC misconfiguration scans
-     - These are separate from the security review above
-   - See Agents/Instructions.md lines 118-240 for detailed repo scan rules.
-
-11. **Follow operational rules:**
-   - Log ALL questions, answers, actions, and assumptions to the audit log (append-only)
-   - After scans and security reviews, run a Post-Scan Rule Assessment: map findings to Rules/ and, if a finding could be rule-detected but no rule exists, create a draft rule under Rules/ with a test case and record it under `Output/Learning/experiments/<id>/proposed_rules/` or `Output/Learning/proposed_rules/`.
-   - Update audit Summary section at end of session
-   - All detailed triage behavior is in Agents/Instructions.md
-   - Question formatting, bulk processing, knowledge recording, cross-cutting questions, etc.
-   - Refer to specific agent files (DevSkeptic, PlatformSkeptic, SecurityAgent, etc.) for specialized reviews.
-```
-
-## See Also
-- **Repo overview + workflow:** README.md
-- **Navigation flows and menus:** Templates/Workflows.md
-- **Canonical operating rules:** Agents/Instructions.md
-- **Agent discovery:** AGENTS.md
+## Notes
+- Use `Intake/` for bulk paths.
+- Keep `Templates/Workflows.md` for menu/navigation detail.
+- Keep detailed operating rules in `Agents/Instructions.md`.

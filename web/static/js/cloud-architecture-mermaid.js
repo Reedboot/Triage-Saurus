@@ -45,6 +45,7 @@ let firefoxIconMapPromise = null;
 let activeModalRequest = null;
 let mermaidFitRaf = null;
 let mermaidFitTimeout = null;
+let mermaidFitResizeObserver = null;
 
 async function loadFirefoxIconMap() {
   if (!firefoxIconMapPromise) {
@@ -296,6 +297,21 @@ function scheduleMermaidDiagramFit() {
   };
 
   mermaidFitRaf = requestAnimationFrame(() => requestAnimationFrame(() => attemptFit()));
+}
+
+function bindMermaidFitSync() {
+  if (!mermaidRootEl || typeof ResizeObserver === "undefined") return;
+  if (mermaidFitResizeObserver) return;
+
+  mermaidFitResizeObserver = new ResizeObserver(() => {
+    scheduleMermaidDiagramFit();
+  });
+  mermaidFitResizeObserver.observe(mermaidRootEl);
+
+  const scrollEl = document.getElementById("cloud-arch-mermaid-scroll");
+  if (scrollEl) {
+    mermaidFitResizeObserver.observe(scrollEl);
+  }
 }
 
 function scheduleFirefoxOverlayRefresh() {
@@ -857,7 +873,11 @@ async function renderMermaidGraph(payload, subscriptionName) {
         attachMermaidDrilldownHandlers(svgEl);
         ensureMermaidClickHandler(svgEl);
         await injectDiagramIconsIntoSvg(svgEl, "all");
+        bindMermaidFitSync();
         scheduleMermaidDiagramFit();
+        if (document.fonts?.ready) {
+          document.fonts.ready.then(() => scheduleMermaidDiagramFit());
+        }
       },
     });
     return Boolean(svg);
