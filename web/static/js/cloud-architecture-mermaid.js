@@ -1644,13 +1644,12 @@ for (const button of viewButtons) {
   });
   document.addEventListener("mouseup", () => { panning = false; });
   mermaidScroll.addEventListener("wheel", (e) => {
-    if (e.ctrlKey || e.metaKey) {
-      e.preventDefault();
-      const container = document.getElementById("cloud-arch-mermaid-root");
-      if (container && window.applyDiagramScale) {
-        const current = parseFloat(container.dataset.diagramScale || "1") || 1;
-        window.applyDiagramScale(container, current * (e.deltaY > 0 ? 0.9 : 1.1));
-      }
+    e.preventDefault();
+    const container = document.getElementById("cloud-arch-mermaid-root");
+    if (container && window.applyDiagramScale) {
+      const current = parseFloat(container.dataset.diagramScale || "1") || 1;
+      const zoomFactor = Math.exp(-e.deltaY * 0.0015);
+      window.applyDiagramScale(container, current * zoomFactor);
     }
   }, { passive: false });
 })();
