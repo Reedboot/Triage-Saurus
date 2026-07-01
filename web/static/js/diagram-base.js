@@ -55,6 +55,7 @@ export async function waitForMermaid(timeoutMs = 10000) {
 export function applyDiagramScale(container, scale) {
   if (!container) return;
   const scaledVal = Math.min(4, Math.max(0.1, scale));
+  container.dataset.diagramScale = String(scaledVal);
   const svgEl = container.querySelector('svg');
   if (svgEl) {
     const baseW = parseFloat(svgEl.dataset.baseWidth || '') ||

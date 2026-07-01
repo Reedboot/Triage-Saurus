@@ -5,9 +5,9 @@ import {
 import {
   enhancePlaceholderGlyphs,
   applyEmojiIconFallback,
-} from "./diagram-base.js?v=3";
-import { renderMermaidDiagram, postProcessSvg } from "./subscription-diagrams.js?v=3";
-import { autoFitDiagram } from "./diagram-base.js?v=3";
+} from "./diagram-base.js?v=4";
+import { renderMermaidDiagram, postProcessSvg } from "./subscription-diagrams.js?v=4";
+import { autoFitDiagram } from "./diagram-base.js?v=4";
 import {
   CONFIG,
   PROVIDER_THEMES,
@@ -43,6 +43,8 @@ let firefoxOverlayTimeout = null;
 let firefoxOverlayResizeObserver = null;
 let firefoxIconMapPromise = null;
 let activeModalRequest = null;
+let mermaidFitRaf = null;
+let mermaidFitTimeout = null;
 
 async function loadFirefoxIconMap() {
   if (!firefoxIconMapPromise) {
@@ -243,6 +245,57 @@ function refreshFirefoxOverlay() {
   const svgEl = mermaidRootEl.querySelector("svg");
   if (!svgEl) return;
   renderFirefoxIconOverlay(svgEl);
+}
+
+function fitMermaidDiagram() {
+  const scrollEl = document.getElementById("cloud-arch-mermaid-scroll");
+  if (!scrollEl || !mermaidRootEl) return 1;
+  const fitScale = autoFitDiagram(mermaidRootEl, scrollEl);
+  mermaidRootEl.dataset.diagramScale = String(fitScale || 1);
+  return fitScale;
+}
+
+function scheduleMermaidDiagramFit() {
+  if (mermaidFitRaf) cancelAnimationFrame(mermaidFitRaf);
+  if (mermaidFitTimeout) clearTimeout(mermaidFitTimeout);
+
+  const getSvgBounds = (svgEl) => {
+    if (!svgEl) return null;
+    const width =
+      parseFloat(svgEl.getAttribute("width") || "") ||
+      svgEl.viewBox?.baseVal?.width ||
+      svgEl.scrollWidth ||
+      0;
+    const height =
+      parseFloat(svgEl.getAttribute("height") || "") ||
+      svgEl.viewBox?.baseVal?.height ||
+      svgEl.scrollHeight ||
+      0;
+    return { width, height };
+  };
+
+  const attemptFit = (attempt = 0) => {
+    const scrollEl = document.getElementById("cloud-arch-mermaid-scroll");
+    const svgEl = mermaidRootEl?.querySelector("svg");
+    const bounds = getSvgBounds(svgEl);
+    const ready =
+      scrollEl &&
+      bounds &&
+      bounds.width > 0 &&
+      bounds.height > 0 &&
+      (scrollEl.clientWidth || scrollEl.offsetWidth) &&
+      (scrollEl.clientHeight || scrollEl.offsetHeight);
+
+    if (ready || attempt >= 8) {
+      fitMermaidDiagram();
+      mermaidFitTimeout = setTimeout(() => fitMermaidDiagram(), 75);
+      return;
+    }
+
+    mermaidFitRaf = requestAnimationFrame(() => attemptFit(attempt + 1));
+  };
+
+  mermaidFitRaf = requestAnimationFrame(() => requestAnimationFrame(() => attemptFit()));
 }
 
 function scheduleFirefoxOverlayRefresh() {
@@ -804,11 +857,7 @@ async function renderMermaidGraph(payload, subscriptionName) {
         attachMermaidDrilldownHandlers(svgEl);
         ensureMermaidClickHandler(svgEl);
         await injectDiagramIconsIntoSvg(svgEl, "all");
-        const scrollEl = document.getElementById("cloud-arch-mermaid-scroll");
-        if (scrollEl) {
-          const fitScale = autoFitDiagram(mermaidRootEl, scrollEl);
-          mermaidRootEl.dataset.diagramScale = String(fitScale || 1);
-        }
+        scheduleMermaidDiagramFit();
       },
     });
     return Boolean(svg);
