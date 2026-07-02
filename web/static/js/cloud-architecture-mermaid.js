@@ -1010,7 +1010,10 @@ function openNodePopup(resourceId, nodeData) {
   const resources = Array.isArray(nodeData?.resources) ? nodeData.resources.filter(Boolean) : [];
   const isGroupedNode = Boolean(nodeData?.is_group || nodeData?.isGroupNode || nodeData?.summaryNode || nodeData?.groupType);
   const armType = String(nodeData?.arm_type || nodeData?.type || nodeData?.resourceType || "").toLowerCase();
-  const prefersChildDrilldown = armType.includes("serverfarms") || armType.includes("hostingenvironments");
+  const prefersChildDrilldown =
+    armType.includes("applicationgateway") ||
+    armType.includes("serverfarms") ||
+    armType.includes("hostingenvironments");
   if (resources.length > 1 || (isGroupedNode && resources.length > 0)) {
     if (currentMermaidSubscriptionId) {
       openDrilldownModal(nodeData, currentMermaidSubscriptionId);

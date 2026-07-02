@@ -17260,8 +17260,12 @@ _DIAGRAM_CODE_VERSION = "v15"  # bumped: invalidate cached subscription diagrams
 
 
 def _subscription_diagram_cache_signature(conn, sub_id: str) -> tuple[str | None, tuple[str, str] | None]:
+    sub_cols = set(_table_columns(conn, "subscriptions"))
+    select_cols = ["display_name", "environment", "state"]
+    if "last_synced" in sub_cols:
+        select_cols.append("last_synced")
     sub_row = conn.execute(
-        "SELECT display_name, environment, state, last_synced FROM subscriptions WHERE id = ? LIMIT 1",
+        f"SELECT {', '.join(select_cols)} FROM subscriptions WHERE id = ? LIMIT 1",
         (sub_id,),
     ).fetchone()
     if not sub_row:
@@ -17275,14 +17279,16 @@ def _subscription_diagram_cache_signature(conn, sub_id: str) -> tuple[str | None
         str(sub_row["display_name"] or ""),
         str(sub_row["environment"] or ""),
         str(sub_row["state"] or ""),
-        str(sub_row["last_synced"] or ""),
+        str(sub_row["last_synced"] or "") if "last_synced" in sub_cols else "",
     ]
     for table_name in ("provisioned_assets", "appgw_routing_rules", "apim_api_routes", "appgw_waf_policies", "front_door_routes", "firewall_nat_rules", "firewall_app_rules", "firewall_policies"):
         if not _table_exists(conn, table_name):
             continue
+        table_cols = set(_table_columns(conn, table_name))
+        latest_expr = "COALESCE(MAX(last_synced), '') AS latest" if "last_synced" in table_cols else "'' AS latest"
         row = conn.execute(
             f"""
-            SELECT COUNT(*) AS n, COALESCE(MAX(last_synced), '') AS latest
+            SELECT COUNT(*) AS n, {latest_expr}
             FROM {table_name}
             WHERE subscription_id = ?
             """,
@@ -17295,6 +17301,8 @@ def _subscription_diagram_cache_signature(conn, sub_id: str) -> tuple[str | None
 
 
 def _load_subscription_diagram_cache(conn, sub_id: str, signature: str) -> dict | None:
+    if not _table_exists(conn, "subscription_diagram_cache"):
+        return None
     row = conn.execute(
         """
         SELECT cache_signature, payload_json
@@ -17313,6 +17321,8 @@ def _load_subscription_diagram_cache(conn, sub_id: str, signature: str) -> dict 
 
 
 def _store_subscription_diagram_cache(conn, sub_id: str, signature: str, payload: dict) -> None:
+    if not _table_exists(conn, "subscription_diagram_cache"):
+        return
     conn.execute(
         """
         INSERT INTO subscription_diagram_cache (sub_id, cache_signature, payload_json, updated_at)
@@ -17359,6 +17369,8 @@ def api_subscription_diagram(sub_id: str):
 
         pa_columns = _table_columns(conn, "provisioned_assets")
         waf_mode_expr = "pa.waf_mode" if "waf_mode" in pa_columns else "NULL AS waf_mode"
+        auth_methods_expr = "pa.auth_methods" if "auth_methods" in pa_columns else "NULL AS auth_methods"
+        ip_restrictions_expr = "pa.ip_restrictions" if "ip_restrictions" in pa_columns else "NULL AS ip_restrictions"
         # When waf_mode column is null but resource is a WAF_v2 App Gateway, infer mode from
         # appgw_waf_policies table. If mode still null, fall back to 'WAF_v2' (known active WAF
         # of unknown mode) so the diagram shows the shield rather than treating it as unprotected.
@@ -17379,9 +17391,13 @@ def api_subscription_diagram(sub_id: str):
                 ) AS waf_mode
             """ if "waf_mode" in pa_columns else "NULL AS waf_mode"
         waf_mode_flag_expr = "COALESCE(NULLIF(TRIM(pa.waf_mode), ''), '') <> ''" if "waf_mode" in pa_columns else "0"
-        route_waf_expr = "(SELECT COUNT(*) > 0 FROM appgw_routing_rules ar WHERE ar.subscription_id = pa.subscription_id AND ar.gateway_name = pa.name AND ar.waf_policy_name IS NOT NULL)"
+        route_waf_expr = "0"
         appgw_policy_expr = "0"
-        if _table_exists(conn, "appgw_waf_policies"):
+        has_appgw_routes = _table_exists(conn, "appgw_routing_rules")
+        has_appgw_policies = _table_exists(conn, "appgw_waf_policies")
+        if has_appgw_routes:
+            route_waf_expr = "(SELECT COUNT(*) > 0 FROM appgw_routing_rules ar WHERE ar.subscription_id = pa.subscription_id AND ar.gateway_name = pa.name AND ar.waf_policy_name IS NOT NULL)"
+        if has_appgw_policies and has_appgw_routes:
             route_waf_expr = """
                 (SELECT COUNT(*) > 0
                  FROM appgw_waf_policies pwp
@@ -17395,6 +17411,9 @@ def api_subscription_diagram(sub_id: str):
                          AND ar.waf_policy_name = pwp.name
                    ))
             """
+        elif has_appgw_policies:
+            route_waf_expr = "0"
+        if has_appgw_policies:
             appgw_policy_expr = """
                 (SELECT COUNT(*) > 0
                  FROM appgw_waf_policies pwp
@@ -17406,6 +17425,28 @@ def api_subscription_diagram(sub_id: str):
                        WHERE ag.value = pa.name
                    ))
             """
+        front_door_expr = "0"
+        if _table_exists(conn, "front_door_routes"):
+            front_door_expr = """(SELECT COUNT(*) > 0 FROM front_door_routes fdr
+                       WHERE fdr.subscription_id = pa.subscription_id
+                       AND fdr.profile_name = pa.name
+                       AND fdr.waf_policy IS NOT NULL
+                       LIMIT 1)"""
+        listeners_expr = "NULL AS listeners"
+        if _table_exists(conn, "appgw_routing_rules"):
+            appgw_cols = _table_columns(conn, "appgw_routing_rules")
+            protocol_select = "protocol" if "protocol" in appgw_cols else "NULL AS protocol"
+            listeners_expr = f"""(SELECT GROUP_CONCAT(protocol_port, ', ')
+                   FROM (SELECT DISTINCT
+                      CASE
+                          WHEN UPPER(COALESCE(protocol, '')) = 'HTTPS' THEN 'HTTPS:443'
+                          WHEN UPPER(COALESCE(protocol, '')) = 'HTTP' THEN 'HTTP:80'
+                          ELSE UPPER(COALESCE(protocol, ''))
+                      END AS protocol_port
+                   FROM appgw_routing_rules ar
+                   WHERE ar.subscription_id = pa.subscription_id
+                   AND ar.gateway_name = pa.name)
+                   LIMIT 1) AS listeners"""
 
         rows = conn.execute(
             f"""
@@ -17416,24 +17457,10 @@ def api_subscription_diagram(sub_id: str):
                         OR {waf_mode_flag_expr}
                         OR {appgw_policy_expr})
                      WHEN pa.type LIKE '%frontdoor%' OR pa.type LIKE '%frontDoor%' OR pa.type LIKE '%FrontDoor%' THEN
-                       (SELECT COUNT(*) > 0 FROM front_door_routes fdr
-                        WHERE fdr.subscription_id = pa.subscription_id
-                        AND fdr.profile_name = pa.name
-                        AND fdr.waf_policy IS NOT NULL
-                        LIMIT 1)
+                       {front_door_expr}
                      ELSE 0
                    END) AS has_waf,
-                   (SELECT GROUP_CONCAT(protocol_port, ', ')
-                    FROM (SELECT DISTINCT
-                       CASE
-                           WHEN UPPER(COALESCE(protocol, '')) = 'HTTPS' THEN 'HTTPS:443'
-                           WHEN UPPER(COALESCE(protocol, '')) = 'HTTP' THEN 'HTTP:80'
-                           ELSE UPPER(COALESCE(protocol, ''))
-                       END AS protocol_port
-                    FROM appgw_routing_rules ar
-                    WHERE ar.subscription_id = pa.subscription_id
-                    AND ar.gateway_name = pa.name)
-                   LIMIT 1) AS listeners,
+                   {listeners_expr},
                    pa.is_restricted,
                    {waf_mode_expr},
                    CASE
@@ -17442,8 +17469,8 @@ def api_subscription_diagram(sub_id: str):
                        ELSE NULL
                    END AS routing_targets,
                    pa.raw_json,
-                   pa.auth_methods,
-                   pa.ip_restrictions
+                   {auth_methods_expr},
+                   {ip_restrictions_expr}
             FROM provisioned_assets pa
             WHERE subscription_id = ?
             ORDER BY 
@@ -18791,6 +18818,15 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     item["subnet_name"] = extra.get("subnet_name").strip()
                 if isinstance(extra.get("subnet_id"), str) and extra.get("subnet_id").strip():
                     item["subnet_id"] = extra.get("subnet_id").strip()
+            if not item.get("subnet_id"):
+                subnet_ids = _collect_subnet_ids(parsed_raw)
+                if subnet_ids:
+                    item["subnet_id"] = subnet_ids[0]
+            if item.get("subnet_id"):
+                if not item.get("subnet_name"):
+                    item["subnet_name"] = _parse_subnet_from_subnet_id(str(item["subnet_id"]))
+                if not item.get("vnet_name"):
+                    item["vnet_name"] = _vnet_name_from_subnet_id(str(item["subnet_id"]))
         routing_targets = _parse_routing_targets(routing_targets_raw)
         extracted_targets = _extract_routing_targets(parsed_raw) if isinstance(parsed_raw, dict) else []
         merged_targets: list[dict] = []
@@ -19135,6 +19171,10 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                         "listeners": item.get("listeners"),
                         "routing_targets": item.get("routing_targets"),
                         "parent_bastion_key": item.get("parent_bastion_key"),
+                        "vnet_name": item.get("vnet_name"),
+                        "vnet_resource_group": item.get("vnet_resource_group"),
+                        "subnet_name": item.get("subnet_name"),
+                        "subnet_id": item.get("subnet_id"),
                         "public_ips": resources_with_public_ips.get((str(item.get("rg") or "").strip().lower(), str(item.get("name") or "").strip().lower()), []),
                     })
                     if "bastionhost" in (item.get("type") or "").lower():
@@ -19173,6 +19213,10 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     "listeners": next((i.get("listeners") for i in items if i.get("listeners")), None),
                     "routing_targets": merged_targets,
                     "parent_bastion_key": next((i.get("parent_bastion_key") for i in items if i.get("parent_bastion_key")), None),
+                    "vnet_name": next((i.get("vnet_name") for i in items if i.get("vnet_name")), None),
+                    "vnet_resource_group": next((i.get("vnet_resource_group") for i in items if i.get("vnet_resource_group")), None),
+                    "subnet_name": next((i.get("subnet_name") for i in items if i.get("subnet_name")), None),
+                    "subnet_id": next((i.get("subnet_id") for i in items if i.get("subnet_id")), None),
                     "public_ips": [pip for item in items for pip in resources_with_public_ips.get((str(item.get("rg") or "").strip().lower(), str(item.get("name") or "").strip().lower()), [])],
                 }
                 if "bastionhost" in (items[0].get("type") or "").lower():
@@ -21339,7 +21383,7 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
     # ── App Gateway ───────────────────────────────────────────────────────────
     if "applicationgateway" in arm_type_lc:
         title   = "App Gateway — Routing Rules"
-        columns = ["Name / Hostname", "Protocol", "URL Path",
+        columns = ["Listener / Hostname", "Protocol", "URL Path",
                    "Backend Pool", "Backend Targets", "WAF Policy"]
         listener_hosts = {
             str(r.get("listener_hostname") or "").strip().lower()

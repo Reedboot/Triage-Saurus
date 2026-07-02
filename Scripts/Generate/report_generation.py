@@ -853,6 +853,17 @@ def _extract_application_insights(repo_path: Path | None, module_name: str) -> s
 
 def _is_data_routing_resource(resource_type: str) -> bool:
     """Heuristic: resources that typically receive/forward data-plane traffic."""
+    exact_include_types = {
+        "microsoft.cdn/profiles/endpoints",
+        "microsoft.databricks/workspaces",
+        "microsoft.kusto/clusters",
+        "microsoft.logic/workflows",
+        "microsoft.search/searchservices",
+        "microsoft.web/sites/slots",
+    }
+    if (resource_type or "").lower() in exact_include_types:
+        return True
+
     exclude_tokens = (
         "policy_",
         "role_",
@@ -1624,6 +1635,10 @@ _LB_CHILD_TYPES = frozenset({
     "aws_lb_target_group_attachment", "aws_lb_listener_rule", "azurerm_lb_backend_address_pool", "azurerm_lb_rule",
     "azurerm_application_gateway_http_listener",
 })
+_CDN_PARENT_TYPES = frozenset({"azurerm_cdn_profile"})
+_CDN_CHILD_TYPES = frozenset({"azurerm_cdn_frontdoor_endpoint"})
+_WEB_SLOT_PARENT_TYPES = frozenset({"azurerm_app_service", "azurerm_function_app", "azurerm_linux_web_app"})
+_WEB_SLOT_CHILD_TYPES = frozenset({"azurerm_web_slots"})
 _SB_PARENT_TYPES = frozenset({"azurerm_servicebus_namespace", "azurerm_eventhub_namespace"})
 _SB_CHILD_TYPES = frozenset({
     "azurerm_servicebus_queue", "azurerm_servicebus_topic", "azurerm_servicebus_subscription",
@@ -1724,6 +1739,32 @@ def _detect_service_hierarchies(
             if svc_types and svc_types.issubset(_LB_CHILD_TYPES):
                 lb_nested_services.add(s)
 
+    cdn_parent_service = next(
+        (s for s in layer_services if set(non_boundary_parents.get(s, [])) & _CDN_PARENT_TYPES),
+        None,
+    )
+    cdn_nested_services: set[str] = set()
+    if cdn_parent_service:
+        for s in layer_services:
+            if s == cdn_parent_service:
+                continue
+            svc_types = set(non_boundary_parents.get(s, []))
+            if svc_types and svc_types.issubset(_CDN_CHILD_TYPES):
+                cdn_nested_services.add(s)
+
+    web_slot_parent_service = next(
+        (s for s in layer_services if set(non_boundary_parents.get(s, [])) & _WEB_SLOT_PARENT_TYPES),
+        None,
+    )
+    web_slot_nested_services: set[str] = set()
+    if web_slot_parent_service:
+        for s in layer_services:
+            if s == web_slot_parent_service:
+                continue
+            svc_types = set(non_boundary_parents.get(s, []))
+            if svc_types and svc_types.issubset(_WEB_SLOT_CHILD_TYPES):
+                web_slot_nested_services.add(s)
+
     sb_parent_service = next(
         (s for s in layer_services if set(non_boundary_parents.get(s, [])) & _SB_PARENT_TYPES),
         None,
@@ -1762,6 +1803,10 @@ def _detect_service_hierarchies(
         "kv_nested": kv_nested_services,
         "lb_parent": lb_parent_service,
         "lb_nested": lb_nested_services,
+        "cdn_parent": cdn_parent_service,
+        "cdn_nested": cdn_nested_services,
+        "web_slot_parent": web_slot_parent_service,
+        "web_slot_nested": web_slot_nested_services,
         "sb_parent": sb_parent_service,
         "sb_nested": sb_nested_services,
         "ecs_parent": ecs_parent_service,
@@ -2207,6 +2252,10 @@ def _build_simple_architecture_diagram(
             kv_nested_services = _h["kv_nested"]
             lb_parent_service = _h["lb_parent"]
             lb_nested_services = _h["lb_nested"]
+            cdn_parent_service = _h["cdn_parent"]
+            cdn_nested_services = _h["cdn_nested"]
+            web_slot_parent_service = _h["web_slot_parent"]
+            web_slot_nested_services = _h["web_slot_nested"]
             sb_parent_service = _h["sb_parent"]
             sb_nested_services = _h["sb_nested"]
             ecs_parent_service = _h["ecs_parent"]
@@ -2218,6 +2267,8 @@ def _build_simple_architecture_diagram(
                 | sql_nested_services
                 | kv_nested_services
                 | lb_nested_services
+                | cdn_nested_services
+                | web_slot_nested_services
                 | sb_nested_services
                 | ecs_nested_instances
                 | cosmos_nested_services
@@ -2458,6 +2509,52 @@ def _build_simple_architecture_diagram(
                         child_names = service_instances.get(lb_child, [])
                         child_label = f"{lb_child} ({child_names[0]})" if len(child_names) == 1 else lb_child
                         child_node = f"{svc_subgraph}_{re.sub(r'[^A-Za-z0-9]', '_', lb_child)}"
+                        lines.append(f'        {child_node}["{child_label}"]')
+                        style_id(child_node, layer_cat)
+                    lines.append("      end")
+                    exposure_target = svc_subgraph
+                    if exposure_target:
+                        service_anchor_nodes[service] = exposure_target
+                        is_public, ingress_label, insecure_http = _service_internet_posture(service, service_raw_all)
+                        if not _is_edge_gateway_service(service) and is_public:
+                            add_link("Internet", exposure_target, label=ingress_label, red=insecure_http)
+                    continue
+
+                # CDN profile with nested endpoints
+                is_cdn_with_children = service == cdn_parent_service and bool(cdn_nested_services)
+                if is_cdn_with_children:
+                    cdn_names = service_instances.get(service, [])
+                    cdn_label = f"{service} ({cdn_names[0]})" if len(cdn_names) == 1 else service
+                    svc_subgraph = f"{layer_id}_Svc_{p_idx}"
+                    lines.append(f'      subgraph {svc_subgraph}["{cdn_label}"]')
+                    style_id(svc_subgraph, layer_cat)
+                    for cdn_child in sorted(cdn_nested_services):
+                        child_names = service_instances.get(cdn_child, [])
+                        child_label = f"{cdn_child} ({child_names[0]})" if len(child_names) == 1 else cdn_child
+                        child_node = f"{svc_subgraph}_{re.sub(r'[^A-Za-z0-9]', '_', cdn_child)}"
+                        lines.append(f'        {child_node}["{child_label}"]')
+                        style_id(child_node, layer_cat)
+                    lines.append("      end")
+                    exposure_target = svc_subgraph
+                    if exposure_target:
+                        service_anchor_nodes[service] = exposure_target
+                        is_public, ingress_label, insecure_http = _service_internet_posture(service, service_raw_all)
+                        if not _is_edge_gateway_service(service) and is_public:
+                            add_link("Internet", exposure_target, label=ingress_label, red=insecure_http)
+                    continue
+
+                # Web App / Function App with nested deployment slots
+                is_slot_parent = service == web_slot_parent_service and bool(web_slot_nested_services)
+                if is_slot_parent:
+                    slot_names = service_instances.get(service, [])
+                    slot_label = f"{service} ({slot_names[0]})" if len(slot_names) == 1 else service
+                    svc_subgraph = f"{layer_id}_Svc_{p_idx}"
+                    lines.append(f'      subgraph {svc_subgraph}["{slot_label}"]')
+                    style_id(svc_subgraph, layer_cat)
+                    for slot_child in sorted(web_slot_nested_services):
+                        child_names = service_instances.get(slot_child, [])
+                        child_label = f"{slot_child} ({child_names[0]})" if len(child_names) == 1 else slot_child
+                        child_node = f"{svc_subgraph}_{re.sub(r'[^A-Za-z0-9]', '_', slot_child)}"
                         lines.append(f'        {child_node}["{child_label}"]')
                         style_id(child_node, layer_cat)
                     lines.append("      end")

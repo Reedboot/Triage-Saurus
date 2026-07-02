@@ -54,9 +54,10 @@
          <td>${s.public_count > 0 ? `<span style="color:#f59e0b;font-weight:600;">⚠ ${s.public_count}</span>` : '0'}</td>
          <td>${s.state || '—'}</td>
          <td style="font-size:0.8rem;">${formatDate(s.last_synced)}</td>
-         <td style="text-align:center;">
-           <a href="/cloud/assets?sub=${encodeURIComponent(s.id)}" class="btn btn-sm" style="padding:4px 12px; font-size:0.75rem; text-decoration:none;">📦 Show Assets</a>
-           <a href="${architectureUrl(s.id)}" target="_blank" rel="noopener noreferrer" class="btn btn-sm" style="padding:4px 12px; font-size:0.75rem; text-decoration:none; margin-left:6px;">🧭 React Flow</a>
+         <td>
+           <div class="subscriptions-actions-cell">
+             <a href="/cloud/assets?sub=${encodeURIComponent(s.id)}" class="btn btn-sm" style="padding:4px 12px; font-size:0.75rem; text-decoration:none;">📦 Show Assets</a>
+           </div>
          </td>
        </tr>
       `).join('');

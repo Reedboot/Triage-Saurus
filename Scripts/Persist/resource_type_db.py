@@ -89,6 +89,7 @@ _FALLBACK: dict[str, dict] = {
     "azurerm_linux_function_app":                 {"friendly_name": "Function App",             "category": "Compute",     "icon": "⚡", "parent_type": "azurerm_app_service_plan|azurerm_service_plan"},
     "azurerm_windows_function_app":               {"friendly_name": "Function App",             "category": "Compute",     "icon": "⚡", "parent_type": "azurerm_app_service_plan|azurerm_service_plan"},
     "azurerm_linux_web_app":                      {"friendly_name": "Linux Web App",             "category": "Compute",     "icon": "🌐"},
+    "azurerm_web_slots":                          {"friendly_name": "Web App Slot",             "category": "Compute",     "icon": "🌐", "display_on_architecture_chart": True, "parent_type": "azurerm_app_service|azurerm_function_app|azurerm_linux_web_app"},
     "azurerm_service_plan":                       {"friendly_name": "Service Plan",              "category": "Compute",     "icon": "⚙️"},
     "azurerm_automation_account":                 {"friendly_name": "Automation Account",       "category": "Other",       "icon": "⚙️"},
     "azurerm_automation_runbook":                 {"friendly_name": "Automation Runbook",       "category": "Other",       "icon": "📜", "display_on_architecture_chart": False, "parent_type": "azurerm_automation_account"},
@@ -99,6 +100,7 @@ _FALLBACK: dict[str, dict] = {
     "azurerm_kubernetes_cluster":                 {"friendly_name": "AKS Cluster",              "category": "Container",   "icon": "☸️"},
     "azurerm_kubernetes_cluster_node_pool":       {"friendly_name": "AKS Node Pool",            "category": "Container",   "icon": "🏊", "display_on_architecture_chart": False, "parent_type": "azurerm_kubernetes_cluster"},
     "azurerm_container_registry":                 {"friendly_name": "Container Registry",       "category": "Container",   "icon": "📦"},
+    "azurerm_databricks":                         {"friendly_name": "Databricks Workspace",     "category": "Compute",     "icon": "📊"},
     "azurerm_container_group":                    {"friendly_name": "Container Instance",       "category": "Container",   "icon": "📦"},
     # Azure — Network & Gateways
     "azurerm_application_gateway":                {"friendly_name": "Application Gateway",      "category": "Network",     "icon": "🌐"},
@@ -119,6 +121,9 @@ _FALLBACK: dict[str, dict] = {
     "azurerm_api_management_subscription":        {"friendly_name": "API Management Subscription", "category": "API",     "icon": "🔑", "display_on_architecture_chart": True,  "parent_type": "azurerm_api_management"},
     "azurerm_api_management_backend":             {"friendly_name": "APIM Backend",             "category": "API",         "icon": "🎯", "display_on_architecture_chart": True,  "parent_type": "azurerm_api_management"},
     "azurerm_api_management_named_value":         {"friendly_name": "APIM Named Value",         "category": "API",         "icon": "🔐", "display_on_architecture_chart": True,  "parent_type": "azurerm_api_management"},
+    "azurerm_kusto_cluster":                      {"friendly_name": "Kusto Cluster",            "category": "Database",    "icon": "📊"},
+    "azurerm_search":                             {"friendly_name": "Search Service",           "category": "Database",    "icon": "🔍"},
+    "azurerm_workflow":                           {"friendly_name": "Logic Workflow",           "category": "Serverless",  "icon": "⚡"},
     "azurerm_virtual_network":                    {"friendly_name": "Virtual Network",          "category": "Network",     "icon": "🔷"},
     "azurerm_subnet":                             {"friendly_name": "Subnet",                   "category": "Network",     "icon": "🕸️", "display_on_architecture_chart": False, "parent_type": "azurerm_virtual_network"},
     "azurerm_network_interface":                  {"friendly_name": "Network Interface",        "category": "Network",     "icon": "🔌", "display_on_architecture_chart": False, "parent_type": "azurerm_subnet|azurerm_virtual_machine|azurerm_linux_virtual_machine|azurerm_windows_virtual_machine"},
@@ -712,8 +717,14 @@ _AZURE_ARM_ALIASES: dict[str, str] = {
     "microsoft.certificateregistration/certificateorders": "azurerm_app_service_certificate_order",
     "microsoft.cdn/profiles": "azurerm_cdn_profile",
     "microsoft.cdn/profiles/afdendpoints": "azurerm_cdn_frontdoor_endpoint",
+    "microsoft.cdn/profiles/endpoints": "azurerm_cdn_frontdoor_endpoint",
+    "microsoft.databricks/workspaces": "azurerm_databricks",
+    "microsoft.eventgrid/topics": "azurerm_eventgrid_topic",
     "microsoft.network/privatednszones": "azurerm_private_dns_zone",
     "microsoft.network/privatednszones/virtualnetworklinks": "azurerm_private_dns_zone_virtual_network_link",
+    "microsoft.kusto/clusters": "azurerm_kusto_cluster",
+    "microsoft.logic/workflows": "azurerm_workflow",
+    "microsoft.search/searchservices": "azurerm_search",
     "microsoft.servicebus/namespaces": "azurerm_servicebus_namespace",
     "microsoft.servicebus/namespaces/queues": "azurerm_servicebus_queue",
     "microsoft.servicebus/namespaces/topics": "azurerm_servicebus_topic",
@@ -721,6 +732,7 @@ _AZURE_ARM_ALIASES: dict[str, str] = {
     "microsoft.eventhub/namespaces": "azurerm_eventhub_namespace",
     "microsoft.eventhub/namespaces/eventhubs": "azurerm_eventhub",
     "microsoft.eventhub/namespaces/eventhubs/consumergroups": "azurerm_eventhub_consumer_group",
+    "microsoft.web/sites/slots": "azurerm_web_slots",
 }
 
 

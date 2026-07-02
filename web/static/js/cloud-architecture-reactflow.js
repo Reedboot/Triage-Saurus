@@ -685,6 +685,11 @@ function openModal(resourceId, nodeData, lookup = {}) {
 function openNodePopup(resourceId, nodeData) {
   const resources = Array.isArray(nodeData?.resources) ? nodeData.resources.filter(Boolean) : [];
   const isGroupedNode = Boolean(nodeData?.is_group || nodeData?.isGroupNode || nodeData?.summaryNode || nodeData?.groupType);
+  const armType = String(nodeData?.arm_type || nodeData?.type || nodeData?.resourceType || "").toLowerCase();
+  const prefersChildDrilldown =
+    armType.includes("applicationgateway") ||
+    armType.includes("serverfarms") ||
+    armType.includes("hostingenvironments");
   if (resources.length > 1 || (isGroupedNode && resources.length > 0)) {
     if (currentMermaidSubscriptionId) {
       openDrilldownModal(nodeData, currentMermaidSubscriptionId);
@@ -692,6 +697,20 @@ function openNodePopup(resourceId, nodeData) {
     }
   } else if (resources.length === 1) {
     const resource = resources[0] || {};
+    if (prefersChildDrilldown && currentMermaidSubscriptionId) {
+      openDrilldownModal(
+        nodeData,
+        currentMermaidSubscriptionId,
+        () => openModal(resourceId, nodeData, {
+          id: resource.id,
+          name: resource.name,
+          resourceGroup: resource.rg,
+          type: nodeData?.arm_type || nodeData?.type || nodeData?.resourceType || "",
+          subscription: currentMermaidSubscriptionId,
+        }),
+      );
+      return;
+    }
     openModal(resourceId, nodeData, {
       id: resource.id,
       name: resource.name,
@@ -704,7 +723,7 @@ function openNodePopup(resourceId, nodeData) {
   openModal(resourceId, nodeData);
 }
 
-function openDrilldownModal(entry, subId) {
+function openDrilldownModal(entry, subId, fallback = null) {
   if (!modalOverlay || !subId) return;
   const controller = startModalRequest();
 
@@ -725,6 +744,13 @@ function openDrilldownModal(entry, subId) {
         throw new Error(data.error);
       }
       if (controller.signal.aborted) return;
+      const hasRows =
+        (Array.isArray(data?.rows) && data.rows.length > 0) ||
+        (Array.isArray(data?.sections) && data.sections.some((section) => Array.isArray(section?.rows) && section.rows.length > 0));
+      if (!hasRows && typeof fallback === "function") {
+        fallback();
+        return;
+      }
       try {
         renderModalContent(data);
       } catch (err) {

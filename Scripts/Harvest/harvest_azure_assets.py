@@ -55,6 +55,7 @@ from Azure import app_gateway, apim, web_apps, function_apps, aks, storage, key_
 from Azure import cosmos_db, app_service_plan, service_bus, container_registry, virtual_network
 from Azure import redis_cache, event_hub, app_configuration, service_fabric, cognitive_services
 from Azure import data_factory, app_service_environment, app_insights, private_endpoint, traffic_manager
+from Azure import databricks, event_grid, kusto, logic_apps, search_service
 from Azure import front_door, firewall
 from Azure import network_security_group, route_table, public_ip, load_balancer, bastion_host
 from Azure import user_assigned_identity, virtual_machine, virtual_machine_scale_set, image
@@ -90,9 +91,12 @@ PROVIDERS = [
     ("SQL Servers",             sql_server.harvest),
     ("Redis Cache",             redis_cache.harvest),
     ("Storage",                 storage.harvest),
+    ("Databricks",              databricks.harvest),
     # ── Messaging / Integration ──────────────────────────────────────────
     ("Event Hubs",              event_hub.harvest),
+    ("Event Grid",              event_grid.harvest),
     ("Service Bus",             service_bus.harvest),
+    ("Logic Apps",              logic_apps.harvest),
     ("Data Factory",            data_factory.harvest),
     # ── AI / ML ─────────────────────────────────────────────────────────
     ("Cognitive Services",      cognitive_services.harvest),
@@ -117,6 +121,9 @@ PROVIDERS = [
     ("Load Balancers",          load_balancer.harvest),
     ("Bastion Hosts",           bastion_host.harvest),
     ("Firewalls",               firewall.harvest),
+    # ── Search / Kusto ───────────────────────────────────────────────────
+    ("Search Services",         search_service.harvest),
+    ("Kusto Clusters",          kusto.harvest),
 ]
 
 HarvestOutput = list[dict[str, Any]] | StagedRows

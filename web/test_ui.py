@@ -1171,7 +1171,7 @@ class TestCloudPage:
     # ── Bug #3: Double-click on drillable node opens drill-down panel ──────
 
     def test_dblclick_opens_drilldown_panel(self, page: Page, live_server: str):
-        """Double-clicking a drillable node (⤵ badge) must open the drill-down modal
+        """Clicking a drillable node (⤵ badge) must open the drill-down modal
         and render a table with the resource details."""
         self._load_diagram(page, live_server, self._MERMAID_DISTINCT_LABELS)
 
@@ -1179,7 +1179,7 @@ class TestCloudPage:
         drillable = page.locator("#ingress-diagram-div svg g.node-drillable")
         expect(drillable).to_have_count(1, timeout=5000)
 
-        drillable.dblclick()
+        drillable.click()
 
         # Drill-down modal should appear with a data table
         expect(page.locator("#drilldown-modal")).to_be_visible(timeout=8000)
@@ -1191,6 +1191,7 @@ class TestCloudPage:
         expect(page.locator("#drilldown-modal table")).to_be_visible(timeout=5000)
         expect(page.locator("#drilldown-modal")).to_contain_text("Resource type:")
         expect(page.locator("#drilldown-modal")).to_contain_text("microsoft.network/applicationgateways")
+        expect(page.locator("#drilldown-modal")).to_contain_text("Listener / Hostname")
         # Table should contain the mocked row data
         expect(page.locator("#drilldown-modal table td").first).to_contain_text("test-appgw")
         fqdn_link = page.locator("#drilldown-modal a[href='https://gw.example.com']").first
@@ -2355,7 +2356,8 @@ class TestIngressDiagramGeneration:
         assert result["view_type"] == "tree_table", result
         assert result["sections"], result
         rows = result["sections"][0]["rows"]
-        assert rows and all(row.get("parent_id") is None for row in rows), rows
+        assert any(row.get("parent_id") is None for row in rows), rows
+        assert any(row.get("parent_id") is not None for row in rows), rows
         assert any(
             isinstance(row.get("cells"), list) and "🛡️ waf-policy-prod" in row["cells"][-1].lower()
             for row in rows
@@ -3426,7 +3428,8 @@ class TestCloudPosture:
                     id TEXT PRIMARY KEY,
                     display_name TEXT,
                     environment TEXT,
-                    state TEXT
+                    state TEXT,
+                    last_synced TEXT
                 );
                 CREATE TABLE provisioned_assets (
                     id TEXT PRIMARY KEY,
@@ -3460,7 +3463,7 @@ class TestCloudPosture:
             )
             conn.execute(
                 "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
-                ("sub-1", "Test Subscription", "production", "Enabled"),
+                ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
             )
             conn.execute(
                 """
@@ -3511,8 +3514,8 @@ class TestCloudPosture:
             """
         )
         conn.execute(
-            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
-            ("sub-1", "Test Subscription", "production", "Enabled"),
+            "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
         )
         conn.commit()
         monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
@@ -3543,7 +3546,8 @@ class TestCloudPosture:
                 id TEXT PRIMARY KEY,
                 display_name TEXT,
                 environment TEXT,
-                state TEXT
+                state TEXT,
+                last_synced TEXT
             );
             CREATE TABLE provisioned_assets (
                 id TEXT PRIMARY KEY,
@@ -3568,8 +3572,8 @@ class TestCloudPosture:
         )
         nsg_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/production_windows"
         conn.execute(
-            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
-            ("sub-1", "Test Subscription", "production", "Enabled"),
+            "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
         )
         conn.execute(
             """
@@ -3627,7 +3631,8 @@ class TestCloudPosture:
                 id TEXT PRIMARY KEY,
                 display_name TEXT,
                 environment TEXT,
-                state TEXT
+                state TEXT,
+                last_synced TEXT
             );
             CREATE TABLE provisioned_assets (
                 id TEXT PRIMARY KEY,
@@ -3684,8 +3689,8 @@ class TestCloudPosture:
             """
         )
         conn.execute(
-            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
-            ("sub-1", "Test Subscription", "production", "Enabled"),
+            "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
         )
         conn.execute(
             """
@@ -3757,7 +3762,8 @@ class TestCloudPosture:
                 id TEXT PRIMARY KEY,
                 display_name TEXT,
                 environment TEXT,
-                state TEXT
+                state TEXT,
+                last_synced TEXT
             );
             CREATE TABLE provisioned_assets (
                 id TEXT PRIMARY KEY,
@@ -3825,8 +3831,8 @@ class TestCloudPosture:
             """
         )
         conn.execute(
-            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
-            ("sub-1", "Test Subscription", "production", "Enabled"),
+            "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
         )
         public_ip_id = "/subscriptions/sub-1/resourceGroups/blue-network-ukwest/providers/Microsoft.Network/publicIPAddresses/bastion"
         conn.executemany(
@@ -3952,7 +3958,8 @@ class TestCloudPosture:
                 id TEXT PRIMARY KEY,
                 display_name TEXT,
                 environment TEXT,
-                state TEXT
+                state TEXT,
+                last_synced TEXT
             );
             CREATE TABLE provisioned_assets (
                 id TEXT PRIMARY KEY,
@@ -3975,10 +3982,11 @@ class TestCloudPosture:
             """
         )
         conn.execute(
-            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
-            ("sub-1", "Test Subscription", "production", "Enabled"),
+            "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
         )
         public_ip_id = "/subscriptions/sub-1/resourceGroups/blue-network-ukwest/providers/Microsoft.Network/publicIPAddresses/bastion"
+        subnet_id = "/subscriptions/sub-1/resourceGroups/blue-network-ukwest/providers/Microsoft.Network/virtualNetworks/blue-vnet/subnets/bastion-subnet"
         bastion_id = "/subscriptions/sub-1/resourceGroups/blue-network-ukwest/providers/Microsoft.Network/bastionHosts/bastion"
         conn.executemany(
             """
@@ -3989,6 +3997,31 @@ class TestCloudPosture:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
+                (
+                    subnet_id,
+                    "sub-1",
+                    "blue-network-ukwest",
+                    "bastion-subnet",
+                    "Microsoft.Network/virtualNetworks/subnets",
+                    "uksouth",
+                    None,
+                    None,
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({
+                        "properties": {"addressPrefix": "10.0.1.0/24"},
+                        "_extra": {
+                            "parent_vnet_name": "blue-vnet",
+                            "parent_vnet_resource_group": "blue-network-ukwest",
+                            "subnet_name": "bastion-subnet",
+                        },
+                    }),
+                    0,
+                    None,
+                ),
                 (
                     bastion_id,
                     "sub-1",
@@ -4294,6 +4327,7 @@ class TestCloudPosture:
             ("sub-1", "Test Subscription", "production", "Enabled"),
         )
         public_ip_id = "/subscriptions/sub-1/resourceGroups/blue-network-ukwest/providers/Microsoft.Network/publicIPAddresses/bastion"
+        subnet_id = "/subscriptions/sub-1/resourceGroups/blue-network-ukwest/providers/Microsoft.Network/virtualNetworks/blue-vnet/subnets/bastion-subnet"
         bastion_id = "/subscriptions/sub-1/resourceGroups/blue-network-ukwest/providers/Microsoft.Network/bastionHosts/bastion"
         conn.executemany(
             """
@@ -4304,6 +4338,31 @@ class TestCloudPosture:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
+                (
+                    subnet_id,
+                    "sub-1",
+                    "blue-network-ukwest",
+                    "bastion-subnet",
+                    "Microsoft.Network/virtualNetworks/subnets",
+                    "uksouth",
+                    None,
+                    None,
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({
+                        "properties": {"addressPrefix": "10.0.1.0/24"},
+                        "_extra": {
+                            "parent_vnet_name": "blue-vnet",
+                            "parent_vnet_resource_group": "blue-network-ukwest",
+                            "subnet_name": "bastion-subnet",
+                        },
+                    }),
+                    0,
+                    None,
+                ),
                 (
                     bastion_id,
                     "sub-1",
@@ -4322,7 +4381,12 @@ class TestCloudPosture:
                         {
                             "properties": {
                                 "ipConfigurations": [
-                                    {"properties": {"publicIPAddress": {"id": public_ip_id}}}
+                                    {
+                                        "properties": {
+                                            "subnet": {"id": subnet_id},
+                                            "publicIPAddress": {"id": public_ip_id},
+                                        }
+                                    }
                                 ]
                             }
                         }
@@ -4372,6 +4436,23 @@ class TestCloudPosture:
         details = details_resp.get_json()
         assert details["fqdn"] == "bastion.example.com"
         assert "20.30.40.50" in details["network"]["public_ips"]
+
+        diagram_resp = client.get("/api/subscriptions/sub-1/diagram")
+        assert diagram_resp.status_code == 200, diagram_resp.get_data(as_text=True)
+        diagram = diagram_resp.get_json()
+        mermaid = diagram["ingress_diagram"]["mermaid"]
+        assert "Subnet: bastion-subnet" in mermaid, mermaid
+        subnet_block = mermaid[mermaid.index("Subnet: bastion-subnet"):]
+        assert "Bastion" in subnet_block.split("end", 1)[0], mermaid
+
+        diagram_resp = client.get("/api/subscriptions/sub-1/diagram")
+        assert diagram_resp.status_code == 200, diagram_resp.get_data(as_text=True)
+        diagram = diagram_resp.get_json()
+        mermaid = diagram["ingress_diagram"]["mermaid"]
+        assert "Subnet: bastion-subnet" in mermaid, mermaid
+        assert "Bastion" in mermaid, mermaid
+        subnet_block = mermaid[mermaid.index("Subnet: bastion-subnet"):]
+        assert "Bastion" in subnet_block.split("end", 1)[0], mermaid
         os.unlink(tmp.name)
 
     def test_api_cloud_architecture_surfaces_public_load_balancer_via_associated_public_ip(self, monkeypatch):

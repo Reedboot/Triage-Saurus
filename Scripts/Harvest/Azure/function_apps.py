@@ -59,6 +59,8 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             }),
         })
 
+        results.extend(_harvest_slots(app, subscription_id, ase_ilb_map))
+
     return results
 
 
@@ -126,6 +128,63 @@ def _os_type_from_kind(kind: str | None) -> str | None:
     if "windows" in kind_l:
         return "Windows"
     return None
+
+
+def _harvest_slots(
+    app: dict[str, Any],
+    subscription_id: str,
+    ase_ilb_map: dict[str, bool] | None = None,
+) -> list[dict[str, Any]]:
+    app_name = safe_str(app.get("name"))
+    resource_group = safe_str(app.get("resourceGroup"))
+    if not app_name or not resource_group:
+        return []
+
+    try:
+        slots = az(
+            ["functionapp", "deployment", "slot", "list", "--name", app_name, "--resource-group", resource_group],
+            subscription_id,
+        )
+    except Exception:
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for slot in slots:
+        fqdn = safe_str(slot.get("defaultHostName")) or infer_fqdn(slot)
+        is_public, is_restricted, ip_restrictions = _classify_exposure(slot, ase_ilb_map)
+        kind = safe_str(slot.get("kind"))
+        slot_tags = slot.get("tags") or {}
+        pipeline_tag = None
+        for key in ("pipeline", "Pipeline", "ado-pipeline", "build-pipeline"):
+            if key in slot_tags:
+                pipeline_tag = safe_str(slot_tags[key])
+                break
+        rows.append({
+            "id": slot["id"],
+            "subscription_id": subscription_id,
+            "resource_group": slot.get("resourceGroup") or resource_group,
+            "name": slot.get("name"),
+            "type": slot.get("type", "Microsoft.Web/sites/slots"),
+            "location": slot.get("location"),
+            "sku": infer_sku(slot),
+            "tags": json.dumps(slot.get("tags") or {}),
+            "is_public": is_public,
+            "is_restricted": is_restricted,
+            "ip_restrictions": json.dumps(ip_restrictions),
+            "endpoints": build_endpoints([(fqdn, 443, "https")] if fqdn else []),
+            "auth_methods": json.dumps(_get_auth_methods(slot)),
+            "fqdn": fqdn,
+            "pipeline_tag": pipeline_tag,
+            "raw_json": json.dumps({
+                **slot,
+                "_extra": {
+                    "os_type": _os_type_from_kind(kind),
+                    "slot_parent": app_name,
+                    "slot_name": safe_str(slot.get("name")),
+                },
+            }),
+        })
+    return rows
 
 
 def _extract_function_name(function_item: dict[str, Any]) -> str | None:

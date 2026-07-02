@@ -258,7 +258,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
                     "subscription_id": subscription_id,
                     "resource_group": profile.get("resourceGroup"),
                     "name": endpoint_name,
-                    "type": endpoint.get("type", "Microsoft.Cdn/profiles/afdEndpoints"),
+                    "type": endpoint.get("type", "Microsoft.Cdn/profiles/endpoints"),
                     "location": profile.get("location"),
                     "sku": infer_sku(profile),
                     "tags": json.dumps(profile.get("tags") or {}),
