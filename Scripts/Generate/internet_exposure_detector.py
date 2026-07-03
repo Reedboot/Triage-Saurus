@@ -217,6 +217,16 @@ class InternetExposureDetector:
         'internet_ingress_open',  # Security group/rule allows ingress from 0.0.0.0
     }
 
+    APIM_PRIVATE_TOKENS = (
+        'public_network_access_enabled=false',
+        'virtual_network_type=internal',
+        'virtual_network_type=injected',
+        'virtual_network_type=private',
+        'private_endpoint',
+        'ip_restrictions',
+        'iprestriction',
+    )
+
     def __init__(self, provider: str):
         """
         Initialize detector for a specific provider.
@@ -333,7 +343,166 @@ class InternetExposureDetector:
                 elif confidence_rank.get(detail.confidence, 0) > confidence_rank.get(exposed[resource_name].confidence, 0):
                     exposed[resource_name] = detail
 
+        self._collapse_apim_public_ip_exposures(resources, properties, exposed)
+
         return exposed
+
+    def _is_apim_resource_type(self, resource_type: str) -> bool:
+        rt = (resource_type or '').lower()
+        if not rt:
+            return False
+        if 'api_management_api_operation' in rt or 'api_management_product_api' in rt:
+            return False
+        if 'api_management_api' in rt or 'api_management_product' in rt or 'api_management_subscription' in rt:
+            return False
+        return 'api_management' in rt or rt == 'apim' or rt == 'azurerm_apim'
+
+    def _is_private_apim(self, props: Dict[str, str]) -> bool:
+        if not props:
+            return False
+
+        def _truthy(value: str) -> bool:
+            return str(value or '').strip().lower() in {'true', '1', 'yes', 'enabled'}
+
+        def _falsy(value: str) -> bool:
+            return str(value or '').strip().lower() in {'false', '0', 'no', 'disabled'}
+
+        for key, value in props.items():
+            k = re.sub(r'[^a-z0-9]+', '', str(key or '').strip().lower())
+            v = str(value or '').strip().lower()
+            if k in {'publicnetworkaccess', 'publicnetworkaccessenabled'} and _falsy(v):
+                return True
+            if k == 'virtualnetworktype' and any(tok in v for tok in ('internal', 'injected', 'private')):
+                return True
+            if 'privateendpoint' in k and (_truthy(v) or 'enabled' in v):
+                return True
+            if 'iprestriction' in k and v:
+                return True
+        return False
+
+    def _is_public_apim(self, props: Dict[str, str]) -> bool:
+        """Return True only when APIM networking settings indicate public ingress."""
+        if not props or self._is_private_apim(props):
+            return False
+
+        normalized: Dict[str, str] = {}
+        for key, value in props.items():
+            k = re.sub(r'[^a-z0-9]+', '', str(key or '').strip().lower())
+            if k:
+                normalized[k] = str(value or '').strip().lower()
+
+        public_access = normalized.get('publicnetworkaccess') or normalized.get('publicnetworkaccessenabled')
+        vnet_type = normalized.get('virtualnetworktype', '')
+
+        if public_access in {'false', '0', 'no', 'disabled'}:
+            return False
+
+        # APIM is public when it is explicitly not internal and the public endpoint is enabled.
+        if vnet_type in {'none', 'external'}:
+            return public_access in {'true', '1', 'yes', 'enabled'} or public_access == ''
+
+        # If VNet mode is unknown, be conservative and do not infer public exposure.
+        return False
+
+    def _apim_ip_restriction_summary(self, props: Dict[str, str]) -> str:
+        if not props:
+            return ''
+        values: list[str] = []
+        for key in ('ip_restrictions', 'ip_restriction', 'ipRules', 'ipSecurityRestrictions'):
+            raw = props.get(key)
+            if not raw:
+                continue
+            text = str(raw).strip()
+            if text and text not in values:
+                values.append(text)
+        if values:
+            return 'IP restrictions configured'
+        return 'no IP restrictions detected'
+
+    def _collapse_apim_public_ip_exposures(
+        self,
+        resources: List[Dict],
+        properties: Optional[Dict[int, Dict[str, str]]],
+        exposed: Dict[str, ExposureDetail],
+    ) -> None:
+        if not resources:
+            return
+
+        resource_by_id = {
+            r.get('id'): r
+            for r in resources
+            if r.get('id') is not None
+        }
+        properties = properties or {}
+
+        for resource in resources:
+            resource_type = (resource.get('resource_type') or '').lower()
+            if 'public_ip' not in resource_type or 'association' in resource_type:
+                continue
+
+            parent_id = resource.get('parent_resource_id')
+            if parent_id is None:
+                continue
+
+            parent = resource_by_id.get(parent_id)
+            if not parent:
+                continue
+
+            parent_type = (parent.get('resource_type') or '').lower()
+            if not self._is_apim_resource_type(parent_type):
+                continue
+
+            parent_name = parent.get('resource_name')
+            child_name = resource.get('resource_name')
+            if not parent_name or not child_name:
+                continue
+
+            parent_props = properties.get(parent.get('id'), {})
+            child_detail = exposed.get(child_name)
+            parent_detail = exposed.get(parent_name)
+
+            reason_bits = ['public IP attached to APIM']
+            restriction_summary = self._apim_ip_restriction_summary(parent_props)
+            if restriction_summary:
+                reason_bits.append(restriction_summary)
+
+            if self._is_private_apim(parent_props):
+                if child_name in exposed:
+                    exposed.pop(child_name, None)
+                continue
+
+            if not self._is_public_apim(parent_props):
+                if child_name in exposed:
+                    exposed.pop(child_name, None)
+                continue
+
+            if parent_detail is None:
+                exposed[parent_name] = ExposureDetail(
+                    resource_name=parent_name,
+                    resource_id=parent.get('id'),
+                    exposure_type='property',
+                    confidence=child_detail.confidence if child_detail else 'medium',
+                    reason='; '.join(reason_bits),
+                    color=(child_detail.color if child_detail else self.COLORS['property']),
+                    detection_methods=list(child_detail.detection_methods) if child_detail else ['Public IP attachment'],
+                )
+            else:
+                if child_detail and child_detail.confidence:
+                    rank = {'low': 1, 'medium': 2, 'high': 3}
+                    if rank.get(child_detail.confidence, 0) > rank.get(parent_detail.confidence, 0):
+                        parent_detail.confidence = child_detail.confidence
+                        parent_detail.color = child_detail.color
+                merged_reason = parent_detail.reason or ''
+                note = '; '.join(reason_bits)
+                if note.lower() not in merged_reason.lower():
+                    parent_detail.reason = f"{merged_reason} ({note})" if merged_reason else note
+                if child_detail and child_detail.detection_methods:
+                    for method in child_detail.detection_methods:
+                        if method not in parent_detail.detection_methods:
+                            parent_detail.detection_methods.append(method)
+
+            if child_name in exposed and exposed.get(child_name, None) is not exposed.get(parent_name, None):
+                exposed.pop(child_name, None)
 
     def _detect_by_findings(
         self,
@@ -563,6 +732,16 @@ class InternetExposureDetector:
                 if resource_type in self.PRIVATE_OVERRIDE:
                     continue
 
+                if self._is_apim_resource_type(resource_type):
+                    apim_props = props
+                    if self._is_private_apim(apim_props):
+                        continue
+                    if any(
+                        key in apim_props
+                        for key in ('ip_restrictions', 'ip_restriction', 'ipRules', 'ipSecurityRestrictions')
+                    ):
+                        reason_parts.append(self._apim_ip_restriction_summary(apim_props))
+
                 exposed[resource_name] = ExposureDetail(
                     resource_name=resource_name,
                     resource_id=resource_id,
@@ -766,6 +945,11 @@ class InternetExposureDetector:
                 # Additional heuristic: skip resources with "private" in name
                 if 'private' in resource_name.lower():
                     continue
+
+                if self._is_apim_resource_type(resource_type):
+                    r_props = props_map.get(resource_id, {})
+                    if not self._is_public_apim(r_props):
+                        continue
 
                 # Azure SQL servers: skip if explicitly VNet-restricted or public_network_access disabled
                 if resource_type in AZURE_SQL_TYPES:

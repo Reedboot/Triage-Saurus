@@ -181,6 +181,85 @@ class TestInternetExposureDetector:
         
         # Should NOT be exposed despite being an App Service
         assert 'private-app-service' not in exposed
+
+    def test_apim_public_ip_is_collapsed_to_apim_parent(self):
+        """APIM public IP children should collapse onto the APIM node itself."""
+        detector = InternetExposureDetector('azure')
+
+        resources = [
+            {'id': 1, 'resource_name': 'shared-apim', 'resource_type': 'azurerm_api_management'},
+            {'id': 2, 'resource_name': 'shared-apim-pip', 'resource_type': 'azurerm_public_ip', 'parent_resource_id': 1},
+        ]
+
+        properties = {
+            1: {
+                'publicNetworkAccess': 'Enabled',
+                'virtualNetworkType': 'External',
+            }
+        }
+
+        exposed = detector.detect_exposed_resources(resources, [], findings=None, properties=properties)
+
+        assert 'shared-apim' in exposed
+        assert 'shared-apim-pip' not in exposed
+        assert 'public ip attached to apim' in exposed['shared-apim'].reason.lower()
+
+    def test_apim_internal_mode_blocks_public_ip_exposure(self):
+        """APIM in Internal mode should stay private even with a public IP child."""
+        detector = InternetExposureDetector('azure')
+
+        resources = [
+            {'id': 1, 'resource_name': 'internal-apim', 'resource_type': 'azurerm_api_management'},
+            {'id': 2, 'resource_name': 'internal-apim-pip', 'resource_type': 'azurerm_public_ip', 'parent_resource_id': 1},
+        ]
+
+        properties = {
+            1: {
+                'publicNetworkAccess': 'Enabled',
+                'virtualNetworkType': 'Internal',
+            }
+        }
+
+        exposed = detector.detect_exposed_resources(resources, [], findings=None, properties=properties)
+
+        assert 'internal-apim' not in exposed
+        assert 'internal-apim-pip' not in exposed
+
+    def test_apim_none_mode_still_exposes_public_ingress(self):
+        """APIM with no VNet mode should still expose public ingress."""
+        detector = InternetExposureDetector('azure')
+
+        resources = [
+            {'id': 1, 'resource_name': 'public-apim', 'resource_type': 'azurerm_api_management'},
+            {'id': 2, 'resource_name': 'public-apim-pip', 'resource_type': 'azurerm_public_ip', 'parent_resource_id': 1},
+        ]
+
+        properties = {
+            1: {
+                'publicNetworkAccess': 'Enabled',
+                'virtualNetworkType': 'None',
+            }
+        }
+
+        exposed = detector.detect_exposed_resources(resources, [], findings=None, properties=properties)
+
+        assert 'public-apim' in exposed
+        assert 'public-apim-pip' not in exposed
+        assert 'public ip attached to apim' in exposed['public-apim'].reason.lower()
+
+    def test_apim_public_ip_without_network_settings_does_not_imply_public_access(self):
+        """A public IP child alone should not make APIM look public."""
+        detector = InternetExposureDetector('azure')
+
+        resources = [
+            {'id': 1, 'resource_name': 'mystery-apim', 'resource_type': 'azurerm_api_management'},
+            {'id': 2, 'resource_name': 'mystery-apim-pip', 'resource_type': 'azurerm_public_ip', 'parent_resource_id': 1},
+        ]
+
+        exposed = detector.detect_exposed_resources(resources, [], findings=None, properties=None)
+
+        assert 'mystery-apim' not in exposed
+        assert 'mystery-apim-pip' not in exposed
     
     def test_confidence_ranking(self):
         """Test that multiple detection methods select highest confidence."""

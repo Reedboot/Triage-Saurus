@@ -33,6 +33,11 @@ if (rootEl) {
   rootEl.hidden = activeViewMode === "mermaid";
 }
 
+function cacheBustUrl(url) {
+  const stamp = `t=${Date.now()}`;
+  return `${url}${url.includes("?") ? "&" : "?"}${stamp}`;
+}
+
 function escapeMermaidText(value) {
   return String(value ?? "")
     .replace(/\\/g, "\\\\")
@@ -659,7 +664,11 @@ function openModal(resourceId, nodeData, lookup = {}) {
     }
   }
   
-  fetch(url.toString(), { headers: { Accept: "application/json" }, signal: controller.signal })
+  fetch(cacheBustUrl(url.toString()), {
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+    signal: controller.signal,
+  })
     .then(async (resp) => {
       if (controller.signal.aborted) return;
       const data = await readJsonResponse(resp);
@@ -771,6 +780,9 @@ function renderModalContent(data) {
   modalSubtitle.textContent = data.type_label ? `${data.type_label}${data.resource_group ? " • " + data.resource_group : ""}` : (data.resource_group || "");
   setModalHeaderIcon(data.icon_path || data.parent_resource?.icon_path || "", "☁");
 
+  const suppressParentHeading =
+    String(data.title || data.name || "").toLowerCase() === "simulation-knowledgecentre-uksouth" &&
+    String(data.type_label || data.type || data.resourceType || "").toLowerCase().includes("app service plan");
   const dataTypeKey = normalizeResourceTypeKey(data.type || data.resourceType || data.type_label);
   const parentTypeKey = normalizeResourceTypeKey(data.parent_resource?.type || data.parent_resource?.type_label);
   const hasDistinctParent = data.parent_resource && data.parent_resource.name && data.parent_resource.type_label && dataTypeKey && parentTypeKey && dataTypeKey !== parentTypeKey;
@@ -778,7 +790,7 @@ function renderModalContent(data) {
 
   if (hasDistinctParent) {
     sections.push({
-      title: "Parent Resource",
+      title: suppressParentHeading ? "" : "Parent Resource",
       icon: data.parent_resource.icon_path
         ? `<img src="${escapeHtml(data.parent_resource.icon_path)}" alt="" aria-hidden="true" style="width:18px;height:18px;object-fit:contain;vertical-align:middle;" />`
         : "🔗",
@@ -959,14 +971,15 @@ function renderModalContent(data) {
       
       return `
         <div class="cloud-arch-modal-section">
-          <div class="cloud-arch-modal-section-title">
-            <span class="cloud-arch-modal-section-icon">${section.icon}</span>
-            ${section.title}
+            ${section.title ? `
+            <div class="cloud-arch-modal-section-title">
+              <span class="cloud-arch-modal-section-icon">${section.icon}</span>
+              ${section.title}
+            </div>` : ""}
+            <div class="cloud-arch-modal-grid">
+              ${fieldsHtml}
+            </div>
           </div>
-          <div class="cloud-arch-modal-grid">
-            ${fieldsHtml}
-          </div>
-        </div>
       `;
     }).join('');
     
@@ -1418,7 +1431,10 @@ function App() {
     url.searchParams.set("view", mode);
 
     try {
-      const resp = await fetch(url.toString(), { headers: { Accept: "application/json" } });
+      const resp = await fetch(cacheBustUrl(url.toString()), {
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
       const payload = await readJsonResponse(resp);
       if (!resp.ok) {
         throw new Error(payload?.error || `Request failed with status ${resp.status}`);
@@ -1692,7 +1708,7 @@ for (const button of viewButtons) {
     
     // Load Mermaid support when switching to mermaid mode
     if (mode === "mermaid" && !window.__triageCloudArchLoadMermaid) {
-      import("./cloud-architecture-mermaid.js").then(() => {
+      import("./cloud-architecture-mermaid.js?v=14").then(() => {
         if (typeof window.__triageCloudArchLoad === "function") {
           window.__triageCloudArchLoad((subscriptionInput.value || "").trim(), activeViewMode);
         }

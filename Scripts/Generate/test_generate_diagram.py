@@ -199,6 +199,101 @@ def test_public_ip_collapse_targets_vm_not_vnet(monkeypatch):
     assert diagram.startswith("flowchart TB")
 
 
+def test_apim_public_ip_is_collapsed_into_apim_node(monkeypatch):
+    """Test that APIM-linked public IPs are hidden and kept on APIM."""
+    builder = HierarchicalDiagramBuilder("exp-1")
+
+    resources = [
+        {
+            "id": 1,
+            "resource_name": "shared-apim",
+            "resource_type": "azurerm_api_management",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 2,
+            "resource_name": "shared-apim-pip",
+            "resource_type": "azurerm_public_ip",
+            "provider": "azure",
+            "repo_name": "repo",
+            "parent_resource_id": 1,
+        },
+    ]
+
+    def fake_load_data():
+        builder.resources = resources
+        builder.connections = []
+        builder.children_by_parent = {1: [resources[1]]}
+        builder.exposed_resources = {}
+        builder.resource_by_id = {r["id"]: r for r in resources}
+        builder.resource_by_name = {r["resource_name"]: r for r in resources}
+
+    monkeypatch.setattr(builder, "load_data", fake_load_data)
+    monkeypatch.setattr(builder, "infer_connections", lambda: False)
+
+    diagram = builder.generate()
+
+    assert "shared-apim" in diagram
+    assert "shared-apim-pip" not in diagram
+
+
+def test_application_gateway_routing_rule_stays_with_subnet(monkeypatch):
+    """App Gateway routing rules should render inside the gateway's subnet."""
+    builder = HierarchicalDiagramBuilder("exp-1")
+
+    resources = [
+        {
+            "id": 1,
+            "resource_name": "prod-vnet",
+            "resource_type": "azurerm_virtual_network",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 2,
+            "resource_name": "appgw-subnet",
+            "resource_type": "azurerm_subnet",
+            "provider": "azure",
+            "repo_name": "repo",
+            "parent_resource_id": 1,
+        },
+        {
+            "id": 3,
+            "resource_name": "prod-appgw",
+            "resource_type": "azurerm_application_gateway",
+            "provider": "azure",
+            "repo_name": "repo",
+            "parent_resource_id": 2,
+        },
+        {
+            "id": 4,
+            "resource_name": "prod-appgw-route",
+            "resource_type": "azurerm_application_gateway_request_routing_rule",
+            "provider": "azure",
+            "repo_name": "repo",
+            "parent_resource_id": 3,
+        },
+    ]
+
+    def fake_load_data():
+        builder.resources = resources
+        builder.connections = []
+        builder.children_by_parent = {1: [resources[1]], 2: [resources[2]], 3: [resources[3]]}
+        builder.exposed_resources = {}
+        builder.resource_by_id = {r["id"]: r for r in resources}
+        builder.resource_by_name = {r["resource_name"]: r for r in resources}
+
+    monkeypatch.setattr(builder, "load_data", fake_load_data)
+    monkeypatch.setattr(builder, "infer_connections", lambda: False)
+
+    diagram = builder.generate()
+    lines = diagram.splitlines()
+
+    assert any(line.startswith("      ") and "prod-appgw" in line for line in lines)
+    assert any(line.startswith("        ") and "prod-appgw-route" in line for line in lines)
+
+
 def test_top_level_azure_nsg_with_nic_association_wraps_vm(monkeypatch):
     """Azure NSGs should not render as orphan nodes when only the VM path remains visible."""
     builder = HierarchicalDiagramBuilder("exp-1")

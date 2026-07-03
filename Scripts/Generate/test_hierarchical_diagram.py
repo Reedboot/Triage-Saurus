@@ -221,8 +221,47 @@ def test_subnet_subgraph_uses_gray_border():
 
     assert 'subgraph app_subnet[' in diagram
     assert 'app-vm' in diagram
-    assert 'style app_subnet stroke:#94a3b8,stroke-width:2px' in diagram
+    assert 'style app_subnet stroke:#94a3b8' in diagram
     assert 'style app_subnet stroke:#7e57c2' not in diagram
+
+
+def test_bastion_host_renders_inside_subnet_subgraph():
+    builder = HierarchicalDiagramBuilder("exp-1")
+
+    vnet = {
+        'id': 1,
+        'resource_name': 'prod-vnet',
+        'resource_type': 'azurerm_virtual_network',
+        'provider': 'azure',
+        'repo_name': 'repo',
+    }
+    subnet = {
+        'id': 2,
+        'resource_name': 'AzureBastionSubnet',
+        'resource_type': 'azurerm_subnet',
+        'provider': 'azure',
+        'repo_name': 'repo',
+        'parent_resource_id': 1,
+    }
+    bastion = {
+        'id': 3,
+        'resource_name': 'prod-bastion',
+        'resource_type': 'azurerm_bastion_host',
+        'provider': 'azure',
+        'repo_name': 'repo',
+        'parent_resource_id': 2,
+    }
+
+    builder.resources = [vnet, subnet, bastion]
+    builder.resource_by_id = {1: vnet, 2: subnet, 3: bastion}
+    builder.resource_by_name = {r['resource_name']: r for r in builder.resources}
+    builder.children_by_parent = {1: [subnet], 2: [bastion]}
+
+    network_lines = builder.render_network_hierarchy([vnet, subnet], [])
+    diagram = "\n".join(network_lines)
+
+    assert 'subgraph AzureBastionSubnet[' in diagram
+    assert 'prod-bastion' in diagram
 
 
 def test_application_tier_groups_children(monkeypatch):

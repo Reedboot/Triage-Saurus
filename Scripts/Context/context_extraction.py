@@ -1143,7 +1143,8 @@ def _load_parent_type_map() -> Dict[str, str]:
         "azurerm_virtual_network_peering": "azurerm_virtual_network",
         "azurerm_virtual_network_gateway": "azurerm_virtual_network",
         "azurerm_virtual_network_gateway_connection": "azurerm_virtual_network_gateway",
-        "azurerm_bastion_host": "azurerm_virtual_network",
+        # Bastion is deployed into AzureBastionSubnet; keep VNet as a fallback only.
+        "azurerm_bastion_host": "azurerm_subnet|azurerm_virtual_network",
         "azurerm_private_endpoint": "azurerm_virtual_network",
         "azurerm_vpn_gateway": "azurerm_virtual_network",
         "azurerm_vpn_site": "azurerm_vpn_gateway",
@@ -2370,8 +2371,41 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
             pna = str(attrs.get("public_network_access", "")).strip()
             if pna:
                 props["public_network_access"] = pna
-                if pna.lower() in _TRUTHY | {"enabled", "public"}:
+                if resource_type != "azurerm_api_management" and pna.lower() in _TRUTHY | {"enabled", "public"}:
                     _mark_internet_access(props, "public_network_access enabled")
+
+        if resource_type == "azurerm_api_management":
+            vnet_type = str(
+                attrs.get("virtual_network_type")
+                or attrs.get("virtualNetworkType")
+                or attrs.get("virtual_network_configuration")
+                or ""
+            ).strip()
+            if vnet_type:
+                props["virtual_network_type"] = vnet_type
+
+            pna = str(
+                attrs.get("public_network_access")
+                or attrs.get("publicNetworkAccess")
+                or attrs.get("public_network_access_enabled")
+                or ""
+            ).strip()
+            if pna:
+                props["public_network_access"] = pna
+
+            ip_rules = attrs.get("ip_restrictions") or attrs.get("ipRestrictions") or attrs.get("ip_rules")
+            if ip_rules:
+                props["ip_restrictions"] = ip_rules
+
+            vnet_l = vnet_type.lower()
+            pna_l = pna.lower()
+            apim_private = any(tok in vnet_l for tok in ("internal", "injected", "private"))
+            apim_public = not apim_private and (not pna_l or pna_l in _TRUTHY | {"enabled", "public"})
+            if apim_private:
+                props["internet_access"] = "false"
+                _append_signal(props, f"APIM virtual network mode={vnet_type}")
+            elif apim_public:
+                _mark_internet_access(props, "APIM virtual network mode allows public ingress")
 
         for public_ref_key in (
             "public_ip_address_id",
@@ -3144,7 +3178,14 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
             
             # Propagate to parent API gateway
             if parent:
-                _mark_internet_access(parent_props, f"API gateway hosts public operations")
+                if parent.resource_type == "azurerm_api_management":
+                    parent_vnet = str(parent_props.get("virtual_network_type") or "").lower()
+                    if any(tok in parent_vnet for tok in ("internal", "injected", "private")):
+                        _append_signal(parent_props, "APIM hosts operations but is VNet internal/private")
+                    else:
+                        _mark_internet_access(parent_props, "API gateway hosts public operations")
+                else:
+                    _mark_internet_access(parent_props, f"API gateway hosts public operations")
                 parent.properties = parent_props
         
         # Load balancer listeners are also ingress points

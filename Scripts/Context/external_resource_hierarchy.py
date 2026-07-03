@@ -44,6 +44,9 @@ HIERARCHY_CONFIG: Dict[str, Dict[str, str]] = {
     "azurerm_api_management_api": {"parent_type": "azurerm_api_management", "parent_field": "api_management_name"},
     "azurerm_api_management_api_operation": {"parent_type": "azurerm_api_management_api", "parent_field": "api_name"},
     "azurerm_api_management_product": {"parent_type": "azurerm_api_management", "parent_field": "api_management_name"},
+    "azurerm_application_gateway_request_routing_rule": {"parent_type": "azurerm_application_gateway", "parent_field": "application_gateway_name"},
+    "azurerm_application_gateway_path_rule": {"parent_type": "azurerm_application_gateway", "parent_field": "application_gateway_name"},
+    "azurerm_application_gateway_rewrite_rule_set": {"parent_type": "azurerm_application_gateway", "parent_field": "application_gateway_name"},
     # Backend belongs to the APIM instance in Terraform, but is wired to a specific API
     # indirectly via azurerm_api_management_api_policy xml_content (backend_id = backend.name).
     # Parent stays at APIM level; the API→backend link is a policy-level connection, not a
@@ -58,6 +61,9 @@ HIERARCHY_CONFIG: Dict[str, Dict[str, str]] = {
     "azurerm_subnet_route_table_association": {"parent_type": "azurerm_subnet", "parent_field": "subnet_id"},
     "azurerm_subnet_nat_gateway_association": {"parent_type": "azurerm_subnet", "parent_field": "subnet_id"},
     "azurerm_subnet_service_endpoint_storage_policy": {"parent_type": "azurerm_subnet", "parent_field": "subnet_id"},
+    # Azure Bastion is deployed into AzureBastionSubnet; keep the VNet as a fallback when the subnet
+    # reference cannot be resolved from Terraform/ARM attributes.
+    "azurerm_bastion_host": {"parent_type": "azurerm_subnet|azurerm_virtual_network", "parent_field": "subnet_id"},
     "azurerm_route": {"parent_type": "azurerm_route_table", "parent_field": "route_table_name"},
     "azurerm_virtual_network_peering": {"parent_type": "azurerm_virtual_network", "parent_field": "virtual_network_name"},
     "azurerm_virtual_network_gateway_connection": {"parent_type": "azurerm_virtual_network_gateway", "parent_field": "virtual_network_gateway_id"},

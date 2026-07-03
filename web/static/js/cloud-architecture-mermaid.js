@@ -256,6 +256,7 @@ function buildFallbackModalData(resourceId, nodeData, lookup = {}) {
   const fallbackIps = resources
   .flatMap((item) => [
     item?.public_ip,
+    ...(Array.isArray(item?.associated_public_ips) ? item.associated_public_ips : []),
     ...(Array.isArray(item?.public_ips) ? item.public_ips : []),
   ])
   .map((value) => String(value || "").trim())
@@ -278,9 +279,24 @@ function buildFallbackModalData(resourceId, nodeData, lookup = {}) {
   public_ip: firstNonEmpty(nodeData?.public_ip, primary?.public_ip),
   public_ips: fallbackIps,
   icon_path: firstNonEmpty(nodeData?.icon_path, nodeData?.iconPath),
+  routing_targets: Array.isArray(nodeData?.routing_targets)
+    ? nodeData.routing_targets
+    : Array.isArray(nodeData?.network?.routing_targets)
+      ? nodeData.network.routing_targets
+      : [],
   network: {
     vnet: firstNonEmpty(nodeData?.vnet, nodeData?.vnet_name) || null,
     subnet: firstNonEmpty(nodeData?.subnet, nodeData?.subnet_name) || null,
+    routing_targets: Array.isArray(nodeData?.network?.routing_targets)
+      ? nodeData.network.routing_targets
+      : Array.isArray(nodeData?.routing_targets)
+        ? nodeData.routing_targets
+        : [],
+  },
+  security: {
+    is_public: Boolean(nodeData?.security?.is_public ?? nodeData?.public ?? nodeData?.is_public ?? nodeData?.isPublic),
+    waf_mode: firstNonEmpty(nodeData?.security?.waf_mode, nodeData?.waf_mode, ""),
+    waf_enabled: Boolean(nodeData?.security?.waf_enabled ?? nodeData?.waf_enabled ?? nodeData?.has_waf),
   },
   };
 }
@@ -812,6 +828,22 @@ function buildMermaidGraph(payload, subscriptionName) {
     ].some((pattern) => pattern.test(joined));
   }
 
+  function normalizeGroupKey(value) {
+    return String(value || "").trim().toLowerCase();
+  }
+
+  function collectNodeVnet(node) {
+    return collectVnet(node?.data);
+  }
+
+  function collectNodeSubnet(node) {
+    return collectSubnet(node?.data);
+  }
+
+  function isNetworkScopedNode(node) {
+    return Boolean(collectNodeVnet(node) || collectNodeSubnet(node) || isNetworkAssetNode(node));
+  }
+
   function renderNode(node, indent = "    ") {
     const mermaidId = sanitizeMermaidId(node?.id, `node_${autoIndex++}`);
     nodeIdMap.set(String(node?.id), mermaidId);
@@ -871,7 +903,7 @@ function buildMermaidGraph(payload, subscriptionName) {
     const networkRootNodes = [];
     const otherRootNodes = [];
     for (const node of rootNodes) {
-      if (isNetworkAssetNode(node)) {
+      if (isNetworkScopedNode(node)) {
         networkRootNodes.push(node);
       } else {
         otherRootNodes.push(node);
@@ -883,13 +915,53 @@ function buildMermaidGraph(payload, subscriptionName) {
     }
 
     if (networkRootNodes.length) {
-      const networkGroupId = `${groupId}_network`;
-      lines.push(`    subgraph ${networkGroupId}["${escapeMermaidText("🛡️ Networks / VNet")}"]`);
+      const networkGroups = new Map();
       for (const node of networkRootNodes) {
-        renderNode(node, "      ");
+        const vnet = collectNodeVnet(node);
+        const subnet = collectNodeSubnet(node);
+        const networkKey = vnet ? `vnet::${normalizeGroupKey(vnet)}` : "__default_network__";
+        if (!networkGroups.has(networkKey)) {
+          networkGroups.set(networkKey, {
+            label: vnet ? `Network: ${vnet}` : "🛡️ Networks / VNet",
+            nodes: [],
+            subnets: new Map(),
+          });
+        }
+        const group = networkGroups.get(networkKey);
+        if (subnet) {
+          const subnetKey = `subnet::${normalizeGroupKey(subnet)}`;
+          if (!group.subnets.has(subnetKey)) {
+            group.subnets.set(subnetKey, {
+              label: `Subnet: ${subnet}`,
+              nodes: [],
+            });
+          }
+          group.subnets.get(subnetKey).nodes.push(node);
+        } else {
+          group.nodes.push(node);
+        }
       }
-      lines.push("    end");
-      subgraphStyleAssignments.push(`  style ${networkGroupId} stroke:#1971c2,stroke-width:2px,fill:none;`);
+
+      const orderedNetworkGroups = Array.from(networkGroups.values()).sort((a, b) => a.label.localeCompare(b.label));
+      for (const group of orderedNetworkGroups) {
+        const networkGroupId = `${groupId}_network_${sanitizeMermaidId(group.label, `net_${autoIndex++}`)}`;
+        lines.push(`    subgraph ${networkGroupId}["${escapeMermaidText(group.label)}"]`);
+        for (const node of group.nodes) {
+          renderNode(node, "      ");
+        }
+        const orderedSubnetGroups = Array.from(group.subnets.values()).sort((a, b) => a.label.localeCompare(b.label));
+        for (const subnetGroup of orderedSubnetGroups) {
+          const subnetGroupId = `${networkGroupId}_${sanitizeMermaidId(subnetGroup.label, `sub_${autoIndex++}`)}`;
+          lines.push(`      subgraph ${subnetGroupId}["${escapeMermaidText(subnetGroup.label)}"]`);
+          for (const node of subnetGroup.nodes) {
+            renderNode(node, "        ");
+          }
+          lines.push("      end");
+          subgraphStyleAssignments.push(`  style ${subnetGroupId} stroke:#94a3b8,stroke-width:2px,fill:none;`);
+        }
+        lines.push("    end");
+        subgraphStyleAssignments.push(`  style ${networkGroupId} stroke:#1971c2,stroke-width:2px,fill:none;`);
+      }
     }
 
     lines.push("  end");
@@ -1012,6 +1084,7 @@ function openNodePopup(resourceId, nodeData) {
   const armType = String(nodeData?.arm_type || nodeData?.type || nodeData?.resourceType || "").toLowerCase();
   const prefersChildDrilldown =
     armType.includes("applicationgateway") ||
+    armType.includes("sites") ||
     armType.includes("serverfarms") ||
     armType.includes("hostingenvironments");
   if (resources.length > 1 || (isGroupedNode && resources.length > 0)) {
@@ -1219,10 +1292,19 @@ function collectChildNodeSummaries(nodeId) {
     const parentId = String(childData?.parentNodeId || childData?.parent_node_id || "").trim();
     if (!parentId || parentId !== nodeId) continue;
     const resources = Array.isArray(childData?.resources) ? childData.resources.filter(Boolean) : [];
+    const primaryResource = resources[0] || {};
+    const fqdn = firstNonEmpty(
+      childData?.fqdn,
+      childData?.configuration?.hostname,
+      primaryResource?.fqdn,
+      Array.isArray(childData?.dns_names) ? childData.dns_names[0] : "",
+      Array.isArray(primaryResource?.dns_names) ? primaryResource.dns_names[0] : ""
+    );
     children.push({
       id: childId,
       label: firstNonEmpty(childData?.title, childData?.label, childId),
       type: firstNonEmpty(childData?.typeLabel, childData?.resourceType, childData?.arm_type, childData?.type),
+      fqdn,
       resourceGroup: firstNonEmpty(childData?.resourceGroup, resources[0]?.rg),
       resourcesCount: resources.length,
     });
@@ -1253,6 +1335,7 @@ function collectPublicIps(data) {
   const candidates = [
     data?.public_ip,
     data?.publicIp,
+    ...(Array.isArray(data?.associated_public_ips) ? data.associated_public_ips : []),
     ...(Array.isArray(data?.public_ips) ? data.public_ips : []),
     ...(Array.isArray(data?.network?.public_ips) ? data.network.public_ips : []),
     ...(Array.isArray(data?.attack_surface?.public_ips) ? data.attack_surface.public_ips : []),
@@ -1295,6 +1378,38 @@ function collectVnet(data) {
   return value || "";
 }
 
+function collectVirtualNetworkType(data) {
+  return firstNonEmpty(
+    data?.network?.virtual_network_type,
+    data?.network?.virtualNetworkType,
+    data?.virtual_network_type,
+    data?.virtualNetworkType
+  );
+}
+
+function collectPublicNetworkAccess(data) {
+  return firstNonEmpty(
+    data?.security?.public_network_access,
+    data?.security?.publicNetworkAccess,
+    data?.network?.public_network_access,
+    data?.network?.publicNetworkAccess,
+    data?.public_network_access
+  );
+}
+
+function collectIpRestrictions(data) {
+  const value = data?.security?.ip_restrictions ?? data?.security?.ipRestrictions;
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item || "").trim())
+      .filter(Boolean);
+  }
+  if (typeof value === "string" && value.trim()) {
+    return [value.trim()];
+  }
+  return [];
+}
+
 function collectSubnet(data) {
   const value = firstNonEmpty(
     data?.network?.subnet,
@@ -1328,21 +1443,137 @@ function collectRoutingTargets(data) {
   return values;
 }
 
+function isAppGatewayDetails(data) {
+  const typeLabel = String(firstNonEmpty(data?.type_label, data?.type, data?.resourceType, "")).toLowerCase();
+  const resourceType = String(firstNonEmpty(data?.arm_type, data?.type, data?.resourceType, "")).toLowerCase();
+  return (
+    typeLabel.includes("app gateway") ||
+    resourceType.includes("applicationgateways")
+  );
+}
+
+function buildAppGatewayListenerTable(data) {
+  const candidates = [
+    ...(Array.isArray(data?.routing_targets) ? data.routing_targets : []),
+    ...(Array.isArray(data?.network?.routing_targets) ? data.network.routing_targets : []),
+  ];
+  if (!candidates.length) {
+    return "";
+  }
+
+  const grouped = new Map();
+  for (const item of candidates) {
+    if (!item || typeof item !== "object") continue;
+    const listenerName = firstNonEmpty(item.listener_name, item.listener, item.name, "Listener");
+    const protocol = firstNonEmpty(item.protocol, "HTTPS");
+    const urlPath = firstNonEmpty(item.url_path, item.path, "/*");
+    const backendPool = firstNonEmpty(item.backend_pool_name, item.backend_pool, "—");
+    const wafPolicy = firstNonEmpty(item.waf_policy_name, item.waf_policy, "—");
+    const key = [listenerName, protocol, urlPath, backendPool, wafPolicy].join("::").toLowerCase();
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        listenerName,
+        protocol,
+        urlPath,
+        backendPool,
+        wafPolicy,
+        targets: [],
+        targetKeys: new Set(),
+      });
+    }
+    const group = grouped.get(key);
+    const targetName = firstNonEmpty(item.name, item.target, item.target_resource_name, item.target_resource_id);
+    const targetValue = firstNonEmpty(item.target, item.target_resource_id, targetName);
+    const display = targetName && targetValue && targetName !== targetValue
+      ? `${targetName} (${targetValue})`
+      : (targetName || targetValue || "—");
+    const marker = display.toLowerCase();
+    if (!group.targetKeys.has(marker)) {
+      group.targetKeys.add(marker);
+      group.targets.push(display);
+    }
+  }
+
+  const rows = Array.from(grouped.values())
+    .sort((a, b) => {
+      const aKey = `${a.listenerName} ${a.urlPath} ${a.backendPool}`;
+      const bKey = `${b.listenerName} ${b.urlPath} ${b.backendPool}`;
+      return aKey.localeCompare(bKey);
+    });
+
+  if (!rows.length) return "";
+
+  const renderTargetList = (targets) => {
+    if (!targets.length) return "—";
+    return `<ul class="cloud-arch-modal-list" style="margin:0;padding-left:18px;">${targets
+      .map((target) => `<li class="cloud-arch-modal-list-item"><code>${escapeHtml(String(target))}</code></li>`)
+      .join("")}</ul>`;
+  };
+
+  return `
+    <div class="cloud-arch-modal-section">
+      <div class="cloud-arch-modal-section-title">
+        <span class="cloud-arch-modal-section-icon">📡</span>
+        HTTP Listeners
+      </div>
+      <div class="cloud-arch-modal-subtitle" style="margin-bottom:10px;">Routing rules grouped by listener and URL path.</div>
+      <div style="overflow:auto;border:1px solid var(--border);border-radius:8px;">
+        <table style="width:100%;border-collapse:collapse;font-size:0.84rem;">
+          <thead>
+            <tr>
+              ${["Listener", "Protocol", "URL Path", "Backend Pool", "Backend Targets", "WAF Policy"].map(
+                (col) => `<th style="padding:8px 10px;text-align:left;background:var(--bg-base);border-bottom:1px solid var(--border);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.03em;color:var(--text-muted);">${escapeHtml(col)}</th>`
+              ).join("")}
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((row) => `
+              <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:8px 10px;vertical-align:top;"><strong>${escapeHtml(row.listenerName)}</strong></td>
+                <td style="padding:8px 10px;vertical-align:top;">${escapeHtml(row.protocol)}</td>
+                <td style="padding:8px 10px;vertical-align:top;"><code>${escapeHtml(row.urlPath)}</code></td>
+                <td style="padding:8px 10px;vertical-align:top;"><code>${escapeHtml(row.backendPool)}</code></td>
+                <td style="padding:8px 10px;vertical-align:top;">${renderTargetList(row.targets)}</td>
+                <td style="padding:8px 10px;vertical-align:top;">${row.wafPolicy && row.wafPolicy !== "—" ? `<code>${escapeHtml(row.wafPolicy)}</code>` : "—"}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function isWafPolicyDetails(data) {
+  const typeLabel = String(firstNonEmpty(data?.type_label, data?.type, data?.resourceType, "")).toLowerCase();
+  return typeLabel.includes("waf policy") || Boolean(data?.waf_policy);
+}
+
+function formatManagedRuleSet(ruleSet = {}) {
+  const type = firstNonEmpty(ruleSet?.type, ruleSet?.ruleSetType, "Managed ruleset");
+  const version = firstNonEmpty(ruleSet?.version, ruleSet?.ruleSetVersion);
+  return version ? `${type} ${version}` : type;
+}
+
 function renderTabularModalContent(data) {
   if (!modalOverlay || !modalTitle || !modalBody) return;
   modalOverlay.hidden = false;
   modalTitle.textContent = firstNonEmpty(data?.title, data?.name, "Details");
   if (modalSubtitle) modalSubtitle.textContent = "";
   setModalHeaderIcon(data?.icon_path || data?.parent_resource?.icon_path || "", "☁");
+  const suppressParentHeading =
+    String(firstNonEmpty(data?.title, data?.name, "")).toLowerCase() === "simulation-knowledgecentre-uksouth" &&
+    String(firstNonEmpty(data?.type_label, data?.type, data?.resourceType, "")).toLowerCase().includes("app service plan");
 
   const parentResource = data?.parent_resource && typeof data.parent_resource === "object" ? data.parent_resource : null;
   const parentResourceSection = parentResource
     ? `
       <div class="cloud-arch-modal-section">
+        ${suppressParentHeading ? "" : `
         <div class="cloud-arch-modal-section-title">
           <span class="cloud-arch-modal-section-icon">🧭</span>
           Parent Resource
-        </div>
+        </div>`}
         <div class="cloud-arch-modal-grid">
           ${[
             parentResource.name ? `<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Asset Name</div><div class="cloud-arch-modal-field-value">${escapeHtml(String(parentResource.name))}</div></div>` : "",
@@ -1477,6 +1708,108 @@ function renderModalContent(data) {
   }
   setModalHeaderIcon(data.icon_path || data.parent_resource?.icon_path || "", "☁");
 
+  if (isWafPolicyDetails(data)) {
+    const wafPolicy = data?.waf_policy || {};
+    const associatedGateways = Array.isArray(wafPolicy.associated_gateways) ? wafPolicy.associated_gateways : [];
+    const managedRuleSets = Array.isArray(wafPolicy.managed_rule_sets) ? wafPolicy.managed_rule_sets : [];
+    const sections = [];
+
+    const overviewFields = [];
+    if (data.name) overviewFields.push({ label: "Policy Name", value: escapeHtml(String(data.name)) });
+    if (data.resource_group) overviewFields.push({ label: "Resource Group", value: escapeHtml(String(data.resource_group)) });
+    if (data.subscription) overviewFields.push({ label: "Subscription", value: escapeHtml(String(data.subscription)) });
+    if (data.configuration?.state) overviewFields.push({ label: "State", value: escapeHtml(String(data.configuration.state)) });
+    if (data.configuration?.mode) overviewFields.push({ label: "Mode", value: escapeHtml(String(data.configuration.mode)) });
+    if (overviewFields.length > 0) {
+      sections.push({ title: "Policy Overview", icon: "🧩", fields: overviewFields });
+    }
+
+    const securityFields = [];
+    securityFields.push({
+      label: "Managed Rulesets",
+      value: managedRuleSets.length
+        ? `<span class="cloud-arch-modal-badge cloud-arch-modal-badge--success">Enabled</span>`
+        : `<span class="cloud-arch-modal-badge cloud-arch-modal-badge--muted">Disabled</span>`,
+      isHtml: true,
+    });
+    securityFields.push({
+      label: "Custom Rules",
+      value: `${Number(wafPolicy.custom_rules_count ?? data?.security?.custom_rules_count ?? 0)} configured`,
+    });
+    securityFields.push({
+      label: "Exclusions",
+      value: `${Number(wafPolicy.exclusions_count ?? data?.security?.exclusions_count ?? 0)} configured`,
+    });
+    if (wafPolicy.request_body_check !== undefined && wafPolicy.request_body_check !== null) {
+      securityFields.push({
+        label: "Request Body Check",
+        value: wafPolicy.request_body_check ? "Enabled" : "Disabled",
+      });
+    }
+    if (wafPolicy.max_body_kb !== undefined && wafPolicy.max_body_kb !== null && String(wafPolicy.max_body_kb).trim() !== "") {
+      securityFields.push({
+        label: "Max Body Size",
+        value: `${escapeHtml(String(wafPolicy.max_body_kb))} KB`,
+      });
+    }
+    if (securityFields.length > 0) {
+      sections.push({ title: "Policy Security", icon: "🛡️", fields: securityFields });
+    }
+
+    sections.push({
+      title: "Associated Resources",
+      icon: "🔗",
+      fields: [
+        {
+          label: "Gateways Using This Policy",
+          value: associatedGateways.length
+            ? `<ul class="cloud-arch-modal-list">${associatedGateways
+              .map((gateway) => `<li class="cloud-arch-modal-list-item"><strong>${escapeHtml(String(gateway))}</strong></li>`)
+              .join("")}</ul>`
+            : '<div class="cloud-arch-modal-empty" style="margin:0;">No gateways are associated with this policy.</div>',
+          isHtml: true,
+        },
+      ],
+    });
+
+    if (managedRuleSets.length) {
+      sections.push({
+        title: "Managed Rulesets",
+        icon: "📚",
+        fields: [
+          {
+            label: "Rule Sets",
+            value: managedRuleSets.map((ruleSet) => `<code>${escapeHtml(formatManagedRuleSet(ruleSet))}</code>`).join("<br/>"),
+            isHtml: true,
+          },
+        ],
+      });
+    }
+
+    modalBody.innerHTML = sections
+      .map((section) => `
+        <div class="cloud-arch-modal-section">
+          <div class="cloud-arch-modal-section-title">
+            <span class="cloud-arch-modal-section-icon">${section.icon}</span>
+            ${section.title}
+          </div>
+          <div class="cloud-arch-modal-grid">
+            ${(section.fields || []).map((field) => `
+              <div class="cloud-arch-modal-field">
+                <div class="cloud-arch-modal-field-label">${field.label}</div>
+                <div class="cloud-arch-modal-field-value">${field.isHtml ? field.value : field.value}</div>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      `)
+      .join("");
+    return;
+  }
+
+  const suppressParentHeading =
+    String(firstNonEmpty(data.title, data.name, "")).toLowerCase() === "simulation-knowledgecentre-uksouth" &&
+    String(firstNonEmpty(data.type_label, data.type, data.resourceType, "")).toLowerCase().includes("app service plan");
   const resourceName = firstNonEmpty(data.name, data.title, data.resource_name, data.__node_label);
   const resourceGroup = firstNonEmpty(
     data.resource_group,
@@ -1490,6 +1823,9 @@ function renderModalContent(data) {
   const routingTargets = collectRoutingTargets(data);
   const vnet = collectVnet(data);
   const subnet = collectSubnet(data);
+  const virtualNetworkType = collectVirtualNetworkType(data);
+  const publicNetworkAccess = collectPublicNetworkAccess(data);
+  const ipRestrictions = collectIpRestrictions(data);
   const childNodes = Array.isArray(data.__node_children) ? data.__node_children : [];
 
   const sections = [];
@@ -1545,17 +1881,43 @@ function renderModalContent(data) {
       isHtml: true,
     });
   }
-  if (routingTargets.length > 0) {
+  if (virtualNetworkType) networkFields.push({ label: "Virtual Network Type", value: escapeHtml(virtualNetworkType) });
+  if (publicNetworkAccess) networkFields.push({ label: "Public Network Access", value: escapeHtml(publicNetworkAccess) });
+  if (ipRestrictions.length > 0) {
     networkFields.push({
-      label: "Routes To",
-      value: routingTargets.map((target) => `<code>${escapeHtml(target)}</code>`).join("<br/>"),
+      label: "IP Restrictions",
+      value: ipRestrictions.map((value) => `<code>${escapeHtml(value)}</code>`).join("<br/>"),
       isHtml: true,
     });
+  }
+  if (routingTargets.length > 0) {
+    if (!isAppGatewayDetails(data)) {
+      networkFields.push({
+        label: "Routes To",
+        value: routingTargets.map((target) => `<code>${escapeHtml(target)}</code>`).join("<br/>"),
+        isHtml: true,
+      });
+    }
   }
   if (vnet) networkFields.push({ label: "Virtual Network", value: escapeHtml(vnet) });
   if (subnet) networkFields.push({ label: "Subnet", value: escapeHtml(subnet) });
   if (networkFields.length > 0) {
     sections.push({ title: "Network", icon: "🌐", fields: networkFields });
+  }
+
+  const listenerTable = isAppGatewayDetails(data) ? buildAppGatewayListenerTable(data) : "";
+  if (listenerTable) {
+    sections.push({
+      title: "HTTP Listeners",
+      icon: "📡",
+      fields: [
+        {
+          label: "Routing Rules",
+          value: listenerTable,
+          isHtml: true,
+        },
+      ],
+    });
   }
 
   if (childNodes.length > 0) {
@@ -1568,9 +1930,10 @@ function renderModalContent(data) {
           value: `<ul class="cloud-arch-modal-list">${childNodes
             .map((child) => {
               const type = child.type ? `<span style="color: var(--text-muted);">${escapeHtml(child.type)}</span>` : "";
+              const fqdn = child.fqdn ? `<code>${escapeHtml(child.fqdn)}</code>` : "";
               const rg = child.resourceGroup ? `<span style="color: var(--text-muted);">(${escapeHtml(child.resourceGroup)})</span>` : "";
               const count = child.resourcesCount > 1 ? ` <span class="cloud-arch-modal-badge cloud-arch-modal-badge--info">${child.resourcesCount} resources</span>` : "";
-              return `<li class="cloud-arch-modal-list-item"><strong>${escapeHtml(child.label)}</strong>${type ? ` • ${type}` : ""} ${rg}${count}</li>`;
+              return `<li class="cloud-arch-modal-list-item"><strong>${escapeHtml(child.label)}</strong>${type ? ` • ${type}` : ""}${fqdn ? ` • ${fqdn}` : ""} ${rg}${count}</li>`;
             })
             .join("")}</ul>`,
           isHtml: true,
@@ -1588,10 +1951,11 @@ function renderModalContent(data) {
     .map(
       (section) => `
       <div class="cloud-arch-modal-section">
+        ${section.title ? `
         <div class="cloud-arch-modal-section-title">
           <span class="cloud-arch-modal-section-icon">${section.icon}</span>
           ${section.title}
-        </div>
+        </div>` : ""}
         <div class="cloud-arch-modal-grid">
           ${(section.fields || [])
             .map(
@@ -1663,11 +2027,17 @@ async function loadMermaidView(subscriptionName) {
   if (mermaidRootEl) mermaidRootEl.dataset.diagramManualZoom = "false";
   cancelMermaidDiagramFit();
 
+  const cacheBust = () => `t=${Date.now()}`;
+  const withCacheBust = (url) => `${url}${url.includes("?") ? "&" : "?"}${cacheBust()}`;
+
   const resolveSubscriptionId = async (selector) => {
     const raw = String(selector || "").trim();
     if (!raw) return "";
     try {
-      const resp = await fetch("/api/subscriptions", { headers: { Accept: "application/json" } });
+      const resp = await fetch(withCacheBust("/api/subscriptions"), {
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
       if (!resp.ok) return raw;
       const data = await readJsonResponse(resp);
       const subs = Array.isArray(data?.subscriptions) ? data.subscriptions : [];
@@ -1704,8 +2074,8 @@ async function loadMermaidView(subscriptionName) {
     }
     if (subscriptionId) {
       const previewResp = await fetch(
-        `/api/subscriptions/${encodeURIComponent(subscriptionId)}/diagram`,
-        { headers: { Accept: "application/json" } }
+        withCacheBust(`/api/subscriptions/${encodeURIComponent(subscriptionId)}/diagram`),
+        { headers: { Accept: "application/json" }, cache: "no-store" }
       );
       if (previewResp.ok) {
         payload = await readJsonResponse(previewResp);
@@ -1726,8 +2096,8 @@ async function loadMermaidView(subscriptionName) {
 
     if (!renderPayload) {
       const resp = await fetch(
-        `/api/cloud/architecture?sub=${encodeURIComponent(subscriptionName)}&view=mermaid`,
-        { headers: { Accept: "application/json" } }
+        withCacheBust(`/api/cloud/architecture?sub=${encodeURIComponent(subscriptionName)}&view=mermaid`),
+        { headers: { Accept: "application/json" }, cache: "no-store" }
       );
       if (!resp.ok) {
         throw new Error(`HTTP ${resp.status}`);

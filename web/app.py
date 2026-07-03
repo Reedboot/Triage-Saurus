@@ -13318,6 +13318,39 @@ def _build_subscription_architecture_payload(
     public_ip_assets_by_id: dict[str, dict] = {}
     public_ip_assets_by_name_rg: dict[tuple[str, str], list[dict]] = defaultdict(list)
     assets: list[dict] = []
+
+    def _text_value(*values) -> str | None:
+        for value in values:
+            text = str(value or "").strip()
+            if text:
+                return text
+        return None
+
+    def _extract_asset_network_context(raw_json: dict) -> tuple[str | None, str | None, str | None, str | None]:
+        vnet_name = None
+        vnet_resource_group = None
+        subnet_name = None
+        subnet_id = None
+
+        if isinstance(raw_json, dict):
+            extra = raw_json.get("_extra") or {}
+            if isinstance(extra, dict):
+                vnet_name = _text_value(extra.get("vnet_name"), extra.get("parent_vnet_name"))
+                vnet_resource_group = _text_value(extra.get("vnet_resource_group"))
+                subnet_name = _text_value(extra.get("subnet_name"))
+                subnet_id = _text_value(extra.get("subnet_id"))
+
+        if subnet_id:
+            vnet_name = vnet_name or _parse_vnet_from_subnet_id(subnet_id)
+            subnet_name = subnet_name or _parse_subnet_from_subnet_id(subnet_id)
+
+        if not vnet_name:
+            vnet_name = _extract_vnet(raw_json)
+        if not subnet_name:
+            subnet_name = _extract_subnet(raw_json)
+
+        return vnet_name, vnet_resource_group, subnet_name, subnet_id
+
     for row in asset_rows:
         if _is_public_ip_asset_type(row["type"]):
             raw_json = row["raw_json"] or "{}"
@@ -13387,6 +13420,9 @@ def _build_subscription_architecture_payload(
             "routing_targets": routing_targets,
         }
 
+        is_apim = _is_api_management_resource_type(row["type"])
+        apim_public = _is_apim_publicly_accessible(parsed) if is_apim and isinstance(parsed, dict) else True
+
         linked_public_ip_ids = _extract_public_ip_resource_ids(parsed) if isinstance(parsed, dict) else set()
         linked_public_ip_assets: list[dict] = []
         for pip_id in linked_public_ip_ids:
@@ -13418,12 +13454,29 @@ def _build_subscription_architecture_payload(
                 asset["associated_public_ips"] = linked_ips
                 if not public_ip:
                     public_ip = linked_ips[0]
-                asset["is_public"] = True
+                if apim_public:
+                    asset["is_public"] = True
             if linked_dns:
                 asset["associated_fqdns"] = linked_dns
                 if not asset.get("fqdn"):
                     asset["fqdn"] = linked_dns[0]
-                    asset["is_public"] = True
+                    if apim_public:
+                        asset["is_public"] = True
+
+        if is_apim:
+            asset["is_public"] = apim_public
+
+        vnet_name, vnet_resource_group, subnet_name, subnet_id = _extract_asset_network_context(parsed if isinstance(parsed, dict) else {})
+        asset["vnet_name"] = vnet_name
+        asset["vnet_resource_group"] = vnet_resource_group
+        asset["subnet_name"] = subnet_name
+        asset["subnet_id"] = subnet_id
+        asset["network"] = {
+            "vnet": vnet_name,
+            "subnet": subnet_name,
+            "vnet_resource_group": vnet_resource_group,
+            "subnet_id": subnet_id,
+        }
 
         if public_ip:
             asset["public_ip"] = public_ip
@@ -13488,6 +13541,16 @@ def _build_subscription_architecture_payload(
                         "provider_key": "azure",
                         "provider_label": "Azure",
                         "tier": "entry",
+                        "vnet_name": None,
+                        "vnet_resource_group": None,
+                        "subnet_name": None,
+                        "subnet_id": None,
+                        "network": {
+                            "vnet": None,
+                            "subnet": None,
+                            "vnet_resource_group": None,
+                            "subnet_id": None,
+                        },
                         "_synthetic_gateway": True,
                     }
                 )
@@ -13546,8 +13609,103 @@ def _build_subscription_architecture_payload(
                     "provider_key": "azure",
                     "provider_label": "Azure",
                     "tier": "entry",
+                    "vnet_name": None,
+                    "vnet_resource_group": None,
+                    "subnet_name": None,
+                    "subnet_id": None,
+                    "network": {
+                        "vnet": None,
+                        "subnet": None,
+                        "vnet_resource_group": None,
+                        "subnet_id": None,
+                    },
                 }
             )
+
+        # Attach backend targets from App Gateway routing rules to the gateway node itself.
+        # This lets the generic routing resolver join App Gateway -> APIM / backend assets
+        # using the same path as other entry-point routing metadata.
+        route_rows = conn.execute(
+            """
+            SELECT gateway_name, backend_fqdns, backend_pool_name, listener_name, url_path, protocol, waf_policy_name
+            FROM appgw_routing_rules
+            WHERE subscription_id = ?
+            ORDER BY gateway_name, backend_pool_name, listener_name, url_path
+            """,
+            (sub_id,),
+        ).fetchall()
+        if route_rows:
+            fqdn_asset_lookup: dict[str, dict] = {}
+            for asset in assets:
+                for fqdn_value in asset.get("fqdns") or ([asset.get("fqdn")] if asset.get("fqdn") else []):
+                    fqdn_key = str(fqdn_value or "").strip().lower().rstrip(".")
+                    if fqdn_key and fqdn_key not in fqdn_asset_lookup:
+                        fqdn_asset_lookup[fqdn_key] = asset
+
+            route_targets_by_gateway: dict[str, list[dict]] = defaultdict(list)
+            for route_row in route_rows:
+                gw_name = str(route_row["gateway_name"] or "").strip()
+                if not gw_name:
+                    continue
+
+                pool_name = str(route_row["backend_pool_name"] or "").strip()
+                listener_name = str(route_row["listener_name"] or "").strip()
+                url_path = str(route_row["url_path"] or "").strip()
+                protocol = str(route_row["protocol"] or "").strip()
+                waf_policy_name = str(route_row["waf_policy_name"] or "").strip()
+
+                try:
+                    backend_fqdns = json.loads(route_row["backend_fqdns"] or "[]") if isinstance(route_row["backend_fqdns"], str) else (route_row["backend_fqdns"] or [])
+                except Exception:
+                    backend_fqdns = []
+                if not isinstance(backend_fqdns, list):
+                    backend_fqdns = []
+
+                for backend_fqdn in backend_fqdns:
+                    fqdn = str(backend_fqdn or "").strip().lower().rstrip(".")
+                    if not fqdn:
+                        continue
+
+                    target_asset = fqdn_asset_lookup.get(fqdn)
+                    target: dict[str, str] = {
+                        "target": fqdn,
+                        "name": pool_name or fqdn.split(".", 1)[0],
+                        "backend_pool_name": pool_name,
+                        "listener_name": listener_name,
+                        "url_path": url_path,
+                        "protocol": protocol,
+                        "waf_policy_name": waf_policy_name,
+                    }
+                    if target_asset:
+                        target["target_resource_id"] = str(target_asset.get("id") or "")
+                        target["name"] = str(target_asset.get("name") or target["name"] or "").strip()
+                        if target_asset.get("type"):
+                            target["type"] = str(target_asset.get("type") or "")
+                    elif fqdn.endswith(".azure-api.net"):
+                        target["name"] = fqdn.removesuffix(".azure-api.net")
+                        target["type"] = "Microsoft.ApiManagement/service"
+
+                    route_targets_by_gateway[gw_name.lower()].append(target)
+
+            if route_targets_by_gateway:
+                for asset in assets:
+                    if "applicationgateway" not in str(asset.get("type") or "").lower():
+                        continue
+                    asset_name_key = str(asset.get("name") or "").strip().lower()
+                    merged_targets = list(asset.get("routing_targets") or [])
+                    existing_markers = {
+                        json.dumps(target, sort_keys=True)
+                        for target in merged_targets
+                        if isinstance(target, dict)
+                    }
+                    for target in route_targets_by_gateway.get(asset_name_key, []):
+                        marker = json.dumps(target, sort_keys=True)
+                        if marker in existing_markers:
+                            continue
+                        merged_targets.append(target)
+                        existing_markers.add(marker)
+                    if merged_targets:
+                        asset["routing_targets"] = merged_targets
 
     # Add WAF Policy nodes as separate visible nodes
     if _table_exists(conn, "appgw_waf_policies"):
@@ -13620,6 +13778,16 @@ def _build_subscription_architecture_payload(
                     "provider_key": "azure",
                     "provider_label": "Azure",
                     "tier": "entry",
+                    "vnet_name": None,
+                    "vnet_resource_group": None,
+                    "subnet_name": None,
+                    "subnet_id": None,
+                    "network": {
+                        "vnet": None,
+                        "subnet": None,
+                        "vnet_resource_group": None,
+                        "subnet_id": None,
+                    },
                     "_waf_policy": True,
                     "_associated_gateways": waf_row.get("associated_gateways") or "[]",
                 }
@@ -13720,6 +13888,16 @@ def _build_subscription_architecture_payload(
                     "provider_key": "azure",
                     "provider_label": "Azure",
                     "tier": "entry",
+                    "vnet_name": None,
+                    "vnet_resource_group": None,
+                    "subnet_name": None,
+                    "subnet_id": None,
+                    "network": {
+                        "vnet": None,
+                        "subnet": None,
+                        "vnet_resource_group": None,
+                        "subnet_id": None,
+                    },
                     "_firewall_policy": True,
                 }
             )
@@ -13806,6 +13984,37 @@ def _build_subscription_architecture_payload(
             child_counts[parent_id] = child_counts.get(parent_id, 0) + 1
     for asset in assets:
         asset["children_count"] = child_counts.get(asset.get("id"), 0)
+
+    def _network_has_scope(asset: dict) -> bool:
+        net = asset.get("network") or {}
+        return bool(
+            net.get("vnet")
+            or net.get("subnet")
+            or asset.get("vnet_name")
+            or asset.get("subnet_name")
+        )
+
+    def _inherit_network_from_ancestors(asset: dict) -> None:
+        if _network_has_scope(asset):
+            return
+        parent_id = str(asset.get("parent_id") or "").strip().lower()
+        seen: set[str] = set()
+        while parent_id and parent_id not in seen:
+            seen.add(parent_id)
+            parent = by_id.get(parent_id)
+            if not parent:
+                break
+            if _network_has_scope(parent):
+                asset["vnet_name"] = parent.get("vnet_name")
+                asset["vnet_resource_group"] = parent.get("vnet_resource_group")
+                asset["subnet_name"] = parent.get("subnet_name")
+                asset["subnet_id"] = parent.get("subnet_id")
+                asset["network"] = dict(parent.get("network") or {})
+                return
+            parent_id = str(parent.get("parent_id") or "").strip().lower()
+
+    for asset in assets:
+        _inherit_network_from_ancestors(asset)
 
     provider_counts: dict[str, int] = defaultdict(int)
     for asset in assets:
@@ -14104,6 +14313,15 @@ def _build_subscription_architecture_payload(
                         "resourceType": asset.get("type") or "",
                         "hasManagedIdentity": has_managed_identity,
                         "loggingEnabled": has_logging,
+                        "network": asset.get("network") or {},
+                        "vnetName": asset.get("vnet_name"),
+                        "vnet_name": asset.get("vnet_name"),
+                        "vnetResourceGroup": asset.get("vnet_resource_group"),
+                        "vnet_resource_group": asset.get("vnet_resource_group"),
+                        "subnetName": asset.get("subnet_name"),
+                        "subnet_name": asset.get("subnet_name"),
+                        "subnetId": asset.get("subnet_id"),
+                        "subnet_id": asset.get("subnet_id"),
                         "isGroupNode": is_group_node,
                         "groupType": asset.get("_group_type") if is_group_node else None,
                         "groupAccess": asset.get("_group_access") if is_group_node else None,
@@ -15156,7 +15374,28 @@ def api_cloud_resource_details():
                     },
                     "parent_resource": parent_resource,
                 })
-        
+
+        lookup_name = (request.args.get("name") or request.args.get("resource_name") or "").strip()
+        lookup_rg = (request.args.get("resource_group") or request.args.get("rg") or "").strip()
+        lookup_type = (request.args.get("type") or request.args.get("resource_type") or "").strip()
+        lookup_sub = (request.args.get("sub") or request.args.get("subscription") or "").strip()
+        resolved_sub_id = ""
+        if lookup_sub:
+            sub_row = _cloud_resolve_subscription(conn, lookup_sub)
+            if sub_row:
+                resolved_sub_id = str(sub_row["id"] or "").strip()
+
+        if _is_appgw_waf_policy_resource_type(resource_id) or _is_appgw_waf_policy_resource_type(lookup_type):
+            waf_details = _lookup_appgw_waf_policy_details(
+                conn,
+                resource_id,
+                lookup_name=lookup_name,
+                lookup_rg=lookup_rg,
+                lookup_sub=resolved_sub_id or lookup_sub,
+            )
+            if waf_details:
+                return jsonify(waf_details)
+
         # Regular provisioned asset
         asset_row = conn.execute(
             """
@@ -15173,16 +15412,6 @@ def api_cloud_resource_details():
         ).fetchone()
         
         if not asset_row:
-            lookup_name = (request.args.get("name") or request.args.get("resource_name") or "").strip()
-            lookup_rg = (request.args.get("resource_group") or request.args.get("rg") or "").strip()
-            lookup_type = (request.args.get("type") or request.args.get("resource_type") or "").strip()
-            lookup_sub = (request.args.get("sub") or request.args.get("subscription") or "").strip()
-            resolved_sub_id = ""
-            if lookup_sub:
-                sub_row = _cloud_resolve_subscription(conn, lookup_sub)
-                if sub_row:
-                    resolved_sub_id = str(sub_row["id"] or "").strip()
-
             if lookup_name:
                 sql = [
                     """
@@ -15215,6 +15444,7 @@ def api_cloud_resource_details():
         raw_json = json.loads(asset_row["raw_json"] or "{}") if asset_row["raw_json"] else {}
         parent_row = _resolve_parent_resource(conn, asset_row)
         raw_for_lookup = raw_json if isinstance(raw_json, dict) else {}
+        apim_public = _is_apim_publicly_accessible(raw_for_lookup) if _is_api_management_resource_type(asset_row["type"]) else bool(asset_row["is_public"])
         associated_public_ips, associated_dns_names = _resolve_associated_public_ip_details(
             conn,
             str(asset_row["subscription_id"] or ""),
@@ -15223,6 +15453,31 @@ def api_cloud_resource_details():
             raw_for_lookup,
             str(asset_row["type"] or ""),
         )
+        if not associated_public_ips and _is_api_management_resource_type(asset_row["type"]) and _table_exists(conn, "resources"):
+            try:
+                child_rows = conn.execute(
+                    """
+                    SELECT resource_name, raw_json
+                    FROM resources
+                    WHERE parent_resource_id = ?
+                      AND LOWER(COALESCE(resource_type, '')) LIKE '%public_ip%'
+                    ORDER BY id
+                    """,
+                    (asset_row["id"],),
+                ).fetchall()
+                for child in child_rows:
+                    try:
+                        child_raw = json.loads(child["raw_json"] or "{}") if isinstance(child["raw_json"], str) else (child["raw_json"] or {})
+                    except Exception:
+                        child_raw = {}
+                    for value in _extract_public_ips(child_raw):
+                        if value not in associated_public_ips:
+                            associated_public_ips.append(value)
+                    child_name = str(child["resource_name"] or "").strip()
+                    if child_name and child_name not in associated_public_ips:
+                        associated_public_ips.append(child_name)
+            except Exception:
+                pass
         associated_vnet, associated_subnet = _resolve_associated_vnet_subnet(
             conn,
             str(asset_row["subscription_id"] or ""),
@@ -15231,6 +15486,8 @@ def api_cloud_resource_details():
             raw_for_lookup,
             str(asset_row["type"] or ""),
         )
+        if not associated_vnet and not associated_subnet and "managedclusters" in str(asset_row["type"] or "").lower():
+            associated_vnet, associated_subnet = _resolve_aks_cluster_vnet_subnet(raw_for_lookup)
         operating_system = _extract_operating_system(raw_json)
         if not operating_system and parent_row:
             try:
@@ -15273,6 +15530,7 @@ def api_cloud_resource_details():
                 "nsg_rules": _extract_nsg_rules(conn, resource_id, asset_row["subscription_id"]),
                 "firewall_rules": _extract_firewall_rules(raw_json),
                 "allowed_ips": _extract_allowed_ips(raw_json),
+                "ip_restrictions": _extract_allowed_ips(raw_json),
                 "public_network_access": _extract_public_network_access(raw_json),
                 "encryption_at_rest": _extract_encryption_at_rest(raw_json),
             },
@@ -15289,6 +15547,8 @@ def api_cloud_resource_details():
                 "private_endpoints": _extract_private_endpoints(raw_json),
                 "vnet": associated_vnet,
                 "subnet": associated_subnet,
+                "virtual_network_type": _extract_virtual_network_type(raw_json),
+                "public_network_access": _extract_public_network_access(raw_json),
                 "public_ips": sorted(set([*_extract_public_ips(raw_json), *associated_public_ips])),
                 "dns_names": sorted(set([*_extract_dns_names(raw_json, fqdn_value), *associated_dns_names])),
                 "routing_targets": _extract_routing_targets(raw_json),
@@ -15297,6 +15557,48 @@ def api_cloud_resource_details():
                 "references": _extract_keyvault_refs(raw_json),
             },
         }
+        if "applicationgateway" in str(asset_row["type"] or "").lower() and _table_exists(conn, "appgw_routing_rules"):
+            try:
+                route_rows = conn.execute(
+                    """
+                    SELECT backend_fqdns, backend_pool_name, listener_name, url_path, protocol, waf_policy_name
+                    FROM appgw_routing_rules
+                    WHERE subscription_id = ? AND gateway_name = ?
+                    ORDER BY backend_pool_name, listener_name, url_path
+                    """,
+                    (asset_row["subscription_id"], asset_row["name"]),
+                ).fetchall()
+                routing_targets: list[dict] = []
+                for route_row in route_rows:
+                    try:
+                        backend_fqdns = json.loads(route_row["backend_fqdns"] or "[]") if isinstance(route_row["backend_fqdns"], str) else (route_row["backend_fqdns"] or [])
+                    except Exception:
+                        backend_fqdns = []
+                    if not isinstance(backend_fqdns, list):
+                        backend_fqdns = []
+                    if not backend_fqdns:
+                        backend_fqdns = [None]
+                    for backend_fqdn in backend_fqdns:
+                        target = {
+                            "target": str(backend_fqdn or "").strip(),
+                            "name": str(backend_fqdn or "").strip(),
+                            "backend_pool_name": route_row["backend_pool_name"],
+                            "listener_name": route_row["listener_name"],
+                            "url_path": route_row["url_path"],
+                            "protocol": route_row["protocol"],
+                            "waf_policy_name": route_row["waf_policy_name"],
+                        }
+                        routing_targets.append(target)
+                if routing_targets:
+                    details["routing_targets"] = routing_targets
+                    details["network"]["routing_targets"] = routing_targets
+            except Exception:
+                pass
+        if _is_api_management_resource_type(asset_row["type"]):
+            details["security"]["is_public"] = apim_public
+            details["security"]["public_network_access"] = _extract_public_network_access(raw_json)
+            details["security"]["ip_restrictions"] = _extract_allowed_ips(raw_json)
+
         if parent_row:
             parent_type = str(parent_row["type"] or "")
             details["parent_resource"] = {
@@ -15481,6 +15783,43 @@ def _extract_public_network_access(raw_json: dict) -> str | None:
     return props.get("publicNetworkAccess")
 
 
+def _extract_virtual_network_type(raw_json: dict) -> str | None:
+    """Extract Azure APIM virtual network mode."""
+    if not isinstance(raw_json, dict):
+        return None
+    props = raw_json.get("properties")
+    if not isinstance(props, dict):
+        return None
+    return props.get("virtualNetworkType") or props.get("virtual_network_type")
+
+
+def _is_api_management_resource_type(resource_type: str | None) -> bool:
+    lowered = str(resource_type or "").strip().lower()
+    return "apimanagement" in lowered or "api_management" in lowered or lowered == "apim"
+
+
+def _is_appgw_waf_policy_resource_type(resource_type: str | None) -> bool:
+    lowered = str(resource_type or "").strip().lower()
+    return (
+        "applicationgatewaywafpolicy" in lowered
+        or "applicationgatewaywafpolicies" in lowered
+        or "applicationgatewaywebapplicationfirewall" in lowered
+        or "waf policy" in lowered
+        or "wafpolicy" in lowered
+    )
+
+
+def _is_apim_publicly_accessible(raw_json: dict) -> bool:
+    """Return True when Azure APIM should be treated as internet-facing."""
+    vnet_type = str(_extract_virtual_network_type(raw_json) or "").strip().lower()
+    if vnet_type in {"internal", "injected", "private"}:
+        return False
+    pna = str(_extract_public_network_access(raw_json) or "").strip().lower()
+    if pna in {"disabled", "false", "0", "no", "off"}:
+        return False
+    return True
+
+
 def _extract_encryption_at_rest(raw_json: dict) -> bool:
     """Check if encryption at rest is enabled."""
     if not isinstance(raw_json, dict):
@@ -15505,6 +15844,132 @@ def _extract_private_endpoints(raw_json: dict) -> list[str]:
     if not isinstance(pe_connections, list):
         return []
     return [pe.get("name") or pe.get("id") for pe in pe_connections if isinstance(pe, dict)]
+
+
+def _parse_json_list_field(value: object) -> list[object]:
+    """Parse a stored JSON list or return a single-item list when needed."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        return [value]
+    text = str(value).strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return [item.strip() for item in text.split(",") if item.strip()]
+    if isinstance(parsed, list):
+        return parsed
+    if isinstance(parsed, dict):
+        return [parsed]
+    return []
+
+
+def _lookup_appgw_waf_policy_details(
+    conn,
+    resource_id: str,
+    lookup_name: str = "",
+    lookup_rg: str = "",
+    lookup_sub: str = "",
+) -> dict | None:
+    """Return a WAF policy detail payload from the cached policy summary table."""
+    if not _table_exists(conn, "appgw_waf_policies"):
+        return None
+
+    columns = _table_columns(conn, "appgw_waf_policies")
+    if not columns:
+        return None
+
+    select_columns = ["p.*"]
+    if _table_exists(conn, "subscriptions"):
+        select_columns.append("s.display_name AS subscription_name")
+
+    join_clause = "LEFT JOIN subscriptions s ON s.id = p.subscription_id" if _table_exists(conn, "subscriptions") else ""
+    rows = conn.execute(
+        f"SELECT {', '.join(select_columns)} FROM appgw_waf_policies p {join_clause} ORDER BY p.last_synced DESC, p.name ASC"
+    ).fetchall()
+    if not rows:
+        return None
+
+    lookup_name_l = lookup_name.strip().lower()
+    lookup_rg_l = lookup_rg.strip().lower()
+    lookup_sub_l = lookup_sub.strip().lower()
+    resource_token = str(resource_id or "").strip().lower()
+    if resource_token.startswith("waf::"):
+        resource_token = resource_token.removeprefix("waf::")
+    resolved_row = None
+    for row in rows:
+        row_dict = dict(row)
+        row_name = str(row_dict.get("name") or "").strip().lower()
+        row_rg = str(row_dict.get("resource_group") or "").strip().lower()
+        row_sub_id = str(row_dict.get("subscription_id") or "").strip().lower()
+        row_id = str(row_dict.get("id") or "").strip().lower()
+        row_subscription_name = str(row_dict.get("subscription_name") or "").strip().lower()
+        if lookup_name_l and row_name and row_name != lookup_name_l:
+            continue
+        if lookup_rg_l and row_rg and row_rg != lookup_rg_l:
+            continue
+        if lookup_sub_l and lookup_sub_l not in {row_sub_id, row_subscription_name}:
+            continue
+        if resource_token and row_id and resource_token not in {row_id, row_name} and lookup_name_l != row_name:
+            continue
+        resolved_row = row_dict
+        break
+
+    if not resolved_row:
+        return None
+
+    managed_rule_sets = _parse_json_list_field(resolved_row.get("managed_rule_sets"))
+    associated_gateways = [str(item).strip() for item in _parse_json_list_field(resolved_row.get("associated_gateways")) if str(item).strip()]
+    policy_name = str(resolved_row.get("name") or lookup_name or resource_id or "").strip()
+    policy_id = str(resolved_row.get("id") or f"waf-policy::{policy_name}").strip()
+    custom_rules_count = int(resolved_row.get("custom_rules_count") or 0)
+    exclusions_count = int(resolved_row.get("exclusions_count") or 0)
+    managed_rules_enabled = bool(managed_rule_sets)
+    state = str(resolved_row.get("state") or "").strip()
+    mode = str(resolved_row.get("mode") or "").strip()
+
+    policy_details = {
+        "id": policy_id,
+        "name": policy_name,
+        "type": "microsoft.network/applicationgatewaywebapplicationfirewallpolicies",
+        "type_label": "WAF Policy",
+        "icon_path": _resource_icon_path("Microsoft.Network/firewallPolicies"),
+        "resource_group": resolved_row.get("resource_group"),
+        "subscription": resolved_row.get("subscription_name") or resolved_row.get("subscription_id") or lookup_sub,
+        "environment": None,
+        "is_virtual": False,
+        "configuration": {
+            "mode": mode,
+            "state": state,
+            "request_body_check": bool(resolved_row.get("request_body_check")),
+            "max_body_kb": resolved_row.get("max_body_kb"),
+        },
+        "security": {
+            "managed_ruleset_enabled": managed_rules_enabled,
+            "managed_ruleset_state": "Enabled" if managed_rules_enabled else "Disabled",
+            "custom_rules_count": custom_rules_count,
+            "custom_rules_present": custom_rules_count > 0,
+            "exclusions_count": exclusions_count,
+            "exclusions_present": exclusions_count > 0,
+            "waf_enabled": state.lower() == "enabled",
+        },
+        "waf_policy": {
+            "mode": mode,
+            "state": state,
+            "request_body_check": bool(resolved_row.get("request_body_check")),
+            "max_body_kb": resolved_row.get("max_body_kb"),
+            "managed_rule_sets": managed_rule_sets,
+            "managed_rules_enabled": managed_rules_enabled,
+            "custom_rules_count": custom_rules_count,
+            "exclusions_count": exclusions_count,
+            "associated_gateways": associated_gateways,
+        },
+    }
+    return policy_details
 
 
 def _parse_vnet_from_subnet_id(subnet_id: str) -> str | None:
@@ -15568,7 +16033,27 @@ def _collect_subnet_ids(raw_json: dict) -> list[str]:
         if isinstance(subnet_obj, dict):
             _add(subnet_obj.get("id", ""))
         _add(props.get("subnetId", ""))
+        _add(props.get("subnetResourceId", ""))
         _add(props.get("virtualNetworkSubnetId", ""))
+        site_config = props.get("siteConfig")
+        if isinstance(site_config, dict):
+            _add(site_config.get("virtualNetworkSubnetId", ""))
+            _add(site_config.get("subnetId", ""))
+            site_subnet = site_config.get("subnet")
+            if isinstance(site_subnet, dict):
+                _add(site_subnet.get("id", ""))
+
+        virtual_network = props.get("virtualNetwork")
+        if isinstance(virtual_network, dict):
+            _add(virtual_network.get("id", ""))
+            _add(virtual_network.get("subnetId", ""))
+
+        vnet_cfg = props.get("virtualNetworkConfiguration")
+        if isinstance(vnet_cfg, dict):
+            _add(vnet_cfg.get("subnetResourceId", ""))
+            subnet_obj = vnet_cfg.get("subnet")
+            if isinstance(subnet_obj, dict):
+                _add(subnet_obj.get("id", ""))
 
         # Network profile (ACI, some AKS)
         net_profile = props.get("networkProfile")
@@ -15749,6 +16234,48 @@ def _resolve_associated_vnet_subnet(
     return None, None
 
 
+def _resolve_aks_cluster_vnet_subnet(raw_json: dict) -> tuple[str | None, str | None]:
+    """Resolve AKS cluster VNet/subnet from common cluster JSON shapes."""
+    if not isinstance(raw_json, dict):
+        return None, None
+
+    candidates: list[str] = []
+
+    def _add(value: object) -> None:
+        text = str(value or "").strip()
+        if text and "/subnets/" in text:
+            candidates.append(text)
+
+    for pool in raw_json.get("agentPoolProfiles") or []:
+        if isinstance(pool, dict):
+            _add(pool.get("vnetSubnetId"))
+            _add(pool.get("podSubnetId"))
+
+    props = raw_json.get("networkProfile")
+    if isinstance(props, dict):
+        _add(props.get("subnetId"))
+
+    hosted = raw_json.get("hostedSystemProfile")
+    if isinstance(hosted, dict):
+        _add(hosted.get("nodeSubnetId"))
+        _add(hosted.get("systemNodeSubnetId"))
+
+    api_server = raw_json.get("apiServerAccessProfile")
+    if isinstance(api_server, dict):
+        _add(api_server.get("subnetId"))
+
+    if not candidates:
+        candidates.extend(_collect_subnet_ids(raw_json))
+
+    for subnet_id in candidates:
+        vnet = _parse_vnet_from_subnet_id(subnet_id)
+        subnet = _parse_subnet_from_subnet_id(subnet_id)
+        if vnet or subnet:
+            return vnet, subnet
+
+    return None, None
+
+
 def _extract_public_ips(raw_json: dict) -> list[str]:
     """Extract public IP addresses from a raw Azure resource JSON blob.
 
@@ -15862,6 +16389,8 @@ def _resolve_associated_public_ip_details(
     dns_names: list[str] = []
     seen_ips: set[str] = set()
     seen_dns: set[str] = set()
+    is_apim = _is_api_management_resource_type(resource_type)
+    apim_public = _is_apim_publicly_accessible(raw_json) if is_apim else True
 
     def _add_ip(value: str) -> None:
         v = str(value or "").strip()
@@ -16517,7 +17046,52 @@ def get_resource_children():
                     "requires_subscription": bool(row["requires_subscription"]),
                 }
             })
-    
+
+    # App Service / Function App → deployment slots
+    elif "sites" in parent_type and "slots" not in parent_type:
+        slot_rows = conn.execute(
+            """
+            SELECT
+                s.name,
+                s.resource_group,
+                s.fqdn,
+                s.is_public,
+                s.is_restricted,
+                s.raw_json
+            FROM provisioned_assets s
+            WHERE s.subscription_id = ?
+              AND LOWER(COALESCE(s.type, '')) LIKE '%/sites/slots%'
+              AND (
+                    LOWER(COALESCE(json_extract(s.raw_json, '$._extra.slot_parent'), '')) = LOWER(?)
+                    OR LOWER(COALESCE(s.id, '')) LIKE '%' || LOWER(?) || '/slots/%'
+                  )
+            ORDER BY s.name
+            LIMIT 50
+            """,
+            (subscription_id, parent_name, parent_name),
+        ).fetchall()
+
+        for row in slot_rows:
+            try:
+                slot_raw = json.loads(row["raw_json"] or "{}") if isinstance(row["raw_json"], str) else (row["raw_json"] or {})
+            except Exception:
+                slot_raw = {}
+            kind = str(slot_raw.get("kind") or "").strip()
+            kind_label = "Function App Slot" if "functionapp" in kind.lower() or "function app" in kind.lower() else "App Service Slot"
+            children.append({
+                "id": f"{resource_id}::slot::{row['name']}",
+                "name": row["name"],
+                "type": kind_label,
+                "icon": "🌐",
+                "details": {
+                    "resource_group": row["resource_group"] or "N/A",
+                    "fqdn": row["fqdn"] or "N/A",
+                    "exposure": "Public" if row["is_public"] else ("IP Restricted" if row["is_restricted"] else "Private"),
+                    "kind": kind or "—",
+                    "parent_app": parent_name,
+                },
+            })
+
     return jsonify({
         "parent_id": resource_id,
         "parent_name": parent_name,
@@ -17256,7 +17830,7 @@ _SUBSCRIPTION_DIAGRAM_CACHE: dict[str, tuple[float, str, dict]] = {}
 _SUBSCRIPTION_DIAGRAM_CACHE_TTL = 600  # 10 minutes
 # Bump this whenever diagram rendering logic changes (listener icons, pool icons, edge labels, etc.)
 # so the DB cache is automatically invalidated for all subscriptions.
-_DIAGRAM_CODE_VERSION = "v15"  # bumped: invalidate cached subscription diagrams after VNet grouping fix
+_DIAGRAM_CODE_VERSION = "v18"  # bumped: invalidate cached subscription diagrams after explicit data-edge fix
 
 
 def _subscription_diagram_cache_signature(conn, sub_id: str) -> tuple[str | None, tuple[str, str] | None]:
@@ -17615,6 +18189,21 @@ def api_subscription_diagram(sub_id: str):
         except Exception:
             pass  # Non-critical
 
+        appgw_waf_policy_rows: list = []
+        try:
+            if _table_exists(conn, "appgw_waf_policies"):
+                appgw_waf_policy_rows = conn.execute(
+                    """
+                    SELECT name, associated_gateways, state
+                    FROM appgw_waf_policies
+                    WHERE subscription_id = ? AND COALESCE(LOWER(state), 'enabled') != 'disabled'
+                    LIMIT 50
+                    """,
+                    (sub_id,),
+                ).fetchall()
+        except Exception:
+            pass  # Non-critical
+
         firewall_policy_rows: list = []
         try:
             if _table_exists(conn, "firewall_policies"):
@@ -17656,6 +18245,7 @@ def api_subscription_diagram(sub_id: str):
             apim_backend_urls=apim_backend_urls,
             apim_open_api_count=apim_open_api_count,
             appgw_routes=appgw_routes,
+            appgw_waf_policy_rows=appgw_waf_policy_rows,
             firewall_policy_rows=firewall_policy_rows,
             ilb_ase_names=ilb_ase_names,
             public_appgw_names=public_appgw_names,
@@ -18526,7 +19116,7 @@ def _build_subscription_overlay_views(rows: list, plan_links: list | None = None
     )
 
 
-def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_backend_urls: set[str] | None = None, apim_open_api_count: int = 0, appgw_routes: list | None = None, firewall_policy_rows: list | None = None, ilb_ase_names: set[str] | None = None, public_appgw_names: set[str] | None = None) -> dict:
+def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_backend_urls: set[str] | None = None, apim_open_api_count: int = 0, appgw_routes: list | None = None, appgw_waf_policy_rows: list | None = None, firewall_policy_rows: list | None = None, ilb_ase_names: set[str] | None = None, public_appgw_names: set[str] | None = None) -> dict:
     """Build a high-level ingress flow diagram showing entry points and key services.
     
     Simplifies the architecture to: HTTP → WAF → App Gateway → APIM → Backend services
@@ -18702,6 +19292,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     api_layer = []     # APIM instances
     backends = []      # Hosted compute (AKS, App Service, Function App, etc.)
     data_stores = []   # Databases, Storage
+    raw_json_by_resource: dict[tuple[str, str], list[object]] = _dd(list)
     
     type_groups = _dd(list)
 
@@ -18758,6 +19349,16 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             except Exception:
                 continue
             yield _gw_name, _hostname, _be_fqdns_json, _pool_name, _listener_name, _url_path, _listener_protocol, _waf_policy_name
+
+    def _iter_appgw_waf_policy_rows():
+        for _row in (appgw_waf_policy_rows or []):
+            try:
+                _policy_name = _row[0]
+                _associated_gateways = _row[1] if len(_row) > 1 else "[]"
+                _policy_state = _row[2] if len(_row) > 2 else "Enabled"
+            except Exception:
+                continue
+            yield _policy_name, _associated_gateways, _policy_state
     
     for row in rows:
         name, rtype, rg, fqdn, is_public, sku = row[:6]
@@ -18808,7 +19409,11 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             "vnet_resource_group": None,
             "subnet_name": None,
             "subnet_id": None,
+            "raw_json": raw_json,
         }
+        resource_key = (str(rg or "").strip().lower(), str(name or "").strip().lower())
+        if resource_key[0] or resource_key[1]:
+            raw_json_by_resource[resource_key].append(raw_json)
         if isinstance(parsed_raw, dict):
             extra = parsed_raw.get("_extra") or {}
             if isinstance(extra, dict):
@@ -19046,7 +19651,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
 
     # Also map public IP associations by referenced PublicIPAddress ARM IDs
     # (e.g. Load Balancer/frontend configs where PIP name != resource name).
-    for item in entry_points + backends + data_stores:
+    for item in entry_points + api_layer + backends + data_stores:
         type_key = (item.get("arm_type") or item.get("type") or "").lower()
         if "publicipaddress" in type_key:
             continue
@@ -19065,6 +19670,14 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             if candidate_id and candidate_id not in seen_ids:
                 existing.append(candidate)
                 seen_ids.add(candidate_id)
+                # Keep linked Public IPs inside the same network/subnet boundary as
+                # the resource that references them so they do not float as separate
+                # top-level nodes.
+                for key in ("vnet_name", "vnet_resource_group", "subnet_name", "subnet_id"):
+                    if not candidate.get(key) and item.get(key):
+                        candidate[key] = item.get(key)
+        if linked:
+            item["public_ips"] = linked
         # A resource explicitly linked to one or more Public IP resources is internet-exposed.
         item["public"] = True
 
@@ -19176,6 +19789,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                         "subnet_name": item.get("subnet_name"),
                         "subnet_id": item.get("subnet_id"),
                         "public_ips": resources_with_public_ips.get((str(item.get("rg") or "").strip().lower(), str(item.get("name") or "").strip().lower()), []),
+                        "raw_json": item.get("raw_json"),
                     })
                     if "bastionhost" in (item.get("type") or "").lower():
                         result[-1]["bastion_key"] = (str(item.get("rg") or "").strip().lower(), str(item.get("name") or "").strip().lower())
@@ -19218,6 +19832,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     "subnet_name": next((i.get("subnet_name") for i in items if i.get("subnet_name")), None),
                     "subnet_id": next((i.get("subnet_id") for i in items if i.get("subnet_id")), None),
                     "public_ips": [pip for item in items for pip in resources_with_public_ips.get((str(item.get("rg") or "").strip().lower(), str(item.get("name") or "").strip().lower()), [])],
+                    "raw_json": [i.get("raw_json") for i in items if i.get("raw_json")],
                 }
                 if "bastionhost" in (items[0].get("type") or "").lower():
                     group_item["bastion_key"] = (str(items[0].get("rg") or "").strip().lower(), str(items[0].get("name") or "").strip().lower())
@@ -19230,7 +19845,35 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     def _group_api_services(api_items):
         """Group API services by resource type and public/private exposure."""
         from collections import defaultdict
-        grouped = defaultdict(lambda: {"count": 0, "type": None, "arm_type": None, "access": None, "resources": [], "fqdns": [], "is_restricted": False})
+        grouped = defaultdict(lambda: {
+            "count": 0,
+            "type": None,
+            "arm_type": None,
+            "access": None,
+            "resources": [],
+            "fqdns": [],
+            "is_restricted": False,
+            "public_ips": [],
+        })
+
+        def _merge_public_ips(existing: list[dict], incoming: list[dict]) -> list[dict]:
+            merged: list[dict] = []
+            seen: set[str] = set()
+            for pip in [*existing, *incoming]:
+                if not isinstance(pip, dict):
+                    continue
+                marker = str(
+                    pip.get("id")
+                    or pip.get("name")
+                    or pip.get("fqdn")
+                    or pip.get("public_ip")
+                    or ""
+                ).strip().lower()
+                if not marker or marker in seen:
+                    continue
+                seen.add(marker)
+                merged.append(pip)
+            return merged
         
         for item in api_items:
             type_key = (item.get("type") or "").lower()
@@ -19246,11 +19889,20 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             grouped[group_key]["resources"].append({"rg": item.get("rg"), "name": item.get("name")})
             if item.get("fqdn"):
                 grouped[group_key]["fqdns"].append(item["fqdn"])
+            grouped[group_key]["public_ips"] = _merge_public_ips(
+                grouped[group_key]["public_ips"],
+                list(item.get("public_ips") or []),
+            )
         
         result = []
         for group_key, info in sorted(grouped.items()):
             count = info["count"]
             unique_name = group_key.replace("|", "_")  # e.g. "APIM_Public" or "APIM_Private"
+            group_items = [
+                i for i in api_items
+                if (i.get("public") if info["access"] == "Public" else not i.get("public"))
+                and _friendly_type(i.get("type")) == info["type"]
+            ]
             result.append({
                 "name": unique_name,
                 "label": info["type"],
@@ -19264,6 +19916,12 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 "public": info["access"] == "Public",
                 "is_restricted": info["is_restricted"],
                 "rg": "",
+                "raw_json": [i.get("raw_json") for i in group_items],
+                "public_ips": info["public_ips"],
+                "vnet_name": next((i.get("vnet_name") or i.get("parent_vnet_name") for i in group_items if i.get("vnet_name") or i.get("parent_vnet_name")), None),
+                "vnet_resource_group": next((i.get("vnet_resource_group") or i.get("parent_vnet_resource_group") for i in group_items if i.get("vnet_name") or i.get("parent_vnet_name")), None),
+                "subnet_name": next((i.get("subnet_name") for i in group_items if i.get("subnet_name")), None),
+                "subnet_id": next((i.get("subnet_id") for i in group_items if i.get("subnet_id")), None),
             })
         return result
     
@@ -19651,15 +20309,17 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     # Metadata for synthetic App Gateway child nodes used in drilldown map.
     appgw_node_resources_by_id: dict[str, list[dict]] = {}
     appgw_node_title_by_id: dict[str, str] = {}
+    rendered_node_ids: set[str] = set()
+    api_public_ip_edges: list[tuple[str, str]] = []
 
     # Add nodes with icon classes.
-    # Entry-point nodes plus network-attached backend infrastructure (VMSS/ASE)
-    # are wrapped in per-VNet subgraphs so distinct spokes don't collapse into
-    # a single visual network boundary.
+    # Entry-point nodes plus network-attached services are wrapped in per-VNet
+    # subgraphs so distinct spokes don't collapse into a single visual boundary.
     def _is_network_backend(item: dict) -> bool:
         t = str(item.get("arm_type") or item.get("type") or "").lower()
         return (
             "virtualmachinescalesets" in t
+            or "managedcluster" in t
             or "hostingenvironment" in t
             or bool(item.get("vnet_name"))
             or bool(item.get("subnet_id"))
@@ -19674,6 +20334,15 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             subnet_id = str(item.get("subnet_id") or "").strip()
             if subnet_id:
                 vnet_name = str(_vnet_name_from_subnet_id(subnet_id) or "").strip()
+        if not vnet_name:
+            raw_json_text = item.get("raw_json")
+            if isinstance(raw_json_text, str) and raw_json_text.strip():
+                try:
+                    parsed_raw = json.loads(raw_json_text)
+                except Exception:
+                    parsed_raw = {}
+                if isinstance(parsed_raw, dict):
+                    vnet_name = str(_extract_vnet(parsed_raw) or "").strip()
         vnet_rg = str(
             item.get("vnet_resource_group")
             or item.get("parent_vnet_resource_group")
@@ -19705,6 +20374,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         # Note: bastion_children (Public IPs) are not rendered as nodes in Mermaid
         # They are surfaced as properties on the Bastion resource instead
         lines.append(_node_line(node_id, label, arm_type))
+        rendered_node_ids.add(node_id)
         if "applicationgateway" in (arm_type or "").lower():
             appgw_node_resources_by_id[node_id] = item.get("resources") or [{"rg": item.get("rg"), "name": item.get("name")}]
             appgw_node_title_by_id[node_id] = item.get("name") or item.get("label") or "App Gateway"
@@ -19739,42 +20409,129 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         lines.append(_node_line(node_id, f"{label}{access_indicator}", arm_type))
         _network_backend_node_ids.add(node_id)
 
+    def _render_api_item(item: dict) -> None:
+        node_id = _get_node_id(item)
+        arm_type = item.get("arm_type") or item["type"]
+        label = item.get("label") or item.get("type") or _friendly_type(arm_type)
+        lines.append(_node_line(node_id, label, arm_type))
+        rendered_node_ids.add(node_id)
+        public_ips = item.get("public_ips") or []
+        for pip in public_ips:
+            if not isinstance(pip, dict):
+                continue
+            pip_node_id = _get_node_id(pip)
+            if not pip_node_id:
+                continue
+            # Preserve the underlying Public IP as a distinct node when APIM
+            # exposes it, instead of collapsing it into the APIM label.
+            pip_label = str(pip.get("label") or pip.get("name") or "Public IP").strip() or "Public IP"
+            if "publicip" not in (pip.get("type") or "").lower():
+                pip_label = f"Public IP: {pip_label}"
+            if pip_node_id not in all_diagram_node_ids and pip_node_id not in rendered_node_ids:
+                lines.append(_node_line(pip_node_id, pip_label, "microsoft.network/publicipaddresses"))
+                rendered_node_ids.add(pip_node_id)
+            api_public_ip_edges.append((node_id, pip_node_id))
+
+    def _render_backend_item(item: dict) -> None:
+        node_id = _get_node_id(item)
+        if node_id in _network_backend_node_ids:
+            return
+        arm_type = item.get("arm_type") or item["type"]
+        label = item.get("label") or item.get("type") or _friendly_type(arm_type)
+        access_indicator = " 🌐" if item.get("public") and not item.get("is_restricted") else " 🔒"
+        if "containerregistry" in (arm_type or "").lower():
+            exposure_txt = "Public" if item.get("public") else "Private"
+            creds_req = item.get("acr_requires_credentials")
+            creds_txt = "Creds required" if creds_req is not False else "Anonymous pull"
+            label = f"{label} ({exposure_txt}, {creds_txt})"
+        elif item.get("restriction_label") or item.get("auth_summary"):
+            label = f"{label}{_node_security_suffix(item)}"
+        # ⚠️ badge for publicly-exposed App Service Plans not confirmed in APIM routing
+        if item.get("apim_unverified"):
+            access_indicator += " ⚠️"
+        lines.append(_node_line(node_id, f"{label}{access_indicator}", arm_type))
+        rendered_node_ids.add(node_id)
+
+    def _render_data_item(item: dict) -> None:
+        node_id = _get_node_id(item)
+        label = item.get("label") or item.get("type") or "Data Store"
+        arm_type = item.get("arm_type")
+        arm_type_lc = (arm_type or "").lower()
+        if "eventhub" in arm_type_lc or "servicebus" in arm_type_lc:
+            if item.get("public"):
+                exposure_txt = "Public"
+            elif item.get("is_restricted"):
+                exposure_txt = item.get("restriction_label") or "IP restricted"
+            else:
+                exposure_txt = "Private"
+            auth_txt = item.get("auth_summary")
+            if not auth_txt:
+                auth_required = item.get("auth_required")
+                if auth_required is True:
+                    auth_txt = "Auth required"
+                elif auth_required is False:
+                    auth_txt = "Anonymous access"
+                else:
+                    auth_txt = "Auth unknown"
+            label = f"{label} ({exposure_txt}, {auth_txt})"
+        elif item.get("restriction_label") or item.get("auth_summary"):
+            label = f"{label}{_node_security_suffix(item)}"
+        if arm_type:
+            lines.append(_node_line(node_id, label, arm_type))
+        else:
+            safe_label = label.replace('"', "&quot;")
+            lines.append(f'    {node_id}["{safe_label}"]')
+        rendered_node_ids.add(node_id)
+
+    shown_entry_ids = {id(item) for item in shown_entry}
+    shown_api_ids = {id(item) for item in shown_api}
+    shown_backend_ids = {id(item) for item in shown_backend}
+    shown_data_ids = {id(item) for item in shown_data}
+    all_diagram_node_ids = {
+        _get_node_id(item)
+        for item in shown_entry + shown_api + shown_backend + shown_data
+    }
+
+    def _render_group_item(item: dict) -> None:
+        item_id = id(item)
+        if item_id in shown_entry_ids:
+            _render_entry_item(item)
+        elif item_id in shown_api_ids:
+            _render_api_item(item)
+        elif item_id in shown_backend_ids:
+            if item_id in _network_backend_item_ids:
+                _render_network_backend_item(item)
+            else:
+                _render_backend_item(item)
+        elif item_id in shown_data_ids:
+            _render_data_item(item)
+
     network_groups: dict[str, list[dict]] = defaultdict(list)
     network_group_order: list[str] = []
-    subnet_groups: dict[str, list[dict]] = defaultdict(list)
-    subnet_group_order: list[str] = []
     standalone_entry_items: list[dict] = []
-    standalone_network_backend_items: list[dict] = []
-    for item in shown_entry:
+    standalone_api_items: list[dict] = []
+    standalone_backend_items: list[dict] = []
+    standalone_data_items: list[dict] = []
+
+    def _bucket_network_item(item: dict, standalone_bucket: list[dict]) -> None:
         if item.get("parent_bastion_key") or item.get("parent_lb_key"):
-            continue
+            return
         group_key = _network_group_key(item)
         if group_key is None:
-            standalone_entry_items.append(item)
-            continue
-        if group_key not in network_groups:
-            network_group_order.append(group_key)
-        network_groups[group_key].append(item)
-    for item in _network_backend_items:
-        group_key = _network_group_key(item)
-        if group_key is None:
-            standalone_network_backend_items.append(item)
-            continue
+            standalone_bucket.append(item)
+            return
         if group_key not in network_groups:
             network_group_order.append(group_key)
         network_groups[group_key].append(item)
 
-    subnet_assets = [
-        item for item in type_groups.get("microsoft.network/virtualnetworks/subnets", [])
-        if _network_group_key(item)
-    ]
-    for subnet in subnet_assets:
-        subnet_key = _network_group_key(subnet)
-        if subnet_key is None:
-            continue
-        if subnet_key not in subnet_groups:
-            subnet_group_order.append(subnet_key)
-        subnet_groups[subnet_key].append(subnet)
+    for item in shown_entry:
+        _bucket_network_item(item, standalone_entry_items)
+    for item in shown_api:
+        _bucket_network_item(item, standalone_api_items)
+    for item in shown_backend:
+        _bucket_network_item(item, standalone_backend_items)
+    for item in shown_data:
+        _bucket_network_item(item, standalone_data_items)
 
     network_subgraph_ids: list[str] = []
     subnet_subgraph_ids: list[str] = []
@@ -19789,78 +20546,65 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         lines.append(f'    subgraph {net_id}["{_network_group_label(label_item)}"]')
 
         subnet_children: dict[str, list[dict]] = defaultdict(list)
+        subnet_order: list[str] = []
         direct_group_items: list[dict] = []
         for item in group_items:
-            subnet_id = str(item.get("subnet_id") or "").strip().lower()
-            if subnet_id:
-                subnet_children[subnet_id].append(item)
+            subnet_key = str(item.get("subnet_id") or item.get("subnet_name") or "").strip().lower()
+            if not subnet_key:
+                raw_json_text = item.get("raw_json")
+                if isinstance(raw_json_text, str) and raw_json_text.strip():
+                    try:
+                        parsed_raw = json.loads(raw_json_text)
+                    except Exception:
+                        parsed_raw = {}
+                    if isinstance(parsed_raw, dict):
+                        subnet_key = str(_extract_subnet(parsed_raw) or "").strip().lower()
+            if subnet_key:
+                if subnet_key not in subnet_children:
+                    subnet_order.append(subnet_key)
+                subnet_children[subnet_key].append(item)
             else:
                 direct_group_items.append(item)
 
-        group_subnets = subnet_groups.get(group_key, [])
-        rendered_subnet_ids: set[str] = set()
-
-        def _render_subnet_summary_node(subnet_item: dict, subnet_node_id: str) -> None:
-            subnet_name = str(subnet_item.get("subnet_name") or subnet_item.get("name") or "Subnet").strip()
-            subnet_rg = str(subnet_item.get("rg") or "").strip()
-            subnet_label = f"Subnet<br/>{subnet_name}"
-            if subnet_rg:
-                subnet_label = f"{subnet_label}<br/>{subnet_rg}"
-            lines.append(_node_line(subnet_node_id, subnet_label, subnet_item.get("arm_type") or subnet_item.get("type") or "microsoft.network/virtualNetworks/subnets"))
-
         # Render subnet subgraphs first so child resources stay nested inside the
         # correct VNet boundary. Resources without a subnet stay at the VNet level.
-        for subnet in group_subnets:
-            subnet_id = str(subnet.get("id") or "").strip().lower()
-            if not subnet_id:
-                continue
-            subnet_node_id = f"sub_{_sanitise_node_id(subnet.get('id') or subnet.get('name') or subnet_id)}"
-            rendered_children = subnet_children.pop(subnet_id, [])
-            subnet_subgraph_ids.append(subnet_node_id)
-            rendered_subnet_ids.add(subnet_id)
-            subnet_name = str(subnet.get("subnet_name") or subnet.get("name") or "Subnet").strip()
-            lines.append(f'        subgraph {subnet_node_id}["Subnet: {subnet_name}"]')
-            if rendered_children:
-                for item in rendered_children:
-                    if id(item) in _network_backend_item_ids:
-                        _render_network_backend_item(item)
-                    else:
-                        _render_entry_item(item)
-            else:
-                _render_subnet_summary_node(subnet, f"{subnet_node_id}_summary")
-            lines.append("        end")
-
-        # Render any remaining subnet buckets that were inferred from resources but
-        # do not have a harvested subnet asset row.
-        for subnet_id, rendered_children in sorted(subnet_children.items()):
+        for subnet_key in subnet_order:
+            rendered_children = subnet_children.get(subnet_key, [])
             if not rendered_children:
                 continue
-            subnet_node_id = f"sub_{_sanitise_node_id(subnet_id)}"
+            subnet_node_id = f"sub_{_sanitise_node_id(f'{group_key}_{subnet_key}')}"
             subnet_subgraph_ids.append(subnet_node_id)
-            subnet_name = subnet_id.split("/subnets/")[-1] if "/subnets/" in subnet_id else subnet_id
+            subnet_name = next(
+                (
+                    str(child.get("subnet_name") or "").strip()
+                    for child in rendered_children
+                    if str(child.get("subnet_name") or "").strip()
+                ),
+                "",
+            )
+            if not subnet_name:
+                subnet_name = subnet_key.split("/subnets/")[-1] if "/subnets/" in subnet_key else subnet_key
             lines.append(f'        subgraph {subnet_node_id}["Subnet: {subnet_name}"]')
             for item in rendered_children:
-                if id(item) in _network_backend_item_ids:
-                    _render_network_backend_item(item)
-                else:
-                    _render_entry_item(item)
+                _render_group_item(item)
             lines.append("        end")
 
         for item in group_items:
-            subnet_id = str(item.get("subnet_id") or "").strip().lower()
-            if subnet_id and (subnet_id in rendered_subnet_ids or subnet_id in subnet_children):
+            subnet_key = str(item.get("subnet_id") or item.get("subnet_name") or "").strip().lower()
+            if subnet_key and subnet_key in subnet_children:
                 continue
-            if id(item) in _network_backend_item_ids:
-                _render_network_backend_item(item)
-                continue
-            _render_entry_item(item)
+            _render_group_item(item)
 
         lines.append("    end")
 
     for item in standalone_entry_items:
         _render_entry_item(item)
-    for item in standalone_network_backend_items:
-        _render_network_backend_item(item)
+    for item in standalone_api_items:
+        _render_api_item(item)
+    for item in standalone_backend_items:
+        _render_backend_item(item)
+    for item in standalone_data_items:
+        _render_data_item(item)
 
     # --- Listener and WAF policy nodes for App Gateways ---
     # Maps gw_nid → list of (listener_nid, is_insecure_http)
@@ -19879,6 +20623,26 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     _gw_listener_pairs: dict[str, list[tuple[str, str]]] = {}
     # Maps (gateway, protocol, hostname) → named WAF policy from routing rules
     _gw_listener_waf_policy: dict[tuple[str, str, str], str] = {}
+    # Maps gateway name → active gateway-level WAF policy name
+    _gw_level_waf_policy: dict[str, str] = {}
+
+    for _policy_name, _associated_gateways_json, _policy_state in _iter_appgw_waf_policy_rows():
+        if str(_policy_state or "").strip().lower() == "disabled":
+            continue
+        try:
+            _associated_gateways = json.loads(_associated_gateways_json or "[]") if isinstance(_associated_gateways_json, str) else (_associated_gateways_json or [])
+        except Exception:
+            _associated_gateways = []
+        if not isinstance(_associated_gateways, list):
+            _associated_gateways = []
+        _policy_name = str(_policy_name or "").strip()
+        if not _policy_name:
+            continue
+        for _gateway_name in _associated_gateways:
+            _gateway_key = str(_gateway_name or "").lower().strip()
+            if _gateway_key and _gateway_key not in _gw_level_waf_policy:
+                _gw_level_waf_policy[_gateway_key] = _policy_name
+
     for _gw_name, _hostname, _be_fqdns_json, _pool_name, _listener_name, _url_path, _listener_protocol, _waf_policy_name in _iter_appgw_route_rows():
         _gw_key = str(_gw_name or "").lower().strip()
         _host = str(_hostname or "").strip()
@@ -19935,7 +20699,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             arm_type = "microsoft.network/applicationgatewaylisteners/http" if is_http else "microsoft.network/applicationgatewaylisteners/https"
             lines.append(_node_line(l_nid, label, arm_type))
             l_nids.append((l_nid, is_http))
-            _waf_policy_name = _gw_listener_waf_policy.get((gw_name_lc, proto, host))
+            _waf_policy_name = _gw_listener_waf_policy.get((gw_name_lc, proto, host)) or _gw_level_waf_policy.get(gw_name_lc)
             if _waf_policy_name:
                 _waf_key = (gw_nid, _waf_policy_name.lower())
                 _waf_nid = _waf_nids_by_policy.get(_waf_key)
@@ -19967,61 +20731,6 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         # for gateways without explicit WAF policies (disabled WAFs or no WAF configured)
         if _waf_nids_by_gateway.get(gw_nid):
             _waf_nids[gw_nid] = _waf_nids_by_gateway[gw_nid][0]
-
-    for item in shown_api:
-        node_id = _get_node_id(item)
-        arm_type = item.get("arm_type") or item["type"]
-        label = item.get("label") or item.get("type") or _friendly_type(arm_type)
-        lines.append(_node_line(node_id, label, arm_type))
-    
-    for item in shown_backend:
-        node_id = _get_node_id(item)
-        if node_id in _network_backend_node_ids:
-            continue
-        arm_type = item.get("arm_type") or item["type"]
-        label = item.get("label") or item.get("type") or _friendly_type(arm_type)
-        access_indicator = " 🌐" if item.get("public") and not item.get("is_restricted") else " 🔒"
-        if "containerregistry" in (arm_type or "").lower():
-            exposure_txt = "Public" if item.get("public") else "Private"
-            creds_req = item.get("acr_requires_credentials")
-            creds_txt = "Creds required" if creds_req is not False else "Anonymous pull"
-            label = f"{label} ({exposure_txt}, {creds_txt})"
-        elif item.get("restriction_label") or item.get("auth_summary"):
-            label = f"{label}{_node_security_suffix(item)}"
-        # ⚠️ badge for publicly-exposed App Service Plans not confirmed in APIM routing
-        if item.get("apim_unverified"):
-            access_indicator += " ⚠️"
-        lines.append(_node_line(node_id, f"{label}{access_indicator}", arm_type))
-    
-    for item in shown_data:
-        node_id = _get_node_id(item)
-        label = item.get("label") or item.get("type") or "Data Store"
-        arm_type = item.get("arm_type")
-        arm_type_lc = (arm_type or "").lower()
-        if "eventhub" in arm_type_lc or "servicebus" in arm_type_lc:
-            if item.get("public"):
-                exposure_txt = "Public"
-            elif item.get("is_restricted"):
-                exposure_txt = item.get("restriction_label") or "IP restricted"
-            else:
-                exposure_txt = "Private"
-            auth_txt = item.get("auth_summary")
-            if not auth_txt:
-                auth_required = item.get("auth_required")
-                if auth_required is True:
-                    auth_txt = "Auth required"
-                elif auth_required is False:
-                    auth_txt = "Anonymous access"
-                else:
-                    auth_txt = "Auth unknown"
-            label = f"{label} ({exposure_txt}, {auth_txt})"
-        elif item.get("restriction_label") or item.get("auth_summary"):
-            label = f"{label}{_node_security_suffix(item)}"
-        if arm_type:
-            lines.append(_node_line(node_id, label, arm_type))
-        else:
-            safe_label = label.replace('"', "&quot;")
-            lines.append(f'    {node_id}["{safe_label}"]')
 
     # App Gateway backend pool nodes: show explicit egress path
     # App Gateway -> Backend Pool -> Destination.
@@ -20063,6 +20772,9 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     def _add_link(line: str, color: str, *, dasharray: str | None = None) -> None:
         link_styles.append((color, dasharray) if dasharray else color)
         lines.append(line)
+
+    for source_id, target_id in api_public_ip_edges:
+        _add_link(f"    {source_id} --> {target_id}", "white")
 
     # Note: bastion_child_edges is no longer populated since Public IPs are not rendered as nodes
 
@@ -20151,6 +20863,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         """Return the well-known Azure FQDN suffix for resource types whose FQDN
         is not stored in the DB but can be derived from the resource name."""
         t = (arm_type or "").lower()
+        if "apimanagement" in t:
+            return "azure-api.net"
         if "keyvault" in t:
             return "vault.azure.net"
         if "storage" in t:
@@ -20193,6 +20907,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     def _data_exposure_label(arm_type: str, count: int) -> str:
         """Protocol-appropriate 🔴 label for direct Internet exposure arrows."""
         t = (arm_type or "").lower()
+        if "apimanagement" in t:
+            return f'API "Product"' if count == 1 else f'API "Product" x{count}'
         if "eventhub" in t or "servicebus" in t:
             proto = "AMQP"
         elif "keyvault" in t or "storage" in t or "appconfiguration" in t:
@@ -20304,6 +21020,76 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         elif "documentdb" in t:
             return "HTTPS"
         return "TCP/IP"
+
+    def _iter_string_literals(obj):
+        """Yield all non-empty string literals from a parsed JSON object."""
+        if isinstance(obj, dict):
+            for value in obj.values():
+                yield from _iter_string_literals(value)
+        elif isinstance(obj, list):
+            for value in obj:
+                yield from _iter_string_literals(value)
+        elif isinstance(obj, str):
+            value = obj.strip()
+            if value:
+                yield value
+
+    def _explicit_data_reference_targets(source_item: dict) -> list[str]:
+        """Return data-store node IDs explicitly referenced by a resource JSON blob."""
+        raw_json_blobs: list[object] = []
+        if source_item.get("raw_json") is not None:
+            raw_json_blobs.append(source_item.get("raw_json"))
+        for resource in source_item.get("resources") or []:
+            resource_key = (
+                str(resource.get("rg") or "").strip().lower(),
+                str(resource.get("name") or "").strip().lower(),
+            )
+            if resource_key[0] or resource_key[1]:
+                raw_json_blobs.extend(raw_json_by_resource.get(resource_key, []))
+
+        haystack: list[str] = []
+        for raw_json in raw_json_blobs:
+            if isinstance(raw_json, str):
+                try:
+                    parsed_raw = json.loads(raw_json) if raw_json.strip() else {}
+                except Exception:
+                    parsed_raw = {}
+            elif isinstance(raw_json, dict):
+                parsed_raw = raw_json
+            elif isinstance(raw_json, list):
+                parsed_raw = raw_json
+            else:
+                parsed_raw = {}
+            haystack.extend(text.lower() for text in _iter_string_literals(parsed_raw))
+        if not haystack:
+            return []
+
+        matches: list[str] = []
+        seen: set[str] = set()
+        for target in shown_data:
+            target_node_id = _get_node_id(target)
+            if target_node_id in seen:
+                continue
+
+            candidate_needles: list[str] = []
+            for candidate in (target.get("id"), target.get("name"), target.get("fqdn")):
+                candidate_text = str(candidate or "").strip().lower()
+                if candidate_text:
+                    candidate_needles.append(candidate_text)
+
+            if not target.get("fqdn") and target.get("name"):
+                derived_fqdn = _fqdn_for_type(
+                    str(target.get("name") or ""),
+                    str(target.get("arm_type") or target.get("type") or ""),
+                )
+                if derived_fqdn:
+                    candidate_needles.append(derived_fqdn.lower())
+
+            if any(needle and any(needle in text for text in haystack) for needle in candidate_needles):
+                seen.add(target_node_id)
+                matches.append(target_node_id)
+
+        return matches
 
     # Traffic Manager → resolved targets (orange — DNS-level routing to enabled endpoints,
     # grey dashed — disabled/failover endpoints so their paths remain visible)
@@ -20540,7 +21326,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             _add_link(f'    {entry_nid} -->|{routing_label}| {first_backend_nid}', "orange")
 
     # P0-E: AppGW → API Layer routing (using backend FQDNs from routing rules).
-    # SIMPLIFIED: One arrow to APIM, labeled with protocol/WAF info.
+    # Prefer the exact backend asset resolved from the routed FQDN so AppGW -> APIM
+    # joins are explicit instead of collapsing onto the first API node in the view.
     if appgw_routes and shown_api and shown_entry:
         import re as _re_routing
         _gw_to_pool_edges: set[tuple[str, str, str]] = set()
@@ -20551,6 +21338,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             'has_waf': False,
             'sources': set(),
             'url_paths': set(),
+            'targets': set(),
         }
         _has_apim_routes = False
         
@@ -20583,6 +21371,12 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 if "azure-api.net" in _fqdn_s:
                     _has_apim_routes = True
                     _apim_connection_info['sources'].add(_source_nid)
+                    _target_nid = node_by_fqdn.get(_fqdn_s)
+                    if not _target_nid and _fqdn_s.endswith(".azure-api.net"):
+                        _apim_name = _fqdn_s.removesuffix(".azure-api.net")
+                        _target_nid = node_by_name.get(_apim_name) or node_by_name.get(_apim_name.split(".", 1)[0])
+                    if _target_nid:
+                        _apim_connection_info['targets'].add(_target_nid)
                     if _listener_protocol:
                         _apim_connection_info['protocols'].add(_listener_protocol.upper())
                     if _waf_policy_name:
@@ -20593,8 +21387,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         
         # Emit ONE arrow to APIM with consolidated info
         if _has_apim_routes:
-            api_nid = _get_node_id(shown_api[0])
             _source_nid = sorted(_apim_connection_info['sources'])[0]  # Pick one source
+            _target_nid = sorted(_apim_connection_info['targets'])[0] if _apim_connection_info['targets'] else _get_node_id(shown_api[0])
             
             _protocols = sorted(_apim_connection_info['protocols']) if _apim_connection_info['protocols'] else ['HTTPS']
             _protocol_str = "/".join(_protocols)
@@ -20624,7 +21418,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 _metadata_json = _metadata_json[:_max_metadata_len] + '..."}'
             
             _add_link(
-                f'    %% {_metadata_json}\n    {_source_nid} -->|"{_edge_label}"| {api_nid}',
+                f'    %% {_metadata_json}\n    {_source_nid} -->|"{_edge_label}"| {_target_nid}',
                 "orange",
             )
      
@@ -20744,52 +21538,23 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             )
 
 
-    # Connect one representative from each major backend category rather than just
-    # shown_backend[0] (which is always AKS after prioritization). This ensures App
-    # Service Plans, Service Fabric, etc. also show outbound data access edges.
-    if shown_backend and shown_data:
-        def _pick_backend_representatives(backends: list) -> list:
-            """Return one representative per major compute category, capped at 4.
-
-            Prioritises heavy-compute tiers (AKS, App Service Plan, ASE, SF, Data
-            Factory) to ensure they always get data-store edges. Lighter categories
-            (App Insights, Container Registry, AI Services) are only included if
-            slots remain.
-            """
-            # Ordered preference: show compute-heavy types first
-            priority_categories = [
-                "AKS", "App Service Plan", "App Service Environment",
-                "Service Fabric", "Data Factory",
-            ]
-            seen: set[str] = set()
-            reps: list = []
-
-            # First pass: priority categories in order
-            for pcat in priority_categories:
-                for b in backends:
-                    if b.get("type") == pcat and pcat not in seen:
-                        seen.add(pcat)
-                        reps.append(b)
-                        break
-                if len(reps) >= 4:
-                    break
-
-            # Second pass: remaining categories to fill up to 4
-            for b in backends:
-                if len(reps) >= 4:
-                    break
-                cat = b.get("type") or ""
-                if cat and cat not in seen:
-                    seen.add(cat)
-                    reps.append(b)
-
-            return reps
-
-        for backend_rep in _pick_backend_representatives(shown_backend):
-            backend_node = _get_node_id(backend_rep)
-            for store in shown_data:
-                store_proto = _internal_link_label(store.get("arm_type") or "")
-                _add_link(f'    {backend_node} -->|"{store_proto}"| {_get_node_id(store)}', "white")
+    # Explicit backend/API → data-store references only.
+    # Do not invent generic "can talk to data" edges; only render resources named
+    # in raw configuration or canonical endpoints present in harvested JSON.
+    explicit_data_edges: set[tuple[str, str]] = set()
+    for source_item in shown_backend + shown_api:
+        source_node_id = _get_node_id(source_item)
+        for target_node_id in _explicit_data_reference_targets(source_item):
+            edge = (source_node_id, target_node_id)
+            if edge in explicit_data_edges:
+                continue
+            explicit_data_edges.add(edge)
+            target_item = next((item for item in shown_data if _get_node_id(item) == target_node_id), None)
+            edge_label = _internal_link_label((target_item or source_item).get("arm_type") or (target_item or source_item).get("type") or "")
+            _add_link(
+                f'    {source_node_id} -->|"{edge_label}"| {target_node_id}',
+                "white",
+            )
 
     # Fallback hosted-on arrows for any site nodes that remain visible
     if plan_links:
@@ -20853,6 +21618,11 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
 
         if item.get("rbac_label") and any(token in arm_type for token in ("keyvault", "storage", "appconfiguration", "documentdb")):
             return f"{item['rbac_label']} · {label}"
+        if "apimanagement" in arm_type:
+            api_name = str(item.get("api_display_name") or item.get("api_name") or "Product").strip()
+            if not api_name:
+                api_name = "Product"
+            return f'API "{api_name}"'
         return label
 
     for item in shown_backend:
@@ -22001,51 +22771,189 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
 
     # ── App Service Environment → hosted App Services / Function Apps ─────────
     elif "hostingenvironment" in arm_type_lc:
-        n = len(names)
-        title   = "App Service Environment — Hosted Apps"
-        columns = ["App Service / Function App", "Resource Group", "URL / FQDN", "Exposure", "Kind", "Environment"]
+        title = "App Service Environment — Hosted Plans"
+        columns = ["Plan / App", "Resource Group", "SKU / FQDN", "Exposure", "Kind", "Parent"]
         ph_envs = ",".join("?" * len(names)) if names else "''"
 
-        site_rows = conn.execute(
-            f"""SELECT s.name, s.resource_group, s.fqdn, s.is_public, s.is_restricted,
-                       s.raw_json, ase.name AS env_name
-                FROM provisioned_assets s
-                JOIN provisioned_assets ase
-                    ON lower(COALESCE(
-                        json_extract(s.raw_json, '$.properties.hostingEnvironmentProfile.id'),
-                        json_extract(s.raw_json, '$.hostingEnvironmentProfile.id')
-                    )) = lower(ase.id)
-                WHERE s.subscription_id = ?
-                  AND s.type LIKE '%/sites'
-                  AND lower(ase.type) LIKE '%/hostingenvironments%'
-                  AND ase.name IN ({ph_envs})
-                ORDER BY ase.name, s.name""",
+        ase_rows = conn.execute(
+            f"""SELECT id, name, resource_group
+                FROM provisioned_assets
+                WHERE subscription_id = ?
+                  AND lower(type) LIKE '%/hostingenvironments%'
+                  AND name IN ({ph_envs})
+                ORDER BY name""",
             [sub_id] + names,
         ).fetchall() if names else []
 
-        if not site_rows:
+        if not ase_rows:
+            return {
+                "title": title,
+                "view_type": "tree_table",
+                "columns": columns,
+                "sections": [],
+                "empty_message": "No App Service Plans found in this App Service Environment",
+            }
+
+        sections: list[dict] = []
+        plan_type_tokens = ("%/serverfarms%", "%/serviceplans%")
+        for ase_row in ase_rows:
+            ase_id = str(ase_row["id"] or "").strip()
+            ase_name = str(ase_row["name"] or "").strip()
+            ase_rg = str(ase_row["resource_group"] or "").strip()
+            if not ase_id:
+                continue
+
+            plan_rows = conn.execute(
+                """
+                SELECT p.id, p.name, p.resource_group, p.fqdn, p.is_public, p.is_restricted, p.raw_json
+                FROM provisioned_assets p
+                WHERE p.subscription_id = ?
+                  AND (
+                        lower(p.type) LIKE '%/serverfarms%'
+                        OR lower(p.type) LIKE '%/serviceplans%'
+                      )
+                  AND lower(COALESCE(
+                        json_extract(p.raw_json, '$.hostingEnvironmentProfile.id'),
+                        json_extract(p.raw_json, '$.properties.hostingEnvironmentProfile.id')
+                      )) = lower(?)
+                ORDER BY p.name
+                """,
+                (sub_id, ase_id),
+            ).fetchall()
+
+            section_rows: list[dict] = []
+            for plan_row in plan_rows:
+                plan_id = str(plan_row["id"] or "").strip()
+                if not plan_id:
+                    continue
+
+                app_rows = conn.execute(
+                    """
+                    SELECT a.id, a.name, a.resource_group, a.fqdn, a.is_public, a.is_restricted, a.raw_json
+                    FROM provisioned_assets a
+                    WHERE a.subscription_id = ?
+                      AND lower(a.type) LIKE '%/sites%'
+                      AND (
+                            lower(COALESCE(json_extract(a.raw_json, '$.appServicePlanId'), json_extract(a.raw_json, '$.serverFarmId'))) = lower(?)
+                            OR lower(COALESCE(json_extract(a.raw_json, '$.hostingEnvironmentProfile.id'), json_extract(a.raw_json, '$.properties.hostingEnvironmentProfile.id'))) = lower(?)
+                          )
+                    ORDER BY a.name
+                    """,
+                    (sub_id, plan_id, ase_id),
+                ).fetchall()
+
+                plan_sku = "—"
+                try:
+                    plan_raw = _json.loads(plan_row["raw_json"] or "{}") if isinstance(plan_row["raw_json"], str) else (plan_row["raw_json"] or {})
+                except Exception:
+                    plan_raw = {}
+                if isinstance(plan_raw, dict):
+                    sku_obj = plan_raw.get("sku") or {}
+                    if isinstance(sku_obj, dict):
+                        plan_sku = str(sku_obj.get("name") or sku_obj.get("tier") or sku_obj.get("size") or "—")
+                    elif sku_obj:
+                        plan_sku = str(sku_obj)
+                plan_node_id = plan_id
+                section_rows.append({
+                    "id": plan_node_id,
+                    "parent_id": None,
+                    "child_count": len(app_rows),
+                    "cells": [
+                        {"label": str(plan_row["name"] or "unnamed"), "style": "font-weight:600;"},
+                        str(plan_row["resource_group"] or ase_rg or "—"),
+                        plan_sku,
+                        _exposure(plan_row["is_public"], plan_row["is_restricted"]),
+                        "App Service Plan",
+                        ase_name or "—",
+                    ],
+                })
+
+                for app_row in app_rows:
+                    try:
+                        app_raw = _json.loads(app_row["raw_json"] or "{}") if isinstance(app_row["raw_json"], str) else (app_row["raw_json"] or {})
+                    except Exception:
+                        app_raw = {}
+                    raw_kind = str((app_raw or {}).get("kind") or "")
+                    kind = "Function App" if "functionapp" in raw_kind.lower() or "function app" in raw_kind.lower() else "App Service"
+                    section_rows.append({
+                        "id": str(app_row["id"] or f"{plan_node_id}::app::{app_row['name']}"),
+                        "parent_id": plan_node_id,
+                        "child_count": 0,
+                        "cells": [
+                            str(app_row["name"] or "unnamed"),
+                            str(app_row["resource_group"] or ase_rg or "—"),
+                            str(app_row["fqdn"] or "—"),
+                            _exposure(app_row["is_public"], app_row["is_restricted"]),
+                            kind,
+                            str(plan_row["name"] or "—"),
+                        ],
+                    })
+
+            sections.append({
+                "title": ase_name or "App Service Environment",
+                "subtitle": ase_rg or "—",
+                "rows": section_rows,
+            })
+
+        if not sections:
+            return {
+                "title": title,
+                "view_type": "tree_table",
+                "columns": columns,
+                "sections": [],
+                "empty_message": "No App Service Plans found in this App Service Environment",
+            }
+
+        return {
+            "title": title,
+            "view_type": "tree_table",
+            "columns": columns,
+            "sections": sections,
+        }
+
+    # ── App Service / Function App → deployment slots ───────────────────────
+    elif "sites" in arm_type_lc and "slots" not in arm_type_lc:
+        title = "App Service / Function App — Deployment Slots"
+        columns = ["Slot", "Resource Group", "URL / FQDN", "Exposure", "Kind", "Parent App"]
+        ph_apps = ",".join("?" * len(names)) if names else "''"
+
+        slot_rows = conn.execute(
+            f"""SELECT s.name, s.resource_group, s.fqdn, s.is_public, s.is_restricted,
+                       s.raw_json
+                FROM provisioned_assets s
+                WHERE s.subscription_id = ?
+                  AND LOWER(COALESCE(s.type, '')) LIKE '%/sites/slots%'
+                  AND (
+                        LOWER(COALESCE(json_extract(s.raw_json, '$._extra.slot_parent'), '')) IN ({ph_apps})
+                        OR LOWER(COALESCE(s.id, '')) LIKE '%' || LOWER(?) || '/slots/%'
+                      )
+                ORDER BY s.resource_group, s.name""",
+            [sub_id] + names + [names[0] if names else ""],
+        ).fetchall() if names else []
+
+        if not slot_rows:
             return {
                 "title": title,
                 "view_type": "table",
                 "columns": columns,
                 "rows": [],
-                "empty_message": "No App Services or Function Apps found in this App Service Environment",
+                "empty_message": "No deployment slots found for this App Service or Function App",
             }
 
         rows = []
-        for site_name, rg, fqdn, is_public, is_restricted, raw, env_name in site_rows:
+        for slot_name, rg, fqdn, is_public, is_restricted, raw in slot_rows:
             try:
                 raw_kind = (_json.loads(raw) or {}).get("kind") or ""
             except Exception:
                 raw_kind = ""
-            kind = "Function App" if "functionapp" in raw_kind.lower() or "function app" in raw_kind.lower() else "App Service"
+            kind = "Function App Slot" if "functionapp" in raw_kind.lower() or "function app" in raw_kind.lower() else "App Service Slot"
             rows.append([
-                site_name,
+                slot_name,
                 rg or "—",
                 fqdn or "—",
                 _exposure(is_public, is_restricted),
                 kind,
-                env_name or "—",
+                names[0] if names else "—",
             ])
         return _table_result(title=title, columns=columns, rows=rows)
 

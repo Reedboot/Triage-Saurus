@@ -24,6 +24,7 @@ SUBSCRIPTION_DRILLABLE_ARM_TYPES = {
 }
 
 SUBSCRIPTION_FQDN_SUFFIXES = {
+    "microsoft.apimanagement/service": "azure-api.net",
     "microsoft.keyvault/vaults": "vault.azure.net",
     "microsoft.storage/storageaccounts": "blob.core.windows.net",
     "microsoft.servicebus/namespaces": "servicebus.windows.net",
@@ -233,6 +234,11 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
                     asset["route_table_id"] = extra.get("route_table_id")
                     asset["route_table_name"] = extra.get("route_table_name")
                     asset["delegations"] = extra.get("delegations") or []
+                if extra.get("slot_parent"):
+                    asset["parent_name"] = extra.get("slot_parent")
+                    asset["parent_resource_group"] = rg or "default"
+                    kind_lc = str((parsed_raw or {}).get("kind") or "").lower()
+                    asset["parent_type_label"] = "Function App" if "functionapp" in kind_lc or "function app" in kind_lc else "App Service"
                 if asset.get("subnet_id") and not asset.get("subnet_name"):
                     asset["subnet_name"] = asset["subnet_id"].split("/subnets/")[-1] if "/subnets/" in str(asset["subnet_id"]) else None
                 if asset.get("subnet_id") and not asset.get("vnet_name"):

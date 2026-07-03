@@ -1396,13 +1396,54 @@ class TestCloudPageAseNestedDrilldown:
             lambda route: route.fulfill(
                 content_type="application/json",
                 body=json.dumps({
-                    "title": "App Service Environment — Hosted Apps",
-                    "view_type": "table",
-                    "columns": ["App Service / Function App", "Resource Group", "URL / FQDN", "Exposure", "Kind", "Environment"],
-                    "rows": [
-                        ["ase-app", "rg-app", "ase-app.azurewebsites.net", "🔒 Private", "App Service", "ase-one"],
-                        ["ase-fn", "rg-app", "ase-fn.azurewebsites.net", "🔒 Private", "Function App", "ase-one"],
-                    ],
+                    "title": "App Service Environment — Hosted Plans",
+                    "view_type": "tree_table",
+                    "columns": ["Plan / App", "Resource Group", "SKU / FQDN", "Exposure", "Kind", "Parent"],
+                    "sections": [{
+                        "title": "test-ase",
+                        "subtitle": "rg-app",
+                        "rows": [
+                            {
+                                "id": "plan-one",
+                                "parent_id": None,
+                                "child_count": 2,
+                                "cells": [
+                                    {"label": "plan-one", "style": "font-weight:600;"},
+                                    "rg-app",
+                                    "P1v3",
+                                    "Private",
+                                    "App Service Plan",
+                                    "test-ase",
+                                ],
+                            },
+                            {
+                                "id": "ase-app",
+                                "parent_id": "plan-one",
+                                "child_count": 0,
+                                "cells": [
+                                    "ase-app",
+                                    "rg-app",
+                                    "ase-app.azurewebsites.net",
+                                    "🔒 Private",
+                                    "App Service",
+                                    "plan-one",
+                                ],
+                            },
+                            {
+                                "id": "ase-fn",
+                                "parent_id": "plan-one",
+                                "child_count": 0,
+                                "cells": [
+                                    "ase-fn",
+                                    "rg-app",
+                                    "ase-fn.azurewebsites.net",
+                                    "🔒 Private",
+                                    "Function App",
+                                    "plan-one",
+                                ],
+                            },
+                        ],
+                    }],
                 }),
             ),
         )
@@ -1410,7 +1451,8 @@ class TestCloudPageAseNestedDrilldown:
     def test_dblclick_opens_ase_drilldown(self, page: Page, live_server: str):
         self._setup_mocks(page)
         page.goto(live_server + "/cloud")
-        page.wait_for_selector(".subscription-preview-btn", timeout=8000)
+        page.wait_for_load_state("networkidle")
+        page.wait_for_selector(".subscription-preview-btn", timeout=15000)
         page.locator(".subscription-preview-btn").first.click()
         page.wait_for_selector("#ingress-diagram-div svg g.node-drillable", timeout=8000)
 
@@ -1418,7 +1460,8 @@ class TestCloudPageAseNestedDrilldown:
 
         expect(page.locator("#drilldown-modal")).to_be_visible(timeout=8000)
         expect(page.locator("#drilldown-modal table")).to_be_visible(timeout=5000)
-        expect(page.locator("#drilldown-modal table td").first).to_contain_text("ase-app")
+        expect(page.locator("#drilldown-modal table")).to_contain_text("plan-one")
+        expect(page.locator("#drilldown-modal table")).to_contain_text("ase-app")
         expect(page.locator("#drilldown-modal table")).to_contain_text("Function App")
         fqdn_link = page.locator("#drilldown-modal a[href='https://ase-app.azurewebsites.net']").first
         expect(fqdn_link).to_be_visible(timeout=5000)
@@ -1647,7 +1690,7 @@ class TestIngressDiagramGeneration:
             )
         ]
 
-    def _call(self, rows=None, plan_links=None, firewall_policy_rows=None, appgw_routes=None):
+    def _call(self, rows=None, plan_links=None, firewall_policy_rows=None, appgw_routes=None, appgw_waf_policy_rows=None):
         import sys
         import os
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -1658,6 +1701,7 @@ class TestIngressDiagramGeneration:
             plan_links=plan_links,
             firewall_policy_rows=firewall_policy_rows,
             appgw_routes=appgw_routes,
+            appgw_waf_policy_rows=appgw_waf_policy_rows,
         )
 
     def test_internet_node_defined_once(self):
@@ -1811,6 +1855,375 @@ class TestIngressDiagramGeneration:
         assert 'l_rgnet_appgw_private_HTTPS_443 --> waf_rgnet_appgw_private' in mermaid, mermaid
         assert 'l_rgnet_appgw_private_HTTP_80 --> waf_rgnet_appgw_private' in mermaid, mermaid
         assert 'waf_rgnet_appgw_private --> rgnet_appgw_private' in mermaid, mermaid
+
+    def test_gateway_level_waf_policy_sits_between_listener_and_gateway(self):
+        """Gateway-level WAF policies should sit between listeners and the App Gateway."""
+        rows = [
+            (
+                "appgw-cop",
+                "Microsoft.Network/applicationGateways",
+                "rgnet",
+                "appgw-cop.example.com",
+                1,
+                "WAF_v2",
+                "appgw-cop-id",
+                1,
+                "HTTPS:443",
+                0,
+                "PolicyAttached",
+                None,
+            ),
+        ]
+        appgw_waf_policy_rows = [
+            ("cop-waf-policy", '["appgw-cop"]', "Enabled"),
+        ]
+
+        result = self._call(rows=rows, appgw_waf_policy_rows=appgw_waf_policy_rows)
+        mermaid = result.get("mermaid", "")
+        assert "🛡️ WAF: cop-waf-policy" in mermaid, mermaid
+        assert "l_rgnet_appgw_cop_HTTPS_443 --> waf_rgnet_appgw_cop_cop_waf_policy" in mermaid, mermaid
+        assert "waf_rgnet_appgw_cop_cop_waf_policy --> rgnet_appgw_cop" in mermaid, mermaid
+
+    def test_backend_does_not_get_generic_data_edges(self):
+        """Backends should no longer fan out to every data store by category."""
+        import json
+
+        rows = [
+            (
+                "worker-one",
+                "Microsoft.Web/sites",
+                "rg-app",
+                "",
+                0,
+                "Standard",
+                "worker-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({}),
+                None,
+                None,
+            ),
+            (
+                "storage-one",
+                "Microsoft.Storage/storageAccounts",
+                "rg-data",
+                "storage-one.blob.core.windows.net",
+                0,
+                "Standard",
+                "storage-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({}),
+                None,
+                None,
+            ),
+        ]
+
+        result = self._call(rows=rows)
+        mermaid = result.get("mermaid", "")
+        assert 'rg_app_worker_one -->|"HTTPS"| rg_data_storage_one' not in mermaid, mermaid
+
+    def test_backend_only_links_explicit_data_reference(self):
+        """Explicit JSON references should still create a backend→data-store edge."""
+        import json
+
+        rows = [
+            (
+                "worker-explicit",
+                "Microsoft.Web/sites",
+                "rg-app",
+                "",
+                0,
+                "Standard",
+                "worker-explicit-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({
+                    "properties": {
+                        "connectionString": "DefaultEndpointsProtocol=https;AccountName=explicitstore;EndpointSuffix=core.windows.net"
+                    }
+                }),
+                None,
+                None,
+            ),
+            (
+                "explicitstore",
+                "Microsoft.Storage/storageAccounts",
+                "rg-data",
+                "explicitstore.blob.core.windows.net",
+                0,
+                "Standard",
+                "storage-explicit-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({}),
+                None,
+                None,
+            ),
+        ]
+
+        result = self._call(rows=rows)
+        mermaid = result.get("mermaid", "")
+        assert 'rg_app_worker_explicit -->|"HTTPS"| rg_data_explicitstore' in mermaid, mermaid
+
+    def test_listener_level_waf_overrides_disabled_gateway_waf(self):
+        """Disabled gateway WAF policies should stay hidden when listeners carry their own WAFs."""
+        rows = [
+            (
+                "appgw-shared",
+                "Microsoft.Network/applicationGateways",
+                "rgnet",
+                "appgw-shared.example.com",
+                1,
+                "WAF_v2",
+                "appgw-shared-id",
+                1,
+                "HTTPS:443, HTTP:80",
+                0,
+                "PolicyAttached",
+                None,
+            ),
+        ]
+        appgw_routes = [
+            (
+                "appgw-shared",
+                "listener-one.example.com",
+                '["backend.example.com"]',
+                "pool-a",
+                "listener-one",
+                "/api/one/*",
+                "HTTPS",
+                "listener-policy-a",
+            ),
+            (
+                "appgw-shared",
+                "listener-two.example.com",
+                '["backend.example.com"]',
+                "pool-b",
+                "listener-two",
+                "/api/two/*",
+                "HTTPS",
+                "listener-policy-b",
+            ),
+        ]
+        appgw_waf_policy_rows = [
+            ("shared-gateway-policy", '["appgw-shared"]', "Disabled"),
+        ]
+
+        result = self._call(rows=rows, appgw_routes=appgw_routes, appgw_waf_policy_rows=appgw_waf_policy_rows)
+        mermaid = result.get("mermaid", "")
+        assert "shared-gateway-policy" not in mermaid, mermaid
+        assert "l_rgnet_appgw_shared_HTTPS_listener_one_example_com --> waf_rgnet_appgw_shared_listener_policy_a" in mermaid, mermaid
+        assert "l_rgnet_appgw_shared_HTTPS_listener_two_example_com --> waf_rgnet_appgw_shared_listener_policy_b" in mermaid, mermaid
+        assert "waf_rgnet_appgw_shared_listener_policy_a --> rgnet_appgw_shared" in mermaid, mermaid
+        assert "waf_rgnet_appgw_shared_listener_policy_b --> rgnet_appgw_shared" in mermaid, mermaid
+
+    def test_apim_direct_exposure_uses_api_product_label(self):
+        """APIM public ingress should be labelled as an API product."""
+        rows = [
+            (
+                "apim-prod",
+                "Microsoft.ApiManagement/service",
+                "rg-api",
+                "apim.example.com",
+                1,
+                "Developer",
+                "apim-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                "{}",
+                None,
+                None,
+            ),
+        ]
+
+        result = self._call(rows=rows)
+        mermaid = result.get("mermaid", "")
+        assert 'API "Product"' in mermaid, mermaid
+
+    def test_apim_public_ip_is_rendered_as_linked_node(self):
+        """APIM-linked Public IPs should stay visible as separate nodes."""
+        import json
+
+        public_ip_id = "/subscriptions/sub/resourceGroups/rg-api/providers/Microsoft.Network/publicIPAddresses/apim-public"
+        rows = [
+            (
+                "apim-prod",
+                "Microsoft.ApiManagement/service",
+                "rg-api",
+                "apim.example.com",
+                1,
+                "Developer",
+                "apim-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({
+                    "properties": {
+                        "ipConfigurations": [
+                            {
+                                "properties": {
+                                    "publicIPAddress": {"id": public_ip_id},
+                                }
+                            }
+                        ]
+                    }
+                }),
+                None,
+                None,
+            ),
+            (
+                "apim-public",
+                "Microsoft.Network/publicIPAddresses",
+                "rg-api",
+                None,
+                1,
+                "Standard",
+                public_ip_id,
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({"properties": {"ipAddress": "20.30.40.50"}}),
+                None,
+                None,
+            ),
+        ]
+
+        result = self._call(rows=rows)
+        mermaid = result.get("mermaid", "")
+        assert "grp_APIM_Public --> rg_api_apim_public" in mermaid, mermaid
+        assert 'rg_api_apim_public["' in mermaid, mermaid
+
+    def test_apim_with_vnet_and_subnet_is_nested_in_network_boundary(self):
+        """APIM nodes with subnet metadata should render inside the network subgraph."""
+        import json
+
+        rows = [
+            (
+                "cbuk-core-prodgreen-api-uksouth",
+                "Microsoft.ApiManagement/service",
+                "rg-api",
+                "cbuk-core-prodgreen-api-uksouth.azure-api.net",
+                1,
+                "Developer",
+                "apim-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({
+                    "_extra": {
+                        "vnet_name": "prod-vnet",
+                        "vnet_resource_group": "rg-net",
+                        "subnet_name": "api-subnet",
+                        "subnet_id": "/subscriptions/sub/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/prod-vnet/subnets/api-subnet",
+                    }
+                }),
+                None,
+                None,
+            ),
+        ]
+
+        result = self._call(rows=rows)
+        mermaid = result.get("mermaid", "")
+        assert "Network: prod-vnet" in mermaid, mermaid
+        assert "Subnet: api-subnet" in mermaid, mermaid
+        assert mermaid.index("Network: prod-vnet") < mermaid.index("Subnet: api-subnet") < mermaid.index("grp_APIM_Public"), mermaid
+
+    def test_network_attached_services_render_inside_vnet_and_subnet_groups(self):
+        """Network-aware services should be nested under VNet and subnet subgraphs."""
+        import json
+
+        rows = [
+            (
+                "orders-site",
+                "Microsoft.Web/sites",
+                "rg-app",
+                "orders.example.com",
+                1,
+                "B1",
+                "site-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({
+                    "_extra": {
+                        "vnet_name": "prod-vnet",
+                        "vnet_resource_group": "rg-net",
+                        "subnet_name": "app-subnet",
+                        "subnet_id": "/subscriptions/sub/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/prod-vnet/subnets/app-subnet",
+                    }
+                }),
+                None,
+                None,
+            ),
+        ]
+
+        result = self._call(rows=rows)
+        mermaid = result.get("mermaid", "")
+        assert "Network: prod-vnet" in mermaid, mermaid
+        assert "Subnet: app-subnet" in mermaid, mermaid
+        assert "subgraph net_" in mermaid, mermaid
+        assert "subgraph sub_" in mermaid, mermaid
+
+    def test_aks_cluster_is_grouped_in_network_boundary(self):
+        """AKS clusters with subnet data should render in the network boundary."""
+        import json
+
+        rows = [
+            (
+                "aks-prod",
+                "Microsoft.ContainerService/managedClusters",
+                "rg-aks",
+                "",
+                0,
+                "Standard",
+                "aks-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({
+                    "_extra": {
+                        "vnet_name": "aks-vnet",
+                        "vnet_resource_group": "rg-net",
+                        "subnet_name": "aks-subnet",
+                        "subnet_id": "/subscriptions/sub/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/aks-vnet/subnets/aks-subnet",
+                    }
+                }),
+                None,
+                None,
+            ),
+        ]
+
+        result = self._call(rows=rows)
+        mermaid = result.get("mermaid", "")
+        assert "Network: aks-vnet" in mermaid, mermaid
+        assert "Subnet: aks-subnet" in mermaid, mermaid
+        assert mermaid.index("Network: aks-vnet") < mermaid.index("Subnet: aks-subnet") < mermaid.index("aks-prod"), mermaid
 
     def test_traffic_manager_is_omitted_from_overview_diagram(self):
         """Traffic Manager is DNS-only and should be omitted from overview connectivity diagrams."""
@@ -2046,12 +2459,13 @@ class TestIngressDiagramGeneration:
         assert result["parent_resource"]["type_label"] == "App Service Plan", result
 
     def test_app_service_environment_drilldown_uses_correct_parent_type(self):
-        """ASE drilldown should resolve the parent resource as App Service Environment."""
+        """ASE drilldown should nest apps under their App Service Plans."""
         import sqlite3
 
         from web.app import _build_child_table
 
         conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
         try:
             conn.execute(
                 """
@@ -2069,7 +2483,10 @@ class TestIngressDiagramGeneration:
                 """
             )
             ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/test-ase"
-            site_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/orders-fn-app"
+            plan_one_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/serverfarms/plan-one"
+            plan_two_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/serverfarms/plan-two"
+            site_one_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/orders-app"
+            site_two_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/orders-fn-app"
             conn.executemany(
                 """
                 INSERT INTO provisioned_assets
@@ -2089,15 +2506,48 @@ class TestIngressDiagramGeneration:
                         ase_id,
                     ),
                     (
-                        "orders-fn-app",
+                        "plan-one",
+                        "rg-app",
+                        "",
+                        0,
+                        0,
+                        f'{{"hostingEnvironmentProfile": {{"id": "{ase_id}"}}, "sku": {{"name": "P1v3"}}}}',
+                        "Microsoft.Web/serverfarms",
+                        "sub-1",
+                        plan_one_id,
+                    ),
+                    (
+                        "plan-two",
+                        "rg-app",
+                        "",
+                        0,
+                        0,
+                        f'{{"hostingEnvironmentProfile": {{"id": "{ase_id}"}}, "sku": {{"name": "P0v3"}}}}',
+                        "Microsoft.Web/serverfarms",
+                        "sub-1",
+                        plan_two_id,
+                    ),
+                    (
+                        "orders-app",
                         "rg-app",
                         "orders.example.com",
                         1,
                         0,
-                        f'{{"hostingEnvironmentProfile": {{"id": "{ase_id}"}}, "kind": "functionapp,linux"}}',
+                        f'{{"appServicePlanId": "{plan_one_id}", "kind": "app"}}',
                         "Microsoft.Web/sites",
                         "sub-1",
-                        site_id,
+                        site_one_id,
+                    ),
+                    (
+                        "orders-fn-app",
+                        "rg-app",
+                        "orders-fn.azurewebsites.net",
+                        1,
+                        0,
+                        f'{{"serverFarmId": "{plan_one_id}", "kind": "functionapp,linux"}}',
+                        "Microsoft.Web/sites",
+                        "sub-1",
+                        site_two_id,
                     ),
                 ],
             )
@@ -2111,9 +2561,15 @@ class TestIngressDiagramGeneration:
         finally:
             conn.close()
 
-        assert result["title"] == "App Service Environment — Hosted Apps", result
-        assert result["parent_resource"]["name"] == "test-ase", result
-        assert result["parent_resource"]["type_label"] == "App Service Environment", result
+        assert result["view_type"] == "tree_table", result
+        assert result["title"] == "App Service Environment — Hosted Plans", result
+        rows = result["sections"][0]["rows"]
+        plan_rows = [row for row in rows if row.get("parent_id") is None]
+        assert [row["cells"][0]["label"] for row in plan_rows] == ["plan-one", "plan-two"], rows
+        plan_one = next(row for row in rows if row.get("id") == plan_one_id)
+        apps = [row for row in rows if row.get("parent_id") == plan_one_id]
+        assert plan_one["child_count"] == 2, plan_one
+        assert [row["cells"][0] for row in apps] == ["orders-app", "orders-fn-app"], apps
 
     def test_aks_drilldown_uses_service_type_and_hides_cluster_column(self):
         """AKS drilldown should infer service type and omit redundant cluster column."""
@@ -2515,6 +2971,85 @@ class TestIngressDiagramGeneration:
         assert parent["cells"][1]["label"] == "API", parent["cells"]
         assert children[0]["cells"][1]["label"] == "GET", children[0]["cells"]
         assert children[1]["cells"][1]["label"] == "POST", children[1]["cells"]
+
+    def test_web_app_drilldown_lists_deployment_slots(self):
+        """App Service / Function App drill-down should list deployment slots."""
+        import json
+        import sqlite3
+
+        try:
+            from web.app import _build_child_table
+        except ModuleNotFoundError:
+            from app import _build_child_table
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE subscriptions (
+                    id TEXT PRIMARY KEY,
+                    display_name TEXT,
+                    environment TEXT,
+                    state TEXT
+                );
+                CREATE TABLE provisioned_assets (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    resource_group TEXT,
+                    name TEXT,
+                    type TEXT,
+                    fqdn TEXT,
+                    is_public INTEGER DEFAULT 0,
+                    is_restricted INTEGER DEFAULT 0,
+                    raw_json TEXT
+                );
+                """
+            )
+            conn.execute(
+                "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+                ("sub-1", "Test Subscription", "production", "Enabled"),
+            )
+            conn.execute(
+                """
+                INSERT INTO provisioned_assets (
+                    id, subscription_id, resource_group, name, type, fqdn,
+                    is_public, is_restricted, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "slot-1",
+                    "sub-1",
+                    "rg-app",
+                    "functions_windows-staging",
+                    "Microsoft.Web/sites/slots",
+                    "functions-staging.azurewebsites.net",
+                    1,
+                    0,
+                    json.dumps({
+                        "kind": "functionapp,linux",
+                        "_extra": {
+                            "slot_parent": "functions_windows",
+                            "slot_name": "staging",
+                        },
+                    }),
+                ),
+            )
+
+            result = _build_child_table(
+                conn,
+                "sub-1",
+                "Microsoft.Web/sites",
+                [{"rg": "rg-app", "name": "functions_windows"}],
+            )
+        finally:
+            conn.close()
+
+        assert result["view_type"] == "table", result
+        assert result["title"] == "App Service / Function App — Deployment Slots", result
+        assert result["rows"], result
+        assert result["rows"][0][0] == "functions_windows-staging", result["rows"]
+        assert result["rows"][0][4] == "Function App Slot", result["rows"]
 
     def test_gateway_waf_mode_marks_entry_edges_protected(self):
         """Gateway-wide WAF should label entry edges as WAF instead of FQDN/protocol."""
@@ -3462,7 +3997,7 @@ class TestCloudPosture:
                 """
             )
             conn.execute(
-                "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+                "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
                 ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
             )
             conn.execute(
@@ -3491,6 +4026,139 @@ class TestCloudPosture:
         waf_nodes = [node for node in payload["nodes"] if node["data"].get("typeLabel") == "WAF Policy"]
         assert len(waf_nodes) == 1, payload
         assert waf_nodes[0]["data"].get("label") == "policy-one", waf_nodes[0]
+
+    def test_subscription_architecture_payload_joins_appgw_backend_pool_to_apim(self):
+        import json
+        import sqlite3
+
+        from web.app import _build_subscription_architecture_payload
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE subscriptions (
+                    id TEXT PRIMARY KEY,
+                    display_name TEXT,
+                    environment TEXT,
+                    state TEXT,
+                    last_synced TEXT
+                );
+                CREATE TABLE provisioned_assets (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    resource_group TEXT,
+                    name TEXT,
+                    type TEXT,
+                    location TEXT,
+                    sku TEXT,
+                    fqdn TEXT,
+                    is_public INTEGER DEFAULT 0,
+                    status TEXT,
+                    pipeline_tag TEXT,
+                    first_detected TEXT,
+                    last_synced TEXT,
+                    raw_json TEXT,
+                    is_restricted INTEGER DEFAULT 0,
+                    waf_mode TEXT
+                );
+                CREATE TABLE appgw_routing_rules (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    gateway_name TEXT,
+                    backend_fqdns TEXT,
+                    backend_pool_name TEXT,
+                    listener_name TEXT,
+                    url_path TEXT,
+                    protocol TEXT,
+                    waf_policy_name TEXT,
+                    resource_group TEXT,
+                    hostname TEXT
+                );
+                """
+            )
+            conn.execute(
+                "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+                ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+            )
+            gw_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/appgw-one"
+            apim_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/apim-one"
+            conn.executemany(
+                """
+                INSERT INTO provisioned_assets (
+                    id, subscription_id, resource_group, name, type, location, sku,
+                    fqdn, is_public, status, pipeline_tag, first_detected, last_synced,
+                    raw_json, is_restricted, waf_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        gw_id,
+                        "sub-1",
+                        "rg-net",
+                        "appgw-one",
+                        "Microsoft.Network/applicationGateways",
+                        "uksouth",
+                        "WAF_v2",
+                        "appgw-one.example.com",
+                        1,
+                        "active",
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        json.dumps({}),
+                        0,
+                        "WAF_v2",
+                    ),
+                    (
+                        apim_id,
+                        "sub-1",
+                        "rg-api",
+                        "apim-one",
+                        "Microsoft.ApiManagement/service",
+                        "uksouth",
+                        "Developer",
+                        "cbuk-core-prodgreen-api-uksouth.azure-api.net",
+                        1,
+                        "active",
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        json.dumps({}),
+                        0,
+                        None,
+                    ),
+                ],
+            )
+            conn.execute(
+                """
+                INSERT INTO appgw_routing_rules (
+                    id, subscription_id, gateway_name, backend_fqdns, backend_pool_name,
+                    listener_name, url_path, protocol, waf_policy_name, resource_group, hostname
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "appgw-one::route-1",
+                    "sub-1",
+                    "appgw-one",
+                    '["cbuk-core-prodgreen-api-uksouth.azure-api.net"]',
+                    "cop-auth-server-phase2-apim",
+                    "listener-one",
+                    "/*",
+                    "HTTPS",
+                    None,
+                    "rg-net",
+                    "appgw-one.example.com",
+                ),
+            )
+
+            payload = _build_subscription_architecture_payload(conn, "sub-1", view_mode="full")
+        finally:
+            conn.close()
+
+        edges = payload["edges"]
+        assert any(e["source"] == gw_id and e["target"] == apim_id for e in edges), edges
 
     def test_cloud_architecture_page_labels_tabs_mermaid_and_react_flow(self, monkeypatch):
         import os
@@ -4093,6 +4761,218 @@ class TestCloudPosture:
         assert data["parent_resource"]["name"] == "bastion"
         assert data["parent_resource"]["type_label"] == "Bastion"
         assert data["parent_resource"]["icon_path"]
+
+    def test_api_cloud_resource_details_treats_internal_apim_as_private(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+        apim_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/apim-prod"
+        pip_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.Network/publicIPAddresses/apim-prod-pip"
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                apim_id,
+                "sub-1",
+                "rg-api",
+                "apim-prod",
+                "Microsoft.ApiManagement/service",
+                "uksouth",
+                "Premium",
+                "apim-prod.azure-api.net",
+                1,
+                "active",
+                None,
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+                json.dumps({
+                    "properties": {
+                        "publicNetworkAccess": "Enabled",
+                        "virtualNetworkType": "Internal",
+                        "publicIpAddress": {
+                            "id": pip_id,
+                        },
+                    }
+                }),
+                0,
+                None,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                pip_id,
+                "sub-1",
+                "rg-api",
+                "apim-prod-pip",
+                "Microsoft.Network/publicIPAddresses",
+                "uksouth",
+                "Standard",
+                None,
+                1,
+                "active",
+                None,
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+                json.dumps({
+                    "properties": {
+                        "ipAddress": "52.160.10.10",
+                    }
+                }),
+                0,
+                None,
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/resource-details", query_string={"id": apim_id})
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        assert data["security"]["is_public"] is False
+        assert data["security"]["public_network_access"] == "Enabled"
+        assert data["network"]["virtual_network_type"] == "Internal"
+        assert data["network"]["public_ips"] == ["52.160.10.10"]
+
+    def test_api_cloud_resource_details_surfaces_waf_policy_summary(self, monkeypatch):
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE appgw_waf_policies (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                name TEXT,
+                resource_group TEXT,
+                mode TEXT,
+                state TEXT,
+                request_body_check INTEGER DEFAULT 0,
+                max_body_kb INTEGER,
+                managed_rule_sets TEXT,
+                custom_rules_count INTEGER DEFAULT 0,
+                exclusions_count INTEGER DEFAULT 0,
+                associated_gateways TEXT,
+                last_synced TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+        conn.execute(
+            """
+            INSERT INTO appgw_waf_policies (
+                id, subscription_id, name, resource_group, mode, state, request_body_check,
+                max_body_kb, managed_rule_sets, custom_rules_count, exclusions_count,
+                associated_gateways, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "policy-one",
+                "sub-1",
+                "policy-one",
+                "rg-net",
+                "Prevention",
+                "Enabled",
+                1,
+                128,
+                '[{"type": "OWASP", "version": "3.2"}]',
+                2,
+                3,
+                '["appgw-one"]',
+                "2026-06-01T00:00:00Z",
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get(
+            "/api/cloud/resource-details",
+            query_string={
+                "id": "policy-one",
+                "name": "policy-one",
+                "resource_group": "rg-net",
+                "type": "Microsoft.Network/ApplicationGatewayWebApplicationFirewallPolicies",
+                "sub": "sub-1",
+            },
+        )
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        assert data["type_label"] == "WAF Policy"
+        assert data["waf_policy"]["managed_rules_enabled"] is True
+        assert data["waf_policy"]["custom_rules_count"] == 2
+        assert data["waf_policy"]["exclusions_count"] == 3
+        assert data["waf_policy"]["associated_gateways"] == ["appgw-one"]
 
     def test_api_cloud_resource_details_includes_storage_account_details(self, monkeypatch):
         import json
@@ -4873,6 +5753,239 @@ class TestCloudPosture:
 
         os.unlink(tmp.name)
 
+    def test_api_cloud_resource_details_surfaces_aks_network(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+        import tempfile
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        conn = sqlite3.connect(tmp.name)
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+        aks_id = "/subscriptions/sub-1/resourceGroups/rg-k8s/providers/Microsoft.ContainerService/managedClusters/cluster-one"
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                aks_id,
+                "sub-1",
+                "rg-k8s",
+                "cluster-one",
+                "Microsoft.ContainerService/managedClusters",
+                "ukwest",
+                "Standard",
+                None,
+                0,
+                "active",
+                None,
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+                json.dumps({
+                    "agentPoolProfiles": [
+                        {
+                            "name": "nodepool1",
+                            "osType": "Linux",
+                            "vnetSubnetId": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/rg-vnet/subnets/aks-subnet",
+                        }
+                    ]
+                }),
+                0,
+                None,
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/resource-details", query_string={"id": aks_id})
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        details = resp.get_json()
+        assert details["network"]["vnet"] == "rg-vnet"
+        assert details["network"]["subnet"] == "aks-subnet"
+
+        os.unlink(tmp.name)
+
+    def test_api_cloud_architecture_surfaces_app_service_network(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+        import tempfile
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        conn = sqlite3.connect(tmp.name)
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+        ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/ase-one"
+        site_ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/site-ase"
+        site_vnet_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/site-vnet"
+        subnet_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/rg-vnet/subnets/app-subnet"
+        conn.executemany(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    ase_id,
+                    "sub-1",
+                    "rg-app",
+                    "ase-one",
+                    "Microsoft.Web/hostingEnvironments",
+                    "uksouth",
+                    "I1v2",
+                    None,
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({"virtualNetwork": {"id": subnet_id}}),
+                    0,
+                    None,
+                ),
+                (
+                    site_ase_id,
+                    "sub-1",
+                    "rg-app",
+                    "site-ase",
+                    "Microsoft.Web/sites",
+                    "uksouth",
+                    "B1",
+                    "site-ase.example.com",
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({"hostingEnvironmentProfile": {"id": ase_id}}),
+                    0,
+                    None,
+                ),
+                (
+                    site_vnet_id,
+                    "sub-1",
+                    "rg-app",
+                    "site-vnet",
+                    "Microsoft.Web/sites",
+                    "uksouth",
+                    "B1",
+                    "site-vnet.example.com",
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({"siteConfig": {"virtualNetworkSubnetId": subnet_id}}),
+                    0,
+                    None,
+                ),
+            ],
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/architecture?sub=sub-1&view=reactflow")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        graph = resp.get_json()
+        nodes = {n["id"]: n for n in graph["nodes"]}
+        ase_node = nodes[ase_id]
+        ase_net = ase_node["data"]["network"]
+        assert ase_net["vnet"] == "rg-vnet"
+        assert ase_net["subnet"] == "app-subnet"
+
+        site_ase = nodes[site_ase_id]["data"]["network"]
+        site_vnet = nodes[site_vnet_id]["data"]["network"]
+        assert site_ase["vnet"] == "rg-vnet"
+        assert site_ase["subnet"] == "app-subnet"
+        assert site_vnet["vnet"] == "rg-vnet"
+        assert site_vnet["subnet"] == "app-subnet"
+
+        os.unlink(tmp.name)
+
     def test_api_cloud_resource_details_surfaces_ase_worker_os_type(self, monkeypatch):
         import json
         import os
@@ -5069,6 +6182,231 @@ class TestCloudPosture:
         assert resp.status_code == 200, resp.get_data(as_text=True)
         details = resp.get_json()
         assert details["configuration"]["operating_system"] == "Linux"
+
+        os.unlink(tmp.name)
+
+    def test_api_cloud_resource_details_returns_appgw_routing_targets(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+        import tempfile
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        conn = sqlite3.connect(tmp.name)
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT,
+                last_synced TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            CREATE TABLE appgw_routing_rules (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                gateway_name TEXT,
+                backend_fqdns TEXT,
+                backend_pool_name TEXT,
+                listener_name TEXT,
+                url_path TEXT,
+                protocol TEXT,
+                waf_policy_name TEXT,
+                resource_group TEXT,
+                hostname TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+        )
+        gw_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/appgw-one"
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                gw_id,
+                "sub-1",
+                "rg-net",
+                "appgw-one",
+                "Microsoft.Network/applicationGateways",
+                "uksouth",
+                "WAF_v2",
+                "appgw-one.example.com",
+                1,
+                "active",
+                None,
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+                json.dumps({
+                    "properties": {
+                        "publicIpAddress": {"ipAddress": "20.30.40.50"},
+                        "gatewayIPConfigurations": [
+                            {
+                                "properties": {
+                                    "subnet": {
+                                        "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-net/subnets/snet-appgw",
+                                    }
+                                }
+                            }
+                        ],
+                    }
+                }),
+                0,
+                "WAF_v2",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO appgw_routing_rules (
+                id, subscription_id, gateway_name, backend_fqdns, backend_pool_name,
+                listener_name, url_path, protocol, waf_policy_name, resource_group, hostname
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "appgw-one::route-1",
+                "sub-1",
+                "appgw-one",
+                '["backend-one.internal", "backend-two.internal"]',
+                "pool-a",
+                "https-listener",
+                "/*",
+                "HTTPS",
+                "policy-one",
+                "rg-net",
+                "appgw-one.example.com",
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/resource-details", query_string={"id": gw_id})
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        assert data["name"] == "appgw-one"
+        assert data["resource_group"] == "rg-net"
+        assert data["sku"] == "WAF_v2"
+        assert "20.30.40.50" in data["network"]["public_ips"]
+        assert "appgw-one.example.com" in data["network"]["dns_names"]
+        assert "snet-appgw" in str(data["network"]["subnet"])
+        assert data["routing_targets"][0]["backend_pool_name"] == "pool-a"
+        assert data["routing_targets"][0]["listener_name"] == "https-listener"
+        assert data["routing_targets"][0]["waf_policy_name"] == "policy-one"
+
+        os.unlink(tmp.name)
+
+    def test_api_cloud_resource_details_returns_waf_policy_associations(self, monkeypatch):
+        import os
+        import sqlite3
+        import sys
+        import tempfile
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        conn = sqlite3.connect(tmp.name)
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT,
+                last_synced TEXT
+            );
+            CREATE TABLE appgw_waf_policies (
+                name TEXT,
+                subscription_id TEXT,
+                resource_group TEXT,
+                mode TEXT,
+                state TEXT,
+                managed_rule_sets TEXT,
+                custom_rules_count INTEGER DEFAULT 0,
+                exclusions_count INTEGER DEFAULT 0,
+                request_body_check INTEGER DEFAULT 0,
+                max_body_kb INTEGER,
+                associated_gateways TEXT,
+                last_synced TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+        )
+        conn.execute(
+            """
+            INSERT INTO appgw_waf_policies (
+                name, subscription_id, resource_group, mode, state, managed_rule_sets,
+                custom_rules_count, exclusions_count, request_body_check, max_body_kb,
+                associated_gateways, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "policy-one",
+                "sub-1",
+                "rg-net",
+                "Prevention",
+                "Enabled",
+                '[{"type":"OWASP","version":"3.2"}]',
+                2,
+                1,
+                1,
+                128,
+                '["appgw-one","appgw-two"]',
+                "2026-06-01T00:00:00Z",
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get(
+            "/api/cloud/resource-details",
+            query_string={"id": "waf::policy-one", "type": "Microsoft.Network/applicationGatewayWebApplicationFirewallPolicies"},
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        assert data["name"] == "policy-one"
+        assert data["type_label"] == "WAF Policy"
+        assert data["waf_policy"]["custom_rules_count"] == 2
+        assert data["waf_policy"]["associated_gateways"] == ["appgw-one", "appgw-two"]
 
         os.unlink(tmp.name)
 

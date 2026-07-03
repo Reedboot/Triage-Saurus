@@ -2026,11 +2026,53 @@ class HierarchicalDiagramBuilder:
                       'http_listener', 'waf_policy']  # Add synthetic HTTP Listener and WAF Policy nodes
         return any(tok in rtype for tok in net_tokens)
 
+    def _is_apim_service_resource_type(self, resource_type: str) -> bool:
+        """Return True for Azure API Management service resources, not APIM child resources."""
+        rtype = (resource_type or '').lower()
+        if not rtype:
+            return False
+        if any(tok in rtype for tok in (
+            'api_management_api_operation',
+            'api_management_product_api',
+            'api_management_subscription',
+            'api_management_product',
+        )):
+            return False
+        return 'api_management' in rtype or rtype in {'apim', 'azurerm_apim'}
+
+    def _is_apim_public_ip_resource(self, resource: dict) -> bool:
+        """Return True for Public IP resources that should collapse into APIM details."""
+        if not resource:
+            return False
+        rtype = (resource.get('resource_type') or '').lower()
+        if 'public_ip' not in rtype or 'association' in rtype:
+            return False
+
+        parent_id = resource.get('parent_resource_id')
+        if parent_id is not None:
+            parent = self.resource_by_id.get(parent_id)
+            if parent and self._is_apim_service_resource_type(parent.get('resource_type') or ''):
+                return True
+
+        props = resource.get('properties') or {}
+        if isinstance(props, dict):
+            for key in ('api_management_name', 'api_management_id', 'service_name'):
+                value = props.get(key)
+                if isinstance(value, str) and any(tok in value.lower() for tok in ('api_management', 'apim')):
+                    return True
+
+        return False
+
     def is_subnet_resource(self, resource: dict) -> bool:
         """Check if resource is a subnet-like networking resource."""
         rtype = (resource.get('resource_type') or '').lower()
         subnet_tokens = ['subnet', 'vswitch', 'subnetwork']
         return any(tok in rtype for tok in subnet_tokens) and 'security' not in rtype
+
+    def is_bastion_host(self, resource: dict) -> bool:
+        """Check if resource is an Azure Bastion host."""
+        rtype = (resource.get('resource_type') or '').lower()
+        return 'bastion_host' in rtype
 
     def _get_sg_protected_computes(self, sg: dict, candidate_computes: List[dict]) -> List[dict]:
         """Resolve which compute resources an SG/NSG should wrap in the diagram."""
@@ -2660,6 +2702,72 @@ class HierarchicalDiagramBuilder:
             self._tier_nodes = {}
         if 'network_tier' not in self._tier_nodes:
             self._tier_nodes['network_tier'] = []
+
+        def _render_application_gateway(gw: dict, indent: str) -> List[str]:
+            """Render an Application Gateway and its nested routing resources."""
+            if gw['resource_name'] in self.emitted_nodes:
+                return []
+
+            gw_rtype = (gw.get('resource_type') or '').lower()
+            if gw_rtype != 'azurerm_application_gateway':
+                return []
+
+            gw_children = [
+                c for c in self.children_by_parent.get(gw.get('id'), [])
+                if c['resource_name'] not in self.emitted_nodes
+            ]
+            gw_listeners = [
+                r for r in self.resources
+                if r.get('resource_type') == 'application_gateway_http_listener'
+                and gw['resource_name'] in r.get('resource_name', '')
+                and r['resource_name'] not in self.emitted_nodes
+            ]
+
+            waf_nodes = set()
+            for listener in gw_listeners:
+                for conn in self.connections:
+                    if conn.get('source') == listener['resource_name']:
+                        target = conn.get('target')
+                        if target and 'WAF::' in target:
+                            waf_nodes.add(target)
+
+            if not gw_children and not gw_listeners and not waf_nodes:
+                return []
+
+            gw_node_id = self._get_node_id(gw)
+            gw_label = self._wrap_mermaid_label(gw['resource_name'])
+            child_indent = indent + "  "
+            lines: List[str] = [f'{indent}subgraph {gw_node_id}[{self._quote_mermaid_label(gw_label)}]']
+            self._emitted_mermaid_ids.add(gw_node_id)
+            self._node_id_first_owner[gw_node_id] = str(gw.get('id', ''))
+            self.subgraph_nodes.add(gw['resource_name'])
+            self.node_id_override[gw['resource_name']] = gw_node_id
+
+            for child in gw_children:
+                if child['resource_name'] in self.emitted_nodes:
+                    continue
+                child_lines = self._render_nested_resource(child, indent=child_indent)
+                if child_lines:
+                    lines.extend(child_lines)
+                else:
+                    lines.append(self.render_node(child, indent=child_indent))
+                self.emitted_nodes.add(child['resource_name'])
+
+            for listener in gw_listeners:
+                if listener['resource_name'] not in self.emitted_nodes:
+                    lines.append(self.render_node(listener, indent=child_indent))
+                    self.emitted_nodes.add(listener['resource_name'])
+
+            for waf_name in sorted(waf_nodes):
+                waf_resource = self._get_primary_resource(waf_name)
+                if waf_resource and waf_resource['resource_name'] not in self.emitted_nodes:
+                    lines.append(self.render_node(waf_resource, indent=child_indent))
+                    self.emitted_nodes.add(waf_resource['resource_name'])
+
+            lines.append(f'{indent}end')
+            self.emitted_nodes.add(gw['resource_name'])
+            self._tier_nodes['network_tier'].append(gw['resource_name'])
+            return lines
         
         # Group resources by type
         # Match VPC-like resources across providers: vpc, vnet, virtual_network, compute_network (GCP)
@@ -2779,6 +2887,11 @@ class HierarchicalDiagramBuilder:
                 self.node_id_override[subnet['resource_name']] = subnet_node_id
                 subnet_children = self.children_by_parent.get(subnet_db_id, [])
                 subnet_computes = [c for c in subnet_children if self.is_compute_resource(c)]
+                subnet_bastions = [c for c in subnet_children if self.is_bastion_host(c)]
+                subnet_gateways = [
+                    c for c in subnet_children
+                    if (c.get('resource_type') or '').lower() == 'azurerm_application_gateway'
+                ]
 
                 # Azure: NICs are children of the subnet. Find VMs linked to those NICs.
                 subnet_nics = [
@@ -2853,7 +2966,7 @@ class HierarchicalDiagramBuilder:
                         if sg['resource_name'] not in self.emitted_nodes:
                             sgs_for_subnet.append(sg)
 
-                if subnet_computes or sgs_for_subnet or subnet_clusters or subnet_nics:
+                if subnet_computes or sgs_for_subnet or subnet_clusters or subnet_nics or subnet_bastions or subnet_gateways:
                     subnet_label = self._wrap_mermaid_label(subnet['resource_name'])
                     lines.append(f'{i1}subgraph {subnet_node_id}[{self._quote_mermaid_label(subnet_label)}]')
                     self._emitted_mermaid_ids.add(subnet_node_id)
@@ -2930,10 +3043,21 @@ class HierarchicalDiagramBuilder:
                             lines.append(self.render_node(nic, indent=i2))
                             self.emitted_nodes.add(nic['resource_name'])
 
+                    # Render Bastion hosts inside the subnet they are deployed into.
+                    for bastion in subnet_bastions:
+                        if bastion['resource_name'] not in self.emitted_nodes:
+                            lines.append(self.render_node(bastion, indent=i2))
+                            self.emitted_nodes.add(bastion['resource_name'])
+
+                    # Render Application Gateways inside the subnet they are deployed into.
+                    for gateway in subnet_gateways:
+                        if gateway['resource_name'] not in self.emitted_nodes:
+                            lines.extend(_render_application_gateway(gateway, i2))
+
                     lines.append(f'{i1}end')
                 else:
                     # Subnet has NICs or other children — render as subgraph but with leaf node content
-                    if subnet_nics:
+                    if subnet_nics or subnet_bastions or subnet_gateways:
                         subnet_label = self._wrap_mermaid_label(subnet['resource_name'])
                         lines.append(f'{i1}subgraph {subnet_node_id}[{self._quote_mermaid_label(subnet_label)}]')
                         self._emitted_mermaid_ids.add(subnet_node_id)
@@ -2942,6 +3066,13 @@ class HierarchicalDiagramBuilder:
                             if nic['resource_name'] not in self.emitted_nodes:
                                 lines.append(self.render_node(nic, indent=i2))
                                 self.emitted_nodes.add(nic['resource_name'])
+                        for bastion in subnet_bastions:
+                            if bastion['resource_name'] not in self.emitted_nodes:
+                                lines.append(self.render_node(bastion, indent=i2))
+                                self.emitted_nodes.add(bastion['resource_name'])
+                        for gateway in subnet_gateways:
+                            if gateway['resource_name'] not in self.emitted_nodes:
+                                lines.extend(_render_application_gateway(gateway, i2))
                         lines.append(f'{i1}end')
                     else:
                         lines.append(self.render_node(subnet, indent=i1))
@@ -3092,51 +3223,12 @@ class HierarchicalDiagramBuilder:
         # Render gateways and other network resources
         for gw in gateways:
             if gw['resource_name'] not in self.emitted_nodes:
-                # Check if this is an Application Gateway with HTTP listeners
                 gw_rtype = (gw.get('resource_type') or '').lower()
-                if 'application_gateway' in gw_rtype:
-                    # Look for HTTP Listener nodes for this gateway
-                    gw_listeners = [
-                        r for r in self.resources
-                        if r.get('resource_type') == 'application_gateway_http_listener'
-                        and gw['resource_name'] in r.get('resource_name', '')
-                    ]
-                     
-                    if gw_listeners:
-                        # Render gateway as a subgraph containing its listeners and WAF policies
-                        gw_node_id = self._get_node_id(gw)
-                        gw_label = self._wrap_mermaid_label(gw['resource_name'])
-                        lines.append(f'    subgraph {gw_node_id}[{self._quote_mermaid_label(gw_label)}]')
-                        self._emitted_mermaid_ids.add(gw_node_id)
-                        self._node_id_first_owner[gw_node_id] = str(gw.get('id', ''))
-                        self.subgraph_nodes.add(gw['resource_name'])
-                        self.node_id_override[gw['resource_name']] = gw_node_id
-                         
-                        # Render listeners inside the gateway subgraph
-                        for listener in gw_listeners:
-                            if listener['resource_name'] not in self.emitted_nodes:
-                                lines.append(self.render_node(listener, indent="      "))
-                                self.emitted_nodes.add(listener['resource_name'])
-                         
-                        # Render any WAF policy nodes associated with these listeners
-                        waf_nodes = set()
-                        for listener in gw_listeners:
-                            # Look for WAF policy nodes connected to this listener
-                            for conn in self.connections:
-                                if conn.get('source') == listener['resource_name']:
-                                    target = conn.get('target')
-                                    if target and 'WAF::' in target:
-                                        waf_nodes.add(target)
-                         
-                        for waf_name in waf_nodes:
-                            waf_resource = self._get_primary_resource(waf_name)
-                            if waf_resource and waf_resource['resource_name'] not in self.emitted_nodes:
-                                lines.append(self.render_node(waf_resource, indent="      "))
-                                self.emitted_nodes.add(waf_resource['resource_name'])
-                         
-                        lines.append('    end')
+                if gw_rtype == 'azurerm_application_gateway':
+                    gateway_lines = _render_application_gateway(gw, "    ")
+                    if gateway_lines:
+                        lines.extend(gateway_lines)
                     else:
-                        # No listeners, render gateway as simple node
                         lines.append(self.render_node(gw, indent="    "))
                 else:
                     # Not an application gateway, render as simple node
@@ -3236,7 +3328,7 @@ class HierarchicalDiagramBuilder:
                     lines.append('    end')
                     self.node_id_override[compute_name] = compute_id
                     self.emitted_nodes.add(compute_name)
-        
+
         return lines
     
     def render_compute_hierarchy(self, compute_resources: List[dict], k8s_resources: List[dict] = None) -> List[str]:
@@ -5842,6 +5934,7 @@ class HierarchicalDiagramBuilder:
         network_resources = [
             r for r in self.resources
             if self.is_network_resource(r)
+            and not self._is_apim_public_ip_resource(r)
             and not self.is_terraform_metadata_resource(r)
             and not r.get('resource_name', '').startswith('${var.')
             and not r.get('resource_name', '').startswith('${local.')

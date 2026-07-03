@@ -2466,6 +2466,37 @@ class TestSubscriptionAssetsFromRows:
         assert assets[0]["parent_vnet_name"] == "vnet-one"
         assert assets[0]["parent_vnet_resource_group"] == "rg-net"
 
+    def test_slots_pick_up_parent_metadata_from_extra(self):
+        mod = self._import_helper()
+        slot_row = (
+            "functions_windows-staging",
+            "Microsoft.Web/sites/slots",
+            "rg-app",
+            "functions-staging.azurewebsites.net",
+            1,
+            "Y1",
+            "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/functions_windows/slots/staging",
+            0,
+            None,
+            0,
+            None,
+            None,
+            json.dumps({
+                "kind": "functionapp,linux",
+                "_extra": {
+                    "slot_parent": "functions_windows",
+                    "slot_name": "staging",
+                },
+            }),
+            None,
+        )
+
+        assets = mod.subscription_assets_from_rows([slot_row], lambda t: t)
+
+        assert assets[0]["parent_name"] == "functions_windows"
+        assert assets[0]["parent_resource_group"] == "rg-app"
+        assert assets[0]["parent_type_label"] == "Function App"
+
 
 class TestSubscriptionOverlayPlanLinks:
     """App Service Plans should drill into hosted apps without top-level hosting arrows."""
