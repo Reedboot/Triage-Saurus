@@ -4412,6 +4412,133 @@ class TestCloudPosture:
         assert any(node["data"].get("typeLabel") == "WAF Policy" for node in data["nodes"])
         assert any(node["data"].get("typeLabel") == "Network Firewall" for node in data["nodes"])
 
+    def test_api_cloud_architecture_nests_appgw_listeners_under_gateway_subnet(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT,
+                last_synced TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            CREATE TABLE appgw_routing_rules (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                gateway_name TEXT,
+                backend_fqdns TEXT,
+                backend_pool_name TEXT,
+                listener_name TEXT,
+                hostname TEXT,
+                url_path TEXT,
+                protocol TEXT,
+                waf_policy_name TEXT,
+                resource_group TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+        )
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json, is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "gw-1",
+                "sub-1",
+                "rg-net",
+                "appgatewaycop",
+                "Microsoft.Network/applicationGateways",
+                "eastus",
+                "WAF_v2",
+                "appgatewaycop.example.com",
+                1,
+                "active",
+                "",
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+                json.dumps(
+                    {
+                        "_extra": {
+                            "vnet_name": "prod-vnet",
+                            "vnet_resource_group": "rg-net",
+                            "subnet_name": "appgw-subnet",
+                            "subnet_id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/prod-vnet/subnets/appgw-subnet",
+                        }
+                    }
+                ),
+                0,
+                None,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO appgw_routing_rules (
+                id, subscription_id, gateway_name, backend_fqdns, backend_pool_name,
+                listener_name, hostname, url_path, protocol, waf_policy_name, resource_group
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "gw-1::listener-1",
+                "sub-1",
+                "appgatewaycop",
+                json.dumps(["cop-resource-server-apim.example.com"]),
+                "pool-one",
+                "listener-1",
+                "cop-resource-server-apim.example.com",
+                "/*",
+                "HTTPS",
+                None,
+                "rg-net",
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/architecture?sub=sub-1&view=reactflow")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        nodes = {node["id"]: node for node in data["nodes"]}
+        listener = nodes["listener::appgatewaycop::listener-1::cop-resource-server-apim.example.com"]
+        gateway = nodes["gw-1"]
+        assert listener["data"]["parentNodeId"] == gateway["id"]
+        assert listener["data"]["subnetName"] == "appgw-subnet"
+
     def test_api_cloud_architecture_renders_bastion_public_ip_hierarchy(self, monkeypatch):
         import json
         import os

@@ -17,6 +17,15 @@
 
 **Full SKILL.md** (Copilot slash command): `.github/skills/subscription-diagram-check/SKILL.md`
 
+## Mermaid Diagram lookup map
+- **Cloud Architecture UI:** `web/templates/cloud_architecture.html`
+- **Mermaid page controller:** `web/static/js/cloud-architecture-mermaid.js`
+- **Shared render helper:** `web/static/js/cloud-mermaid-helper.js`
+- **Mermaid renderer wrapper:** `web/static/js/subscription-diagrams.js`
+- **API route used by the mermaid page:** `web/app.py` (`/cloud/architecture` and `/api/cloud/architecture?sub=...&view=mermaid`)
+- **Mermaid generation:** `Scripts/Generate/generate_diagram.py`
+- **Architecture bundle builder:** `Scripts/Generate/architecture_view_helpers.py`
+
 ---
 
 # Cloud Subscription Diagram Validation Agent

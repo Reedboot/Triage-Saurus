@@ -50,6 +50,16 @@ Keep triage outputs consistent across findings, knowledge, summaries, and rules.
 - Run the mandatory rule scan.
 - Run security review and architecture updates if IaC is present.
 
+## Mermaid Diagram lookup map
+- **Cloud Architecture UI:** `web/templates/cloud_architecture.html`
+- **Mermaid page controller:** `web/static/js/cloud-architecture-mermaid.js`
+- **Shared render helper:** `web/static/js/cloud-mermaid-helper.js`
+- **Mermaid renderer wrapper:** `web/static/js/subscription-diagrams.js`
+- **API route used by the mermaid page:** `web/app.py` (`/cloud/architecture` and `/api/cloud/architecture?sub=...&view=mermaid`)
+- **Mermaid generation:** `Scripts/Generate/generate_diagram.py`
+- **Architecture bundle builder:** `Scripts/Generate/architecture_view_helpers.py`
+- **Related subscription helpers:** `web/subscription_diagram_helpers.py`
+
 ## Manual review reminders
 - Trace attack paths, not isolated snippets.
 - Distinguish direct user input from internal/trusted data.

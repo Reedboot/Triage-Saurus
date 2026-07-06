@@ -13555,6 +13555,12 @@ def _build_subscription_architecture_payload(
                     }
                 )
                 synthetic_gateways_created.add((gw_name or "").lower())
+
+        gateway_asset_lookup: dict[str, dict] = {
+            str(asset.get("name") or "").strip().lower(): asset
+            for asset in assets
+            if "applicationgateway" in str(asset.get("type") or "").lower()
+        }
         
         # Now create listener nodes
         listener_rows = conn.execute(
@@ -13569,12 +13575,28 @@ def _build_subscription_architecture_payload(
         for lr in listener_rows:
             proto = (lr["protocol"] or "HTTP").upper()
             gw_name_lower = (lr["gateway_name"] or "").lower()
-            
-            # Determine parent_id: use synthetic if created, otherwise will be resolved later
-            parent_id = None
+            gateway_asset = gateway_asset_lookup.get(gw_name_lower)
+
+            # Keep listener nodes inside the owning gateway so they inherit the same
+            # network/subnet placement in the mermaid view.
+            parent_id = gateway_asset["id"] if gateway_asset else None
             if gw_name_lower in synthetic_gateways_created:
                 parent_id = f"synthetic-appgw::{lr['gateway_name']}"
-            
+                gateway_asset = gateway_asset or next(
+                    (
+                        asset
+                        for asset in assets
+                        if asset.get("id") == parent_id
+                    ),
+                    None,
+                )
+
+            gateway_network = gateway_asset.get("network") if gateway_asset else {}
+            gateway_vnet = gateway_asset.get("vnet_name") if gateway_asset else None
+            gateway_vnet_rg = gateway_asset.get("vnet_resource_group") if gateway_asset else None
+            gateway_subnet = gateway_asset.get("subnet_name") if gateway_asset else None
+            gateway_subnet_id = gateway_asset.get("subnet_id") if gateway_asset else None
+
             assets.append(
                 {
                     "id": f"listener::{lr['gateway_name']}::{lr['listener_name']}::{lr['hostname']}",
@@ -13609,15 +13631,15 @@ def _build_subscription_architecture_payload(
                     "provider_key": "azure",
                     "provider_label": "Azure",
                     "tier": "entry",
-                    "vnet_name": None,
-                    "vnet_resource_group": None,
-                    "subnet_name": None,
-                    "subnet_id": None,
+                    "vnet_name": gateway_vnet,
+                    "vnet_resource_group": gateway_vnet_rg,
+                    "subnet_name": gateway_subnet,
+                    "subnet_id": gateway_subnet_id,
                     "network": {
-                        "vnet": None,
-                        "subnet": None,
-                        "vnet_resource_group": None,
-                        "subnet_id": None,
+                        "vnet": gateway_network.get("vnet") if gateway_network else gateway_vnet,
+                        "subnet": gateway_network.get("subnet") if gateway_network else gateway_subnet,
+                        "vnet_resource_group": gateway_network.get("vnet_resource_group") if gateway_network else gateway_vnet_rg,
+                        "subnet_id": gateway_network.get("subnet_id") if gateway_network else gateway_subnet_id,
                     },
                 }
             )
@@ -13634,8 +13656,8 @@ def _build_subscription_architecture_payload(
             """,
             (sub_id,),
         ).fetchall()
+        fqdn_asset_lookup: dict[str, dict] = {}
         if route_rows:
-            fqdn_asset_lookup: dict[str, dict] = {}
             for asset in assets:
                 for fqdn_value in asset.get("fqdns") or ([asset.get("fqdn")] if asset.get("fqdn") else []):
                     fqdn_key = str(fqdn_value or "").strip().lower().rstrip(".")
@@ -20378,6 +20400,25 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         if "applicationgateway" in (arm_type or "").lower():
             appgw_node_resources_by_id[node_id] = item.get("resources") or [{"rg": item.get("rg"), "name": item.get("name")}]
             appgw_node_title_by_id[node_id] = item.get("name") or item.get("label") or "App Gateway"
+            for spec in listener_node_specs:
+                if spec.get("gateway_node_id") != node_id:
+                    continue
+                if spec["node_id"] not in rendered_node_ids:
+                    arm = "microsoft.network/applicationgatewaylisteners/http" if str(spec.get("protocol") or "").upper().startswith("HTTP") and not str(spec.get("protocol") or "").upper().startswith("HTTPS") else "microsoft.network/applicationgatewaylisteners/https"
+                    lines.append(_node_line(spec["node_id"], spec["title"], arm))
+                    rendered_node_ids.add(spec["node_id"])
+            for spec in waf_node_specs:
+                if spec.get("gateway_node_id") != node_id:
+                    continue
+                if spec["node_id"] not in rendered_node_ids:
+                    lines.append(_node_line(spec["node_id"], f"🛡️ WAF: {spec['policy_name']}", "microsoft.network/firewallpolicies"))
+                    rendered_node_ids.add(spec["node_id"])
+            for spec in appgw_pool_node_specs.values():
+                if spec.get("gateway_node_id") != node_id:
+                    continue
+                if spec["node_id"] not in rendered_node_ids:
+                    lines.append(_node_line(spec["node_id"], spec["pool_name"], "microsoft.network/applicationgatewaybackendpools"))
+                    rendered_node_ids.add(spec["node_id"])
         if "azurefirewalls" in arm_type.lower():
             policy = firewall_policy_by_firewall.get((item.get("name") or "").lower())
             if policy and policy.get("name"):
@@ -20491,6 +20532,87 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         _get_node_id(item)
         for item in shown_entry + shown_api + shown_backend + shown_data
     }
+
+    _listener_nids: dict[str, list[tuple[str, bool]]] = defaultdict(list)
+    listener_node_specs: list[dict] = []
+    _waf_nids: dict[str, str] = {}
+    _listener_waf_nids: dict[str, str] = {}
+    _waf_nids_by_policy: dict[tuple[str, str], str] = {}
+    _waf_nids_by_gateway: dict[str, list[str]] = defaultdict(list)
+    waf_node_specs: list[dict] = []
+    _gw_level_waf_policy: dict[str, str] = {}
+    appgw_pool_nodes: dict[tuple[str, str], str] = {}
+    appgw_pool_node_specs: dict[str, dict] = {}
+    appgw_pool_listeners: dict[tuple[str, str], list[str]] = defaultdict(list)
+
+    for _policy_name, _associated_gateways_json, _policy_state in _iter_appgw_waf_policy_rows():
+        if str(_policy_state or "").strip().lower() == "disabled":
+            continue
+        try:
+            _associated_gateways = json.loads(_associated_gateways_json or "[]") if isinstance(_associated_gateways_json, str) else (_associated_gateways_json or [])
+        except Exception:
+            _associated_gateways = []
+        if not isinstance(_associated_gateways, list):
+            _associated_gateways = []
+        _policy_name = str(_policy_name or "").strip()
+        if not _policy_name:
+            continue
+        for _gateway_name in _associated_gateways:
+            _gateway_key = str(_gateway_name or "").lower().strip()
+            if _gateway_key and _gateway_key not in _gw_level_waf_policy:
+                _gw_level_waf_policy[_gateway_key] = _policy_name
+
+    for _gw_name, _hostname, _be_fqdns_json, _pool_name, _listener_name, _url_path, _listener_protocol, _waf_policy_name in _iter_appgw_route_rows():
+        _gw_key = str(_gw_name or "").lower().strip()
+        if not _gw_key or not _hostname:
+            continue
+        _gw_nid = node_by_name.get(_gw_key)
+        if not _gw_nid:
+            continue
+        _proto = str(_listener_protocol or "").upper().strip() if _listener_protocol else "HTTPS"
+        _listener_nid = f"l_{_gw_nid}_{_sanitise_node_id(f'{_proto}_{_hostname}')}"
+        _is_http = _proto.startswith("HTTP") and not _proto.startswith("HTTPS")
+        _listener_spec = {
+            "node_id": _listener_nid,
+            "gateway_node_id": _gw_nid,
+            "gateway_name": _gw_name or "",
+            "resource_group": next((item.get("rg") for item in shown_entry if _get_node_id(item) == _gw_nid), "") or "",
+            "protocol": _proto,
+            "hostname": _hostname,
+            "title": f"{'🔴' if _is_http else '🔒'} {'HTTP' if _is_http else 'HTTPS'} listener ({_hostname})",
+        }
+        if all(spec.get("node_id") != _listener_nid for spec in listener_node_specs):
+            listener_node_specs.append(_listener_spec)
+            _listener_nids[_gw_nid].append((_listener_nid, _is_http))
+        _waf_name = str(_waf_policy_name or "").strip()
+        if _waf_name:
+            _waf_nid = f"waf_{_gw_nid}_{_sanitise_node_id(_waf_name)}"
+            _waf_spec = {
+                "node_id": _waf_nid,
+                "gateway_node_id": _gw_nid,
+                "gateway_name": _gw_name or "",
+                "resource_group": _listener_spec["resource_group"],
+                "policy_name": _waf_name,
+            }
+            _listener_waf_nids[_listener_nid] = _waf_nid
+            if all(spec.get("node_id") != _waf_nid for spec in waf_node_specs):
+                waf_node_specs.append(_waf_spec)
+                _waf_nids_by_policy[(_gw_nid, _waf_name.lower())] = _waf_nid
+                _waf_nids_by_gateway[_gw_nid].append(_waf_nid)
+                if _gw_nid not in _waf_nids:
+                    _waf_nids[_gw_nid] = _waf_nid
+        _pool_label = str(_pool_name or "default-backend-pool").strip() or "default-backend-pool"
+        _pool_key = _pool_label.lower()
+        _pool_nid = f"agpool_{_sanitise_node_id(_gw_nid)}_{_sanitise_node_id(_pool_key)}"
+        appgw_pool_listeners[(_gw_nid, _pool_key)].append(str(_listener_name or "").strip())
+        if _pool_nid not in appgw_pool_nodes.values():
+            appgw_pool_nodes[(_gw_nid, _pool_key)] = _pool_nid
+            appgw_pool_node_specs[_pool_nid] = {
+                "node_id": _pool_nid,
+                "gateway_node_id": _gw_nid,
+                "gateway_name": _gw_name or "",
+                "pool_name": _pool_label,
+            }
 
     def _render_group_item(item: dict) -> None:
         item_id = id(item)
@@ -20606,162 +20728,6 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     for item in standalone_data_items:
         _render_data_item(item)
 
-    # --- Listener and WAF policy nodes for App Gateways ---
-    # Maps gw_nid → list of (listener_nid, is_insecure_http)
-    _listener_nids: dict[str, list[tuple[str, bool]]] = {}
-    listener_node_specs: list[dict] = []
-    # Maps gw_nid → default/fallback waf_nid
-    _waf_nids: dict[str, str] = {}
-    # Maps listener node id → explicit WAF policy node id
-    _listener_waf_nids: dict[str, str] = {}
-    # Maps (gw_nid, policy_name_lower) → WAF policy node id
-    _waf_nids_by_policy: dict[tuple[str, str], str] = {}
-    # Maps gw_nid → all WAF policy node ids created for that gateway
-    _waf_nids_by_gateway: dict[str, list[str]] = {}
-    waf_node_specs: list[dict] = []
-    # Maps gateway name (lowercase) → list of (protocol, hostname) tuples (ordered, unique)
-    _gw_listener_pairs: dict[str, list[tuple[str, str]]] = {}
-    # Maps (gateway, protocol, hostname) → named WAF policy from routing rules
-    _gw_listener_waf_policy: dict[tuple[str, str, str], str] = {}
-    # Maps gateway name → active gateway-level WAF policy name
-    _gw_level_waf_policy: dict[str, str] = {}
-
-    for _policy_name, _associated_gateways_json, _policy_state in _iter_appgw_waf_policy_rows():
-        if str(_policy_state or "").strip().lower() == "disabled":
-            continue
-        try:
-            _associated_gateways = json.loads(_associated_gateways_json or "[]") if isinstance(_associated_gateways_json, str) else (_associated_gateways_json or [])
-        except Exception:
-            _associated_gateways = []
-        if not isinstance(_associated_gateways, list):
-            _associated_gateways = []
-        _policy_name = str(_policy_name or "").strip()
-        if not _policy_name:
-            continue
-        for _gateway_name in _associated_gateways:
-            _gateway_key = str(_gateway_name or "").lower().strip()
-            if _gateway_key and _gateway_key not in _gw_level_waf_policy:
-                _gw_level_waf_policy[_gateway_key] = _policy_name
-
-    for _gw_name, _hostname, _be_fqdns_json, _pool_name, _listener_name, _url_path, _listener_protocol, _waf_policy_name in _iter_appgw_route_rows():
-        _gw_key = str(_gw_name or "").lower().strip()
-        _host = str(_hostname or "").strip()
-        _proto = str(_listener_protocol or "").upper().strip() if _listener_protocol else "HTTPS"
-        if not _gw_key or not _host:
-            continue
-        pair = (_proto, _host)
-        if pair not in _gw_listener_pairs.get(_gw_key, []):
-            _gw_listener_pairs.setdefault(_gw_key, []).append(pair)
-        _waf_name = str(_waf_policy_name or "").strip()
-        if _waf_name:
-            _listener_key = (_gw_key, _proto, _host)
-            if _listener_key not in _gw_listener_waf_policy:
-                _gw_listener_waf_policy[_listener_key] = _waf_name
-
-    for item in shown_entry:
-        arm_type_low = (item.get("arm_type") or item.get("type") or "").lower()
-        if "applicationgateway" not in arm_type_low:
-            continue
-        gw_nid = _get_node_id(item)
-        gw_name_lc = str(item.get("name") or "").lower().strip()
-        listener_pairs = list(_gw_listener_pairs.get(gw_name_lc, []))
-        if not listener_pairs:
-            # Fallback for environments where appgw_routing_rules are not yet harvested.
-            raw_listeners = item.get("listeners") or ""
-            if isinstance(raw_listeners, list):
-                raw_tokens = [str(t or "").strip() for t in raw_listeners if str(t or "").strip()]
-            else:
-                raw_tokens = [t.strip() for t in str(raw_listeners).split(",") if t.strip()]
-            for token in raw_tokens:
-                if ":" in token:
-                    proto_raw, listener_hint_raw = token.split(":", 1)
-                    proto = str(proto_raw or "").upper().strip() or "HTTPS"
-                    listener_hint = str(listener_hint_raw or "").strip()
-                else:
-                    proto = str(token or "").upper().strip() or "HTTPS"
-                    listener_hint = ""
-                if not listener_hint:
-                    fqdns = item.get("fqdns") or []
-                    listener_hint = str(fqdns[0]).strip() if fqdns else str(item.get("fqdn") or "").strip()
-                if not listener_hint:
-                    listener_hint = proto
-                pair = (proto, listener_hint)
-                if pair not in listener_pairs:
-                    listener_pairs.append(pair)
-        l_nids: list[tuple[str, bool]] = []
-          
-        # Create one listener node per unique (protocol, hostname) pair
-        for proto, host in listener_pairs:
-            is_http = proto.startswith("HTTP") and not proto.startswith("HTTPS")
-            l_nid = f"l_{gw_nid}_{_sanitise_node_id(f'{proto}_{host}')}"
-            proto_label = "HTTP listener" if is_http else "HTTPS listener"
-            label = f"🔴 {proto_label} ({host})" if is_http else f"🔒 {proto_label} ({host})"
-            arm_type = "microsoft.network/applicationgatewaylisteners/http" if is_http else "microsoft.network/applicationgatewaylisteners/https"
-            lines.append(_node_line(l_nid, label, arm_type))
-            l_nids.append((l_nid, is_http))
-            _waf_policy_name = _gw_listener_waf_policy.get((gw_name_lc, proto, host)) or _gw_level_waf_policy.get(gw_name_lc)
-            if _waf_policy_name:
-                _waf_key = (gw_nid, _waf_policy_name.lower())
-                _waf_nid = _waf_nids_by_policy.get(_waf_key)
-                if not _waf_nid:
-                    _waf_nid = f"waf_{gw_nid}_{_sanitise_node_id(_waf_policy_name)}"
-                    _waf_nids_by_policy[_waf_key] = _waf_nid
-                    _waf_nids_by_gateway.setdefault(gw_nid, []).append(_waf_nid)
-                    lines.append(_node_line(_waf_nid, f"🛡️ WAF: {_waf_policy_name}", "microsoft.network/firewallpolicies"))
-                    waf_node_specs.append({
-                        "node_id": _waf_nid,
-                        "gateway_node_id": gw_nid,
-                        "gateway_name": item.get("name") or "",
-                        "resource_group": item.get("rg") or "",
-                        "policy_name": _waf_policy_name,
-                    })
-                _listener_waf_nids[l_nid] = _waf_nid
-            listener_node_specs.append({
-                "node_id": l_nid,
-                "gateway_node_id": gw_nid,
-                "gateway_name": item.get("name") or "",
-                "resource_group": item.get("rg") or "",
-                "protocol": proto,
-                "hostname": host,
-                "title": label,
-            })
-        if l_nids:
-            _listener_nids[gw_nid] = l_nids
-        # Only use named WAF policies from routing rules - do not create fallback "WAF Policy" nodes
-        # for gateways without explicit WAF policies (disabled WAFs or no WAF configured)
-        if _waf_nids_by_gateway.get(gw_nid):
-            _waf_nids[gw_nid] = _waf_nids_by_gateway[gw_nid][0]
-
-    # App Gateway backend pool nodes: show explicit egress path
-    # App Gateway -> Backend Pool -> Destination.
-    appgw_pool_nodes: dict[tuple[str, str], str] = {}
-    appgw_pool_node_specs: dict[str, dict] = {}
-    # Collect all listener names per (gw_nid, pool_key) so every listener routing to
-    # a pool appears on the gateway→pool edge label, not just the first iterated row.
-    appgw_pool_listeners: dict[tuple[str, str], list[str]] = {}
-    for _gw_name, _hostname, _be_fqdns_json, _pool_name, _listener_name, _url_path, _listener_protocol, _waf_policy_name in _iter_appgw_route_rows():
-        _gw_nid = node_by_name.get(str(_gw_name or "").lower())
-        if not _gw_nid:
-            continue
-        _pool_label = str(_pool_name or "default-backend-pool").strip() or "default-backend-pool"
-        _pool_key = _pool_label.lower()
-        _pool_node_key = (_gw_nid, _pool_key)
-        _raw_listener = str(_listener_name or "").strip()
-        _listener_tokens = [t.strip() for t in _raw_listener.split(" / ") if t.strip()] if _raw_listener else []
-        for _ln in _listener_tokens:
-            if _ln not in appgw_pool_listeners.get(_pool_node_key, []):
-                appgw_pool_listeners.setdefault(_pool_node_key, []).append(_ln)
-        if _pool_node_key in appgw_pool_nodes:
-            continue
-        _pool_nid = f"agpool_{_sanitise_node_id(_gw_nid)}_{_sanitise_node_id(_pool_key)}"
-        appgw_pool_nodes[_pool_node_key] = _pool_nid
-        lines.append(_node_line(_pool_nid, _pool_label, "microsoft.network/applicationgatewaybackendpools"))
-        appgw_pool_node_specs[_pool_nid] = {
-            "gateway_node_id": _gw_nid,
-            "gateway_name": _gw_name or "",
-            "pool_name": _pool_label,
-        }
-    
     # Add connections — track link index so linkStyle can colour each arrow
     # Convention: red = direct internet exposure, orange = internet-reachable path, white = internal/OK
     lines.append("")
