@@ -13215,6 +13215,23 @@ def _build_subscription_architecture_payload(
         (sub_id,),
     ).fetchall()
 
+    aks_route_rows: list = []
+    try:
+        if _table_exists(conn, "aks_routes"):
+            aks_route_rows = conn.execute(
+                """
+                SELECT cluster_name, namespace, ingress_name, host, path,
+                       service_name, service_port, deployment_name,
+                       git_repository, resource_group, pod_template_labels
+                FROM aks_routes
+                WHERE subscription_id=?
+                LIMIT 100
+                """,
+                (sub_id,),
+            ).fetchall()
+    except Exception:
+        pass
+
     if view_mode == "overview":
         overlay_rows: list[tuple] = []
         for row in asset_rows:
@@ -13290,7 +13307,7 @@ def _build_subscription_architecture_payload(
         except Exception:
             pass
 
-        ingress_diagram = _build_ingress_diagram(overlay_rows, plan_links=plan_links)
+        ingress_diagram = _build_ingress_diagram(overlay_rows, plan_links=plan_links, aks_route_rows=aks_route_rows)
         resource_count = len(asset_rows)
         connection_count = len(ingress_diagram.get("attack_paths") or [])
         payload = {
@@ -13728,6 +13745,101 @@ def _build_subscription_architecture_payload(
                         existing_markers.add(marker)
                     if merged_targets:
                         asset["routing_targets"] = merged_targets
+
+    if aks_route_rows:
+        cluster_lookup: dict[tuple[str, str], dict] = {}
+        for asset in assets:
+            if "managedcluster" not in str(asset.get("type") or "").lower():
+                continue
+            cluster_lookup[
+                (str(asset.get("resource_group") or "").strip().lower(), str(asset.get("name") or "").strip().lower())
+            ] = asset
+
+        seen_aks_route_keys: set[str] = set()
+        for row in aks_route_rows:
+            try:
+                cluster_name, namespace, ingress_name, host, path, service_name, service_port, deployment_name, git_repository, resource_group, pod_template_labels = row[:11]
+            except Exception:
+                continue
+
+            cluster_key = (str(resource_group or "").strip().lower(), str(cluster_name or "").strip().lower())
+            cluster_asset = cluster_lookup.get(cluster_key) or next(
+                (
+                    asset
+                    for asset in assets
+                    if "managedcluster" in str(asset.get("type") or "").lower()
+                    and str(asset.get("name") or "").strip().lower() == str(cluster_name or "").strip().lower()
+                ),
+                None,
+            )
+            if not cluster_asset:
+                continue
+
+            host_str = str(host or "").strip()
+            ingress_label = str(ingress_name or host_str or "ingress").strip()
+            path_str = str(path or "").strip() or "/*"
+            synthetic_key = "::".join([
+                str(cluster_asset.get("id") or "").strip().lower(),
+                str(namespace or "").strip().lower(),
+                ingress_label.lower(),
+                host_str.lower(),
+                path_str.lower(),
+            ])
+            if synthetic_key in seen_aks_route_keys:
+                continue
+            seen_aks_route_keys.add(synthetic_key)
+
+            route_asset = {
+                "id": f"aks-ingress::{cluster_asset.get('id')}::{namespace or 'default'}::{ingress_label}::{host_str or 'host'}",
+                "name": ingress_label,
+                "type": "microsoft.kubernetes/ingresses",
+                "type_label": "Kubernetes Ingress",
+                "display_type_label": "Kubernetes Ingress",
+                "resource_group": str(resource_group or cluster_asset.get("resource_group") or "").strip(),
+                "location": cluster_asset.get("location"),
+                "sku": f"{host_str or ingress_label}{(' ' + path_str) if path_str else ''}",
+                "fqdn": host_str,
+                "is_public": True,
+                "status": "active",
+                "pipeline_tag": None,
+                "first_detected": None,
+                "last_synced": None,
+                "sub_id": sub_id,
+                "sub_name": sub_name,
+                "environment": sub_env,
+                "cloud_provider": "Azure",
+                "linked_repo": None,
+                "kind": "Ingress",
+                "parent_id": cluster_asset.get("id"),
+                "parent_name": cluster_asset.get("name"),
+                "parent_resource_group": cluster_asset.get("resource_group"),
+                "parent_type_label": cluster_asset.get("display_type_label") or cluster_asset.get("type_label"),
+                "children_count": 0,
+                "is_child": True,
+                "depth": 1,
+                "is_restricted": False,
+                "waf_mode": None,
+                "provider_key": "azure",
+                "provider_label": "Azure",
+                "tier": "entry",
+                "routing_targets": [{
+                    "target_resource_id": str(cluster_asset.get("id") or "").strip(),
+                    "target": str(cluster_asset.get("name") or "").strip(),
+                    "name": str(cluster_asset.get("name") or "").strip(),
+                }],
+                "vnet_name": cluster_asset.get("vnet_name"),
+                "vnet_resource_group": cluster_asset.get("vnet_resource_group"),
+                "subnet_name": cluster_asset.get("subnet_name"),
+                "subnet_id": cluster_asset.get("subnet_id"),
+                "network": dict(cluster_asset.get("network") or {}),
+                "source_namespace": namespace,
+                "source_service": service_name,
+                "source_service_port": service_port,
+                "source_deployment": deployment_name,
+                "source_repo": git_repository,
+                "source_labels": pod_template_labels,
+            }
+            assets.append(route_asset)
 
     # Add WAF Policy nodes as separate visible nodes
     if _table_exists(conn, "appgw_waf_policies"):
@@ -14305,6 +14417,10 @@ def _build_subscription_architecture_payload(
             # Check if this is a child node (depth > 0 or has parent_id)
             is_child_node = bool(asset.get("is_child") or asset.get("depth", 0) > 0 or asset.get("parent_id"))
             label = (asset.get("short_name") or asset["name"]) if requested_mode == "overview" else asset["name"]
+            if asset.get("tier") == "api" or asset.get("routing_targets"):
+                fqdn = str(asset.get("fqdn") or "").strip()
+                if fqdn and fqdn not in label:
+                    label = f"{label} ({fqdn})"
             asset_type_key = str(asset.get("type") or "").lower()
             if "bastionhost" in asset_type_key and asset.get("resource_group"):
                 label = f"{label} ({asset.get('resource_group')})"
@@ -14387,7 +14503,9 @@ def _build_subscription_architecture_payload(
     node_by_resource: dict[tuple[str, str], str] = {}
     node_by_resource_type: dict[tuple[str, str, str], str] = {}
     node_by_fqdn: dict[str, str] = {}
+    node_by_fqdn_normalized: dict[str, str] = {}
     node_by_name: dict[str, str] = {}
+    node_by_name_normalized: dict[str, str] = {}
     for asset in assets:
         node_id = str(asset.get("id") or "").strip()
         if not node_id:
@@ -14401,10 +14519,16 @@ def _build_subscription_architecture_payload(
                 node_by_resource_type.setdefault((rg_key, name_key, type_key), node_id)
         if name_key:
             node_by_name.setdefault(name_key, node_id)
+            name_norm = _routing_lookup_key(name_key)
+            if name_norm:
+                node_by_name_normalized.setdefault(name_norm, node_id)
         for fqdn_value in asset.get("fqdns") or ([asset.get("fqdn")] if asset.get("fqdn") else []):
             fqdn_key = str(fqdn_value or "").strip().lower()
             if fqdn_key:
                 node_by_fqdn.setdefault(fqdn_key, node_id)
+                fqdn_norm = _routing_lookup_key(fqdn_key)
+                if fqdn_norm:
+                    node_by_fqdn_normalized.setdefault(fqdn_norm, node_id)
 
     def _entry_routing_targets(entry: dict) -> list[dict]:
         raw_targets = entry.get("routing_targets")
@@ -14443,7 +14567,9 @@ def _build_subscription_architecture_payload(
                 node_by_resource=node_by_resource,
                 node_by_resource_type=node_by_resource_type,
                 node_by_fqdn=node_by_fqdn,
+                node_by_fqdn_normalized=node_by_fqdn_normalized,
                 node_by_name=node_by_name,
+                node_by_name_normalized=node_by_name_normalized,
             )
             if target_node_id:
                 if target_node_id not in resolved_targets:
@@ -16022,10 +16148,10 @@ def _collect_subnet_ids(raw_json: dict) -> list[str]:
     - subnetId / subnet.id               (Redis, Private Endpoints, APIM, SQL MI, Bastion)
     - virtualNetworkSubnetId             (App Service VNet Integration)
     - networkProfile.subnetId            (Container Instances, some AKS node pools)
-    - agentPoolProfiles[].vnetSubnetID   (AKS)
-    - ipConfigurations[].subnet.id       (NICs — flattened; or [].properties.subnet.id — ARM)
     - virtualMachineProfile.networkProfile.networkInterfaceConfigurations[]
       .ipConfigurations[].subnet.id      (VM Scale Sets)
+    - agentPoolProfiles[].vnetSubnetID   (AKS)
+    - ipConfigurations[].subnet.id       (NICs — flattened; or [].properties.subnet.id — ARM)
     - gatewayIPConfigurations[].properties.subnet.id  (App Gateways)
     - frontendIPConfigurations[].properties.subnet.id (Internal LBs)
     """
@@ -16081,11 +16207,38 @@ def _collect_subnet_ids(raw_json: dict) -> list[str]:
         net_profile = props.get("networkProfile")
         if isinstance(net_profile, dict):
             _add(net_profile.get("subnetId", ""))
+            _add(net_profile.get("subnet_id", ""))
+
+        vm_profile = props.get("virtualMachineProfile")
+        if isinstance(vm_profile, dict):
+            vm_net_profile = vm_profile.get("networkProfile")
+            if isinstance(vm_net_profile, dict):
+                for nic_cfg in vm_net_profile.get("networkInterfaceConfigurations") or []:
+                    if not isinstance(nic_cfg, dict):
+                        continue
+                    nic_props = nic_cfg.get("properties") if isinstance(nic_cfg.get("properties"), dict) else {}
+                    ip_configs = list(nic_cfg.get("ipConfigurations") or [])
+                    if isinstance(nic_props, dict):
+                        ip_configs.extend(nic_props.get("ipConfigurations") or [])
+                    for ip_cfg in ip_configs:
+                        if not isinstance(ip_cfg, dict):
+                            continue
+                        sub = ip_cfg.get("subnet")
+                        if isinstance(sub, dict):
+                            _add(sub.get("id", ""))
+                        ip_props = ip_cfg.get("properties") or {}
+                        if isinstance(ip_props, dict):
+                            sub = ip_props.get("subnet")
+                            if isinstance(sub, dict):
+                                _add(sub.get("id", ""))
 
         # AKS agent pool profiles
         for pool in props.get("agentPoolProfiles") or []:
             if isinstance(pool, dict):
                 _add(pool.get("vnetSubnetID", ""))
+                _add(pool.get("vnetSubnetId", ""))
+                _add(pool.get("subnetId", ""))
+                _add(pool.get("subnet_id", ""))
 
         # IP configurations — flattened harvester format: ipConfigurations[].subnet.id
         # Standard ARM format: ipConfigurations[].properties.subnet.id
@@ -16100,6 +16253,31 @@ def _collect_subnet_ids(raw_json: dict) -> list[str]:
             ip_props = ip_cfg.get("properties") or {}
             if isinstance(ip_props, dict):
                 sub = ip_props.get("subnet")
+                if isinstance(sub, dict):
+                    _add(sub.get("id", ""))
+
+        # App Gateway and Internal Load Balancer subnet references.
+        for gw_cfg in props.get("gatewayIPConfigurations") or []:
+            if not isinstance(gw_cfg, dict):
+                continue
+            sub = gw_cfg.get("subnet")
+            if isinstance(sub, dict):
+                _add(sub.get("id", ""))
+            gw_props = gw_cfg.get("properties") or {}
+            if isinstance(gw_props, dict):
+                sub = gw_props.get("subnet")
+                if isinstance(sub, dict):
+                    _add(sub.get("id", ""))
+
+        for fe_cfg in props.get("frontendIPConfigurations") or []:
+            if not isinstance(fe_cfg, dict):
+                continue
+            sub = fe_cfg.get("subnet")
+            if isinstance(sub, dict):
+                _add(sub.get("id", ""))
+            fe_props = fe_cfg.get("properties") or {}
+            if isinstance(fe_props, dict):
+                sub = fe_props.get("subnet")
                 if isinstance(sub, dict):
                     _add(sub.get("id", ""))
 
@@ -16765,13 +16943,84 @@ def _extract_routing_targets(raw_json: dict) -> list[dict]:
     return targets  # Remove duplicates
 
 
+def _routing_lookup_key(value: str) -> str:
+    """Normalise a routing host/name for loose matching."""
+    import re as _re
+    from urllib.parse import urlsplit as _urlsplit
+
+    text = str(value or "").strip().lower().rstrip(".")
+    if not text:
+        return ""
+    if "://" in text:
+        try:
+            text = _urlsplit(text).hostname or text
+        except Exception:
+            pass
+    text = text.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+    text = text.split(":", 1)[0].rstrip(".")
+    for prefix in ("cbuk-core-prodgreen-", "cbuk-core-prod-", "cbuk-", "subscription-production-"):
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+            break
+    text = _re.sub(r"-(uksouth|ukwest|eastus\d*|westeurope|northeurope|westus\d*)$", "", text, flags=_re.IGNORECASE)
+    return _re.sub(r"[^a-z0-9]+", "", text)
+
+
+def _routing_target_candidates(target: dict) -> list[str]:
+    """Return candidate host/name strings for a routing target."""
+    candidates: list[str] = []
+
+    def _add(value: str | None) -> None:
+        text = str(value or "").strip()
+        if not text:
+            return
+        if "://" in text:
+            from urllib.parse import urlsplit as _urlsplit
+
+            try:
+                text = _urlsplit(text).hostname or text
+            except Exception:
+                pass
+        text = text.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0].split(":", 1)[0].rstrip(".")
+        for candidate in (
+            text,
+            text.split(".", 1)[0] if "." in text else "",
+            text.removesuffix(".appserviceenvironment.net") if text.endswith(".appserviceenvironment.net") else "",
+            text.removesuffix(".azure-api.net") if text.endswith(".azure-api.net") else "",
+        ):
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+
+    for key in (
+        "target_resource_id",
+        "targetResourceId",
+        "resource_id",
+        "backend_fqdn",
+        "backendFqdn",
+        "backend_target",
+        "backendTarget",
+        "backend_url",
+        "backendUrl",
+        "hostname",
+        "host",
+        "fqdn",
+        "target",
+        "name",
+    ):
+        _add(target.get(key))
+
+    return candidates
+
+
 def _resolve_routing_target_node_id(
     target: dict,
     *,
     node_by_resource: dict[tuple[str, str], str] | None = None,
     node_by_resource_type: dict[tuple[str, str, str], str] | None = None,
     node_by_fqdn: dict[str, str] | None = None,
+    node_by_fqdn_normalized: dict[str, str] | None = None,
     node_by_name: dict[str, str] | None = None,
+    node_by_name_normalized: dict[str, str] | None = None,
 ) -> str | None:
     """Resolve a routing target dict to a diagram node ID."""
     target_resource_id = str(
@@ -16803,22 +17052,29 @@ def _resolve_routing_target_node_id(
             if node_id:
                 return node_id
 
-    target_host = str(target.get("target") or target.get("fqdn") or "").strip().lower().rstrip(".")
-    if target_host and node_by_fqdn:
-        node_id = node_by_fqdn.get(target_host)
-        if node_id:
-            return node_id
+    for candidate in _routing_target_candidates(target):
+        candidate_key = candidate.strip().lower().rstrip(".")
+        if candidate_key and node_by_fqdn:
+            node_id = node_by_fqdn.get(candidate_key)
+            if node_id:
+                return node_id
+        if candidate_key and node_by_name:
+            node_id = node_by_name.get(candidate_key)
+            if node_id:
+                return node_id
 
-    target_name = str(target.get("name") or target.get("target") or "").strip().lower()
-    if target_name and node_by_name:
-        node_id = node_by_name.get(target_name)
-        if node_id:
-            return node_id
-
-    if target_host and node_by_name and "." in target_host:
-        node_id = node_by_name.get(target_host.split(".", 1)[0])
-        if node_id:
-            return node_id
+    for candidate in _routing_target_candidates(target):
+        candidate_key = _routing_lookup_key(candidate)
+        if not candidate_key:
+            continue
+        if node_by_fqdn_normalized:
+            node_id = node_by_fqdn_normalized.get(candidate_key)
+            if node_id:
+                return node_id
+        if node_by_name_normalized:
+            node_id = node_by_name_normalized.get(candidate_key)
+            if node_id:
+                return node_id
 
     return None
 
@@ -18155,6 +18411,23 @@ def api_subscription_diagram(sub_id: str):
         except Exception:
             pass  # Non-critical — proceed without ASE links if query fails
 
+        aks_route_rows: list = []
+        try:
+            if _table_exists(conn, "aks_routes"):
+                aks_route_rows = conn.execute(
+                    """
+                    SELECT cluster_name, namespace, ingress_name, host, path,
+                           service_name, service_port, deployment_name,
+                           git_repository, resource_group, pod_template_labels
+                    FROM aks_routes
+                    WHERE subscription_id=?
+                    LIMIT 100
+                    """,
+                    (sub_id,),
+                ).fetchall()
+        except Exception:
+            pass  # Non-critical — proceed without AKS route data
+
         # Query APIM backend URLs for verified connection detection.
         # Used to flag App Service Plans whose hosted apps aren't confirmed
         # in APIM routing as potentially unprotected.
@@ -18208,6 +18481,40 @@ def api_subscription_diagram(sub_id: str):
                     (sub_id,),
                 ).fetchall()
                 public_appgw_names = {r[0].lower() for r in _pub_rows if r[0]}
+        except Exception:
+            pass  # Non-critical
+
+        aks_route_rows: list = []
+        try:
+            if _table_exists(conn, "aks_routes"):
+                aks_route_rows = conn.execute(
+                    """
+                    SELECT cluster_name, namespace, ingress_name, host, path,
+                           service_name, service_port, deployment_name,
+                           git_repository, resource_group, pod_template_labels
+                    FROM aks_routes
+                    WHERE subscription_id=?
+                    LIMIT 100
+                    """,
+                    (sub_id,),
+                ).fetchall()
+        except Exception:
+            pass  # Non-critical
+
+        aks_route_rows: list = []
+        try:
+            if _table_exists(conn, "aks_routes"):
+                aks_route_rows = conn.execute(
+                    """
+                    SELECT cluster_name, namespace, ingress_name, host, path,
+                           service_name, service_port, deployment_name,
+                           git_repository, resource_group, pod_template_labels
+                    FROM aks_routes
+                    WHERE subscription_id=?
+                    LIMIT 100
+                    """,
+                    (sub_id,),
+                ).fetchall()
         except Exception:
             pass  # Non-critical
 
@@ -18267,6 +18574,7 @@ def api_subscription_diagram(sub_id: str):
             apim_backend_urls=apim_backend_urls,
             apim_open_api_count=apim_open_api_count,
             appgw_routes=appgw_routes,
+            aks_route_rows=aks_route_rows,
             appgw_waf_policy_rows=appgw_waf_policy_rows,
             firewall_policy_rows=firewall_policy_rows,
             ilb_ase_names=ilb_ase_names,
@@ -19138,7 +19446,7 @@ def _build_subscription_overlay_views(rows: list, plan_links: list | None = None
     )
 
 
-def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_backend_urls: set[str] | None = None, apim_open_api_count: int = 0, appgw_routes: list | None = None, appgw_waf_policy_rows: list | None = None, firewall_policy_rows: list | None = None, ilb_ase_names: set[str] | None = None, public_appgw_names: set[str] | None = None) -> dict:
+def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_backend_urls: set[str] | None = None, apim_open_api_count: int = 0, appgw_routes: list | None = None, aks_route_rows: list | None = None, appgw_waf_policy_rows: list | None = None, firewall_policy_rows: list | None = None, ilb_ase_names: set[str] | None = None, public_appgw_names: set[str] | None = None) -> dict:
     """Build a high-level ingress flow diagram showing entry points and key services.
     
     Simplifies the architecture to: HTTP → WAF → App Gateway → APIM → Backend services
@@ -19520,6 +19828,84 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
 
     backends = _shared_subscription_apply_plan_hierarchy(backends, plan_links)
 
+    aks_ingress_entries: list[dict] = []
+    if aks_route_rows:
+        aks_clusters = [
+            item for item in backends
+            if "managedcluster" in (item.get("arm_type") or item.get("type") or "").lower()
+        ]
+        cluster_by_key = {
+            (str(item.get("rg") or "").strip().lower(), str(item.get("name") or "").strip().lower()): item
+            for item in aks_clusters
+        }
+        seen_aks_ingress: set[str] = set()
+        for row in aks_route_rows:
+            try:
+                cluster_name, namespace, ingress_name, host, path, service_name, service_port, deployment_name, git_repository, resource_group, pod_template_labels = row[:11]
+            except Exception:
+                continue
+            cluster_key = (str(resource_group or "").strip().lower(), str(cluster_name or "").strip().lower())
+            cluster_item = cluster_by_key.get(cluster_key) or next(
+                (
+                    item
+                    for item in aks_clusters
+                    if str(item.get("name") or "").strip().lower() == str(cluster_name or "").strip().lower()
+                ),
+                None,
+            )
+            if not cluster_item:
+                continue
+            host_str = str(host or "").strip()
+            path_str = str(path or "").strip() or "/*"
+            ingress_label = str(ingress_name or host_str or f"{cluster_name}-ingress").strip()
+            synthetic_key = f"{cluster_key[0]}::{cluster_key[1]}::{str(namespace or '').strip().lower()}::{ingress_label.lower()}::{host_str.lower()}::{path_str.lower()}"
+            if synthetic_key in seen_aks_ingress:
+                continue
+            seen_aks_ingress.add(synthetic_key)
+
+            route_title = ingress_label
+            if host_str:
+                route_title = f"{ingress_label}<br/>{host_str}"
+            if path_str and path_str not in ("/*", "*"):
+                route_title = f"{route_title}<br/>{path_str}"
+
+            aks_ingress_entries.append({
+                "name": synthetic_key,
+                "label": route_title,
+                "count": 1,
+                "type": "Kubernetes Ingress",
+                "arm_type": "microsoft.kubernetes/ingresses",
+                "is_group": False,
+                "resources": [{"rg": str(resource_group or cluster_item.get("rg") or "").strip(), "name": str(cluster_name or cluster_item.get("name") or "").strip()}],
+                "fqdns": [host_str] if host_str else [],
+                "public": bool(host_str),
+                "rg": str(resource_group or cluster_item.get("rg") or "").strip(),
+                "has_waf": False,
+                "is_restricted": False,
+                "waf_mode": None,
+                "listeners": None,
+                "routing_targets": [{
+                    "target_resource_id": str(cluster_item.get("id") or "").strip(),
+                    "target": str(cluster_name or cluster_item.get("name") or "").strip(),
+                    "name": str(cluster_name or cluster_item.get("name") or "").strip(),
+                }],
+                "parent_bastion_key": None,
+                "vnet_name": cluster_item.get("vnet_name"),
+                "vnet_resource_group": cluster_item.get("vnet_resource_group"),
+                "subnet_name": cluster_item.get("subnet_name"),
+                "subnet_id": cluster_item.get("subnet_id"),
+                "raw_json": None,
+                "source_namespace": namespace,
+                "source_service": service_name,
+                "source_service_port": service_port,
+                "source_deployment": deployment_name,
+                "source_repo": git_repository,
+                "source_labels": pod_template_labels,
+            })
+
+        if aks_ingress_entries:
+            entry_points.extend(aks_ingress_entries)
+
     # ------------------------------------------------------------------
     # P0: DNS Reachability Gate — override item["public"] for every tier
     # based on live DNS resolution.  No resource type is auto-trusted.
@@ -19698,6 +20084,9 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 for key in ("vnet_name", "vnet_resource_group", "subnet_name", "subnet_id"):
                     if not candidate.get(key) and item.get(key):
                         candidate[key] = item.get(key)
+                if "apimanagement" in type_key:
+                    candidate["collapse_into_apim"] = True
+                    candidate["parent_apim_key"] = item_key
         if linked:
             item["public_ips"] = linked
         # A resource explicitly linked to one or more Public IP resources is internet-exposed.
@@ -19758,6 +20147,15 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         from collections import defaultdict
         grouped = defaultdict(list)
 
+        def _route_label(item: dict) -> str:
+            if str(item.get("type") or item.get("arm_type") or "").lower() == "kubernetes ingress":
+                return str(item.get("label") or item.get("name") or "Ingress")
+            base = f"{_short_name(item['name'])}{_node_security_suffix(item)}"
+            fqdn = str(item.get("fqdn") or "").strip()
+            if (item.get("routing_targets") or fqdn) and fqdn and "<br/>" not in base:
+                return f"{base}<br/>{fqdn}"
+            return base
+
         for item in entry_items:
             type_key = (item.get("type") or "").lower()
 
@@ -19784,14 +20182,15 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         for category, items in sorted(grouped.items()):
             if len(items) <= NAME_THRESHOLD:
                 for item in items:
+                    label = (
+                        f"Bastion ({item.get('rg') or 'rg'})<br/>{_short_name(item['name'])}"
+                        if "bastionhost" in (item.get("type") or "").lower()
+                        else _route_label(item)
+                    )
                     result.append({
                         **item,
                         "name": item["name"],
-                        "label": (
-                            f"Bastion ({item.get('rg') or 'rg'})<br/>{_short_name(item['name'])}"
-                            if "bastionhost" in (item.get("type") or "").lower()
-                            else f"{_short_name(item['name'])}{_node_security_suffix(item)}"
-                        ),
+                        "label": label,
                         "count": 1,
                         "type": category,
                         "arm_type": item["type"],
@@ -19833,7 +20232,10 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     "label": (
                         f"Bastion ({items[0].get('rg') or 'rg'})"
                         if "bastionhost" in (items[0].get("type") or "").lower()
-                        else f"{category}{_node_security_suffix({'restriction_label': 'IP restricted' if any(i.get('is_restricted') for i in items) else None, 'auth_summary': next((i.get('auth_summary') for i in items if i.get('auth_summary')), None)})}"
+                        else (
+                            f"{category}{_node_security_suffix({'restriction_label': 'IP restricted' if any(i.get('is_restricted') for i in items) else None, 'auth_summary': next((i.get('auth_summary') for i in items if i.get('auth_summary')), None)})}"
+                            + (f"<br/>{next((str(i.get('fqdn') or '').strip() for i in items if i.get('routing_targets') and str(i.get('fqdn') or '').strip()), '')}" if any(i.get("routing_targets") for i in items) else "")
+                        )
                     ),
                     "count": len(items),
                     "type": category,
@@ -19877,6 +20279,11 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             "is_restricted": False,
             "public_ips": [],
         })
+
+        def _apim_label(base_label: str, fqdns: list[str]) -> str:
+            if fqdns:
+                return f"{base_label}<br/>{fqdns[0]}"
+            return base_label
 
         def _merge_public_ips(existing: list[dict], incoming: list[dict]) -> list[dict]:
             merged: list[dict] = []
@@ -19925,9 +20332,12 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 if (i.get("public") if info["access"] == "Public" else not i.get("public"))
                 and _friendly_type(i.get("type")) == info["type"]
             ]
+            group_label = info["type"]
+            if info["type"] == "APIM":
+                group_label = _apim_label(group_label, list(info["fqdns"]))
             result.append({
                 "name": unique_name,
-                "label": info["type"],
+                "label": group_label,
                 "count": count,
                 "type": info["type"],
                 "arm_type": info["arm_type"],
@@ -20024,6 +20434,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 for item in items:
                     item_fqdns = list(item.get("fqdns") or ([item["fqdn"]] if item.get("fqdn") else []))
                     label = _short_name(item["name"])
+                    if category == "APIM":
+                        label = _apim_label(label, item_fqdns)
                     hosted_site_count = item.get("hosted_site_count")
                     if hosted_site_count:
                         label = f"{label} ({hosted_site_count} app{'s' if hosted_site_count != 1 else ''})"
@@ -20056,9 +20468,12 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     for fqdn_value in item_fqdns:
                         if fqdn_value and fqdn_value not in merged_fqdns:
                             merged_fqdns.append(fqdn_value)
+                group_label = category
+                if category == "APIM":
+                    group_label = _apim_label(group_label, merged_fqdns)
                 result.append({
                     "name": f"{category}_group",
-                    "label": category,
+                    "label": group_label,
                     "count": len(items),
                     "type": category,
                     "arm_type": "Microsoft.Web/functionApps" if category == "Function App" else items[0]["type"],
@@ -20260,11 +20675,13 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     node_by_resource: dict[tuple[str, str], str] = {}
     node_by_resource_type: dict[tuple[str, str, str], str] = {}
     node_by_fqdn: dict[str, str] = {}
+    node_by_fqdn_normalized: dict[str, str] = {}
     # Name-only fallback: keyed by just the resource name, used when the
     # target_resource_id points to a resource type not in provisioned_assets
     # (e.g. Traffic Manager endpoints that reference a Public IP whose App Gateway
     # shares the same name but the Public IP itself was never harvested).
     node_by_name: dict[str, str] = {}
+    node_by_name_normalized: dict[str, str] = {}
     for item in shown_entry + shown_api + shown_backend + shown_data:
         node_id = _get_node_id(item)
         for resource in _iter_item_resources(item):
@@ -20277,10 +20694,16 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     node_by_resource_type.setdefault((rg_key, name_key, type_key), node_id)
             if name_key:
                 node_by_name.setdefault(name_key, node_id)
+                name_norm = _routing_lookup_key(name_key)
+                if name_norm:
+                    node_by_name_normalized.setdefault(name_norm, node_id)
         for fqdn_value in item.get("fqdns") or []:
             fqdn_key = str(fqdn_value or "").strip().lower()
             if fqdn_key:
                 node_by_fqdn.setdefault(fqdn_key, node_id)
+                fqdn_norm = _routing_lookup_key(fqdn_key)
+                if fqdn_norm:
+                    node_by_fqdn_normalized.setdefault(fqdn_norm, node_id)
 
     def _resolve_routing_target(target: dict) -> str | None:
         return _resolve_routing_target_node_id(
@@ -20288,7 +20711,9 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             node_by_resource=node_by_resource,
             node_by_resource_type=node_by_resource_type,
             node_by_fqdn=node_by_fqdn,
+            node_by_fqdn_normalized=node_by_fqdn_normalized,
             node_by_name=node_by_name,
+            node_by_name_normalized=node_by_name_normalized,
         )
 
     entry_route_targets: dict[str, list[str]] = {}
@@ -20457,21 +20882,20 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         lines.append(_node_line(node_id, label, arm_type))
         rendered_node_ids.add(node_id)
         public_ips = item.get("public_ips") or []
-        for pip in public_ips:
-            if not isinstance(pip, dict):
-                continue
-            pip_node_id = _get_node_id(pip)
-            if not pip_node_id:
-                continue
-            # Preserve the underlying Public IP as a distinct node when APIM
-            # exposes it, instead of collapsing it into the APIM label.
-            pip_label = str(pip.get("label") or pip.get("name") or "Public IP").strip() or "Public IP"
-            if "publicip" not in (pip.get("type") or "").lower():
-                pip_label = f"Public IP: {pip_label}"
-            if pip_node_id not in all_diagram_node_ids and pip_node_id not in rendered_node_ids:
-                lines.append(_node_line(pip_node_id, pip_label, "microsoft.network/publicipaddresses"))
-                rendered_node_ids.add(pip_node_id)
-            api_public_ip_edges.append((node_id, pip_node_id))
+        if "apimanagement" not in arm_type.lower():
+            for pip in public_ips:
+                if not isinstance(pip, dict):
+                    continue
+                pip_node_id = _get_node_id(pip)
+                if not pip_node_id:
+                    continue
+                pip_label = str(pip.get("label") or pip.get("name") or "Public IP").strip() or "Public IP"
+                if "publicip" not in (pip.get("type") or "").lower():
+                    pip_label = f"Public IP: {pip_label}"
+                if pip_node_id not in all_diagram_node_ids and pip_node_id not in rendered_node_ids:
+                    lines.append(_node_line(pip_node_id, pip_label, "microsoft.network/publicipaddresses"))
+                    rendered_node_ids.add(pip_node_id)
+                api_public_ip_edges.append((node_id, pip_node_id))
 
     def _render_backend_item(item: dict) -> None:
         node_id = _get_node_id(item)
@@ -20636,7 +21060,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     standalone_data_items: list[dict] = []
 
     def _bucket_network_item(item: dict, standalone_bucket: list[dict]) -> None:
-        if item.get("parent_bastion_key") or item.get("parent_lb_key"):
+        if item.get("parent_bastion_key") or item.get("parent_lb_key") or item.get("collapse_into_apim"):
             return
         group_key = _network_group_key(item)
         if group_key is None:
@@ -20940,6 +21364,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             return "Network Firewall 🔒", "#f97316"
         if "trafficmanager" in arm_t:
             return "DNS routing", "#f97316"
+        if "ingress" in arm_t or "kubernetes" in arm_t:
+            return "Ingress", "#f97316"
         if "bastionhost" in arm_t:
             return "Bastion", "#f97316"
 
@@ -21434,14 +21860,27 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     continue  # APIM endpoint — covered separately
                 
                 # Resolve backend node ID
-                _be_nid = node_by_fqdn.get(_fqdn_s)
+                _be_nid = _resolve_routing_target_node_id(
+                    {"target": _fqdn_s, "fqdn": _fqdn_s, "name": _fqdn_s.split(".", 1)[0]},
+                    node_by_resource=node_by_resource,
+                    node_by_resource_type=node_by_resource_type,
+                    node_by_fqdn=node_by_fqdn,
+                    node_by_fqdn_normalized=node_by_fqdn_normalized,
+                    node_by_name=node_by_name,
+                    node_by_name_normalized=node_by_name_normalized,
+                )
                 if not _be_nid:
-                    _ase_match = _re_appgw.search(r'\.([^.]+)\.appserviceenvironment\.net$', _fqdn_s)
-                    if _ase_match:
-                        _be_nid = node_by_name.get(_ase_match.group(1))
-                if not _be_nid:
-                    _prefix = _fqdn_s.split(".")[0]
-                    _be_nid = node_by_name.get(_prefix)
+                    _ase_prefix = _fqdn_s.removesuffix(".appserviceenvironment.net")
+                    if _ase_prefix != _fqdn_s:
+                        _be_nid = _resolve_routing_target_node_id(
+                            {"target": _ase_prefix, "name": _ase_prefix.split(".", 1)[0]},
+                            node_by_resource=node_by_resource,
+                            node_by_resource_type=node_by_resource_type,
+                            node_by_fqdn=node_by_fqdn,
+                            node_by_fqdn_normalized=node_by_fqdn_normalized,
+                            node_by_name=node_by_name,
+                            node_by_name_normalized=node_by_name_normalized,
+                        )
                 
                 if _be_nid and _be_nid != _gw_nid:
                     # Aggregate by backend target only

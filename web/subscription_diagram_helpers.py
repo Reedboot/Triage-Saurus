@@ -137,19 +137,165 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
             return None
         return parsed if isinstance(parsed, (dict, list)) else None
 
+    def _extract_subnet_ids(parsed_raw_json: dict) -> list[str]:
+        def _add(values: list[str], candidate: object) -> None:
+            sid = str(candidate or "").strip()
+            if sid and "/subnets/" in sid and sid not in values:
+                values.append(sid)
+
+        found: list[str] = []
+        if not isinstance(parsed_raw_json, dict):
+            return found
+
+        candidates = [parsed_raw_json]
+        props = parsed_raw_json.get("properties")
+        if isinstance(props, dict):
+            candidates.append(props)
+
+        for obj in candidates:
+            if not isinstance(obj, dict):
+                continue
+
+            _add(found, obj.get("subnetId"))
+            _add(found, obj.get("subnet_id"))
+            _add(found, obj.get("virtualNetworkSubnetId"))
+            _add(found, obj.get("virtual_network_subnet_id"))
+
+            subnet_obj = obj.get("subnet")
+            if isinstance(subnet_obj, dict):
+                _add(found, subnet_obj.get("id"))
+
+            site_cfg = obj.get("siteConfig")
+            if isinstance(site_cfg, dict):
+                _add(found, site_cfg.get("virtualNetworkSubnetId"))
+                _add(found, site_cfg.get("virtual_network_subnet_id"))
+                _add(found, site_cfg.get("subnetId"))
+                _add(found, site_cfg.get("subnet_id"))
+                site_subnet = site_cfg.get("subnet")
+                if isinstance(site_subnet, dict):
+                    _add(found, site_subnet.get("id"))
+
+            vnet_cfg = obj.get("virtualNetworkConfiguration")
+            if isinstance(vnet_cfg, dict):
+                _add(found, vnet_cfg.get("subnetResourceId"))
+                _add(found, vnet_cfg.get("subnetResourceID"))
+                subnet_obj = vnet_cfg.get("subnet")
+                if isinstance(subnet_obj, dict):
+                    _add(found, subnet_obj.get("id"))
+
+            net_profile = obj.get("networkProfile")
+            if isinstance(net_profile, dict):
+                _add(found, net_profile.get("subnetId"))
+                _add(found, net_profile.get("subnet_id"))
+
+            vm_profile = obj.get("virtualMachineProfile")
+            if isinstance(vm_profile, dict):
+                vm_net_profile = vm_profile.get("networkProfile")
+                if isinstance(vm_net_profile, dict):
+                    for nic_cfg in vm_net_profile.get("networkInterfaceConfigurations") or []:
+                        if not isinstance(nic_cfg, dict):
+                            continue
+                        nic_props = nic_cfg.get("properties") or {}
+                        ip_configs = list(nic_cfg.get("ipConfigurations") or [])
+                        if isinstance(nic_props, dict):
+                            ip_configs.extend(nic_props.get("ipConfigurations") or [])
+                        for ip_cfg in ip_configs:
+                            if not isinstance(ip_cfg, dict):
+                                continue
+                            sub = ip_cfg.get("subnet")
+                            if isinstance(sub, dict):
+                                _add(found, sub.get("id"))
+                            ip_props = ip_cfg.get("properties") or {}
+                            if isinstance(ip_props, dict):
+                                sub = ip_props.get("subnet")
+                                if isinstance(sub, dict):
+                                    _add(found, sub.get("id"))
+
+            for pool in obj.get("agentPoolProfiles") or []:
+                if not isinstance(pool, dict):
+                    continue
+                _add(found, pool.get("vnetSubnetID"))
+                _add(found, pool.get("vnetSubnetId"))
+                _add(found, pool.get("subnetId"))
+                _add(found, pool.get("subnet_id"))
+
+            for ip_cfg in obj.get("ipConfigurations") or []:
+                if not isinstance(ip_cfg, dict):
+                    continue
+                sub = ip_cfg.get("subnet")
+                if isinstance(sub, dict):
+                    _add(found, sub.get("id"))
+                ip_props = ip_cfg.get("properties") or {}
+                if isinstance(ip_props, dict):
+                    sub = ip_props.get("subnet")
+                    if isinstance(sub, dict):
+                        _add(found, sub.get("id"))
+
+            for gw_cfg in obj.get("gatewayIPConfigurations") or []:
+                if not isinstance(gw_cfg, dict):
+                    continue
+                sub = gw_cfg.get("subnet")
+                if isinstance(sub, dict):
+                    _add(found, sub.get("id"))
+                gw_props = gw_cfg.get("properties") or {}
+                if isinstance(gw_props, dict):
+                    sub = gw_props.get("subnet")
+                    if isinstance(sub, dict):
+                        _add(found, sub.get("id"))
+
+            for fe_cfg in obj.get("frontendIPConfigurations") or []:
+                if not isinstance(fe_cfg, dict):
+                    continue
+                sub = fe_cfg.get("subnet")
+                if isinstance(sub, dict):
+                    _add(found, sub.get("id"))
+                fe_props = fe_cfg.get("properties") or {}
+                if isinstance(fe_props, dict):
+                    sub = fe_props.get("subnet")
+                    if isinstance(sub, dict):
+                        _add(found, sub.get("id"))
+
+        return found
+
+    def _extract_public_ip_ids(parsed_raw_json: dict) -> list[str]:
+        found: list[str] = []
+        if not isinstance(parsed_raw_json, dict):
+            return found
+
+        def _add(candidate: object) -> None:
+            pid = str(candidate or "").strip()
+            if pid and "/publicipaddresses/" in pid.lower() and pid not in found:
+                found.append(pid)
+
+        def _visit(value: object) -> None:
+            if isinstance(value, dict):
+                for key, inner in value.items():
+                    key_l = str(key).lower()
+                    if key_l in {"id", "resourceid"} and isinstance(inner, str):
+                        _add(inner)
+                    if key_l in {"publicipaddress", "publicipaddressid", "publicipaddress_id", "publicipaddressresourceid"}:
+                        if isinstance(inner, str):
+                            _add(inner)
+                        elif isinstance(inner, dict):
+                            _add(inner.get("id"))
+                    _visit(inner)
+            elif isinstance(value, list):
+                for item in value:
+                    _visit(item)
+            elif isinstance(value, str):
+                _add(value)
+
+        _visit(parsed_raw_json)
+
+        return found
+
     def _extract_subnet_id(parsed_raw_json: dict) -> str | None:
-        props = parsed_raw_json.get("properties") or {}
-        for candidate in (
-            props.get("subnetId"),
-            props.get("virtualNetworkSubnetId"),
-            (props.get("subnet") or {}).get("id"),
-            (props.get("hostingEnvironmentProfile") or {}).get("subnetResourceId"),
-        ):
-            if candidate:
-                return str(candidate)
-        return None
+        subnet_ids = _extract_subnet_ids(parsed_raw_json)
+        return subnet_ids[0] if subnet_ids else None
 
     assets: list[dict] = []
+    public_ip_assets_by_id: dict[str, dict] = {}
+    public_ip_assets_by_name_rg: dict[tuple[str, str], list[dict]] = {}
     for row in rows:
         name, rtype, rg, fqdn, is_public, sku = row[:6]
         asset_id = row[6] if len(row) > 6 else None
@@ -192,8 +338,25 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
             "auth_methods": auth_methods,
         }
         if isinstance(parsed_raw, dict):
+            public_ip_resource_ids = _extract_public_ip_ids(parsed_raw)
+            if public_ip_resource_ids:
+                asset["public_ip_resource_ids"] = public_ip_resource_ids
             props = parsed_raw.get("properties")
             if isinstance(props, dict):
+                for candidate in (
+                    props.get("publicIpAddress"),
+                    props.get("ipAddress"),
+                ):
+                    if isinstance(candidate, str) and candidate.strip():
+                        asset["public_ip"] = candidate.strip()
+                        asset["public_ips"] = [candidate.strip()]
+                        break
+                    if isinstance(candidate, dict):
+                        ip_addr = candidate.get("ipAddress") or candidate.get("address")
+                        if isinstance(ip_addr, str) and ip_addr.strip():
+                            asset["public_ip"] = ip_addr.strip()
+                            asset["public_ips"] = [ip_addr.strip()]
+                            break
                 for candidate in (
                     props.get("publicIpAddress"),
                     props.get("ipAddress"),
@@ -239,6 +402,17 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
                     asset["parent_resource_group"] = rg or "default"
                     kind_lc = str((parsed_raw or {}).get("kind") or "").lower()
                     asset["parent_type_label"] = "Function App" if "functionapp" in kind_lc or "function app" in kind_lc else "App Service"
+                if asset.get("subnet_id") and not asset.get("subnet_name"):
+                    asset["subnet_name"] = asset["subnet_id"].split("/subnets/")[-1] if "/subnets/" in str(asset["subnet_id"]) else None
+                if asset.get("subnet_id") and not asset.get("vnet_name"):
+                    parts = str(asset["subnet_id"]).split("/virtualNetworks/")
+                    if len(parts) > 1:
+                        asset["vnet_name"] = parts[1].split("/")[0]
+                        asset["parent_vnet_name"] = asset["vnet_name"]
+                if not asset.get("subnet_id"):
+                    subnet_ids = _extract_subnet_ids(parsed_raw)
+                    if subnet_ids:
+                        asset["subnet_id"] = subnet_ids[0]
                 if asset.get("subnet_id") and not asset.get("subnet_name"):
                     asset["subnet_name"] = asset["subnet_id"].split("/subnets/")[-1] if "/subnets/" in str(asset["subnet_id"]) else None
                 if asset.get("subnet_id") and not asset.get("vnet_name"):
@@ -297,8 +471,59 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
         resolved_fqdn = subscription_primary_fqdn(asset)
         asset["fqdn"] = resolved_fqdn
         asset["fqdns"] = [resolved_fqdn] if resolved_fqdn else []
+        if "publicipaddresses" in (rtype or "").lower():
+            if asset_id:
+                public_ip_assets_by_id[str(asset_id).strip().lower()] = asset
+            name_key = str(name or "").strip().lower()
+            rg_key = str(rg or "").strip().lower()
+            if name_key:
+                public_ip_assets_by_name_rg.setdefault((rg_key, name_key), []).append(asset)
         assets.append(asset)
-    return assets
+
+    linked_public_ip_ids: set[str] = set()
+    for asset in assets:
+        if "apimanagement" not in (asset.get("arm_type") or "").lower():
+            continue
+        linked_assets: list[dict] = []
+        for pip_id in asset.get("public_ip_resource_ids") or []:
+            pip_key = str(pip_id or "").strip().lower()
+            if not pip_key:
+                continue
+            candidate = public_ip_assets_by_id.get(pip_key)
+            if candidate:
+                linked_assets.append(candidate)
+                linked_public_ip_ids.add(pip_key)
+        if not linked_assets:
+            name_key = str(asset.get("name") or "").strip().lower()
+            rg_key = str(asset.get("rg") or "").strip().lower()
+            linked_assets = list(public_ip_assets_by_name_rg.get((rg_key, name_key), []))
+            for candidate in linked_assets:
+                candidate_id = str(candidate.get("id") or "").strip().lower()
+                if candidate_id:
+                    linked_public_ip_ids.add(candidate_id)
+        if linked_assets:
+            linked_ips: list[str] = []
+            seen_ips: set[str] = set()
+            for pip in linked_assets:
+                for ip in pip.get("public_ips") or []:
+                    ip_norm = str(ip or "").strip()
+                    if ip_norm and ip_norm not in seen_ips:
+                        seen_ips.add(ip_norm)
+                        linked_ips.append(ip_norm)
+            if linked_ips:
+                asset["associated_public_ips"] = linked_ips
+                asset["public_ips"] = list(dict.fromkeys([*(asset.get("public_ips") or []), *linked_ips]))
+                if not asset.get("public_ip"):
+                    asset["public_ip"] = linked_ips[0]
+
+    visible_assets: list[dict] = []
+    for asset in assets:
+        if "publicipaddresses" in (asset.get("arm_type") or "").lower():
+            asset_id = str(asset.get("id") or "").strip().lower()
+            if asset_id and asset_id in linked_public_ip_ids:
+                continue
+        visible_assets.append(asset)
+    return visible_assets
 
 
 def subscription_apply_plan_hierarchy(assets: list[dict], plan_links: list | None = None) -> list[dict]:
@@ -917,10 +1142,13 @@ def build_subscription_diagrams_by_rg(
             if node_id in seen_nodes:
                 return
             seen_nodes.add(node_id)
+            # Route-bearing resources should show their DNS target so downstream
+            # backend routing can be correlated in the diagram.
+            show_fqdn = include_fqdn or asset.get("tier") == "api" or bool(asset.get("routing_targets"))
             nodes.append(
                 {
                     "id": node_id,
-                    "label": subscription_asset_label(asset, include_badges=badges, include_fqdn=include_fqdn),
+                    "label": subscription_asset_label(asset, include_badges=badges, include_fqdn=show_fqdn),
                     "arm_type": asset.get("arm_type"),
                     "class_name": subscription_node_class(asset),
                 }

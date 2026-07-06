@@ -1509,6 +1509,7 @@ class TestCloudPageApimNestedDrilldown:
                 "title": "test-apim",
                 "arm_type": "microsoft.apimanagement/service",
                 "resources": [{"rg": "rg-app", "name": "test-apim"}],
+                "public_ips": ["20.30.40.50"],
                 "can_drill": True,
             }
         }
@@ -1652,6 +1653,8 @@ class TestCloudPageApimNestedDrilldown:
         page.locator("#ingress-diagram-div svg g.node-drillable").click()
 
         expect(page.locator("#drilldown-modal")).to_be_visible(timeout=8000)
+        expect(page.locator("#drilldown-modal")).to_contain_text("Public IP")
+        expect(page.locator("#drilldown-modal")).to_contain_text("20.30.40.50")
         expect(page.locator("#drilldown-modal tr[data-row-id='test-apim::orders']")).to_be_visible(timeout=5000)
         expect(page.locator("#drilldown-modal tr[data-row-id='test-apim::orders::get']")).to_be_hidden(timeout=5000)
 
@@ -1690,7 +1693,7 @@ class TestIngressDiagramGeneration:
             )
         ]
 
-    def _call(self, rows=None, plan_links=None, firewall_policy_rows=None, appgw_routes=None, appgw_waf_policy_rows=None):
+    def _call(self, rows=None, plan_links=None, firewall_policy_rows=None, appgw_routes=None, aks_route_rows=None, appgw_waf_policy_rows=None):
         import sys
         import os
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -1701,6 +1704,7 @@ class TestIngressDiagramGeneration:
             plan_links=plan_links,
             firewall_policy_rows=firewall_policy_rows,
             appgw_routes=appgw_routes,
+            aks_route_rows=aks_route_rows,
             appgw_waf_policy_rows=appgw_waf_policy_rows,
         )
 
@@ -2056,8 +2060,54 @@ class TestIngressDiagramGeneration:
         mermaid = result.get("mermaid", "")
         assert 'API "Product"' in mermaid, mermaid
 
-    def test_apim_public_ip_is_rendered_as_linked_node(self):
-        """APIM-linked Public IPs should stay visible as separate nodes."""
+    def test_aks_ingress_routes_render_as_entry_points(self):
+        """AKS ingress routes should appear as public entry points with a hop to the cluster."""
+        import json
+
+        rows = [
+            (
+                "aks-prod",
+                "Microsoft.ContainerService/managedClusters",
+                "rg-aks",
+                "",
+                0,
+                "Standard",
+                "aks-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({}),
+                None,
+                None,
+            ),
+        ]
+        aks_route_rows = [
+            (
+                "aks-prod",
+                "default",
+                "orders-ingress",
+                "aks.example.com",
+                "/*",
+                "orders-api",
+                80,
+                "orders-api",
+                "https://github.com/org/repo",
+                "rg-aks",
+                json.dumps({"app.kubernetes.io/component": "api"}),
+            )
+        ]
+
+        result = self._call(rows=rows, aks_route_rows=aks_route_rows)
+        mermaid = result.get("mermaid", "")
+        assert "orders-ingress" in mermaid, mermaid
+        assert "aks.example.com" in mermaid, mermaid
+        assert "Ingress" in mermaid, mermaid
+        assert "aks-prod" in mermaid, mermaid
+
+    def test_apim_public_ip_is_rendered_on_apim_details(self):
+        """APIM-linked Public IPs should appear on the APIM drilldown, not as a separate node."""
         import json
 
         public_ip_id = "/subscriptions/sub/resourceGroups/rg-api/providers/Microsoft.Network/publicIPAddresses/apim-public"
@@ -2110,8 +2160,8 @@ class TestIngressDiagramGeneration:
 
         result = self._call(rows=rows)
         mermaid = result.get("mermaid", "")
-        assert "grp_APIM_Public --> rg_api_apim_public" in mermaid, mermaid
-        assert 'rg_api_apim_public["' in mermaid, mermaid
+        assert "grp_APIM_Public --> rg_api_apim_public" not in mermaid, mermaid
+        assert 'rg_api_apim_public["' not in mermaid, mermaid
 
     def test_apim_with_vnet_and_subnet_is_nested_in_network_boundary(self):
         """APIM nodes with subnet metadata should render inside the network subgraph."""
@@ -2119,10 +2169,10 @@ class TestIngressDiagramGeneration:
 
         rows = [
             (
-                "cbuk-core-prodgreen-api-uksouth",
+                "example-api-uksouth",
                 "Microsoft.ApiManagement/service",
                 "rg-api",
-                "cbuk-core-prodgreen-api-uksouth.azure-api.net",
+                "example-api-uksouth.azure-api.net",
                 1,
                 "Developer",
                 "apim-id",
@@ -2148,6 +2198,7 @@ class TestIngressDiagramGeneration:
         mermaid = result.get("mermaid", "")
         assert "Network: prod-vnet" in mermaid, mermaid
         assert "Subnet: api-subnet" in mermaid, mermaid
+        assert "example-api-uksouth.azure-api.net" in mermaid, mermaid
         assert mermaid.index("Network: prod-vnet") < mermaid.index("Subnet: api-subnet") < mermaid.index("grp_APIM_Public"), mermaid
 
     def test_network_attached_services_render_inside_vnet_and_subnet_groups(self):
@@ -3252,6 +3303,46 @@ class TestSubscriptionResourceGroupDiagrams:
         path_text = " ".join(str(p.get("path") or "") + " " + str(p.get("title") or "") for p in attack_paths).lower()
         assert "internet" in path_text or "secret" in path_text or "backend" in path_text, path_text
 
+    def test_rg_connectivity_shows_fqdn_for_routed_gateway(self):
+        import sys
+        import os
+
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        from web.subscription_diagram_helpers import build_subscription_diagrams_by_rg
+
+        rows = [
+            (
+                "appgw-one",
+                "Microsoft.Network/applicationGateways",
+                "rg-net",
+                "appgw-one.example.com",
+                1,
+                "WAF_v2",
+                "gw-id",
+                1,
+                "HTTPS:443",
+                0,
+                "WAF_v2",
+                '[{"target":"api.example.com"}]',
+                "{}",
+                None,
+            ),
+        ]
+
+        diagrams = build_subscription_diagrams_by_rg(
+            "Test Subscription",
+            "production",
+            rows,
+            sanitise_node_id=lambda s: s.replace("/", "_").replace(" ", "_"),
+            friendly_type=lambda arm_type: "App Gateway" if "applicationgateway" in (arm_type or "").lower() else arm_type,
+            get_icon_path=lambda _resource_type: None,
+            normalize_attack_paths=lambda raw_paths, reviewer=None: raw_paths,
+        )
+
+        mermaid = diagrams[0]["views"]["connectivity"]["mermaid"]
+        assert "appgw-one.example.com" in mermaid, mermaid
+
 
 class TestCosmosDbFqdnResolution:
     """Regression tests for Cosmos DB endpoint resolution in cloud views."""
@@ -3490,16 +3581,16 @@ class TestCosmosDbFqdnResolution:
                 """,
                 [
                     (
-                        "/subscriptions/sub-1/resourceGroups/rg-redis/providers/Microsoft.Cache/Redis/cbuk-core-prodgreen-fx-jpm-connector",
+                        "/subscriptions/sub-1/resourceGroups/rg-redis/providers/Microsoft.Cache/Redis/example-service-connector",
                         "sub-1",
                         "rg-redis",
-                        "cbuk-core-prodgreen-fx-jpm-connector",
+                        "example-service-connector",
                         "Microsoft.Cache/Redis",
                         "uksouth",
                         "Standard",
                         None,
                         0,
-                        "cbuk-core-prodgreen-fx-jpm-connector.redis.cache.windows.net",
+                        "example-service-connector.redis.cache.windows.net",
                         None,
                         "{}",
                         None,
@@ -3510,16 +3601,16 @@ class TestCosmosDbFqdnResolution:
                         0,
                     ),
                     (
-                        "/subscriptions/sub-1/resourceGroups/rg-cosmos/providers/Microsoft.DocumentDB/databaseAccounts/cbuk-core-prodgreen-fx-jpm-connector",
+                        "/subscriptions/sub-1/resourceGroups/rg-cosmos/providers/Microsoft.DocumentDB/databaseAccounts/example-service-connector",
                         "sub-1",
                         "rg-cosmos",
-                        "cbuk-core-prodgreen-fx-jpm-connector",
+                        "example-service-connector",
                         "Microsoft.DocumentDB/databaseAccounts",
                         "uksouth",
                         None,
                         None,
                         0,
-                        "cbuk-core-prodgreen-fx-jpm-connector.documents.azure.com:443",
+                        "example-service-connector.documents.azure.com:443",
                         None,
                         "{}",
                         None,
@@ -3530,16 +3621,16 @@ class TestCosmosDbFqdnResolution:
                         1,
                     ),
                     (
-                        "/subscriptions/sub-1/resourceGroups/rg-redis/providers/Microsoft.Network/privateEndpoints/cbuk-core-prodgreen-fx-jpm-connector",
+                        "/subscriptions/sub-1/resourceGroups/rg-redis/providers/Microsoft.Network/privateEndpoints/example-service-connector",
                         "sub-1",
                         "rg-redis",
-                        "cbuk-core-prodgreen-fx-jpm-connector",
+                        "example-service-connector",
                         "Microsoft.Network/privateEndpoints",
                         "uksouth",
                         None,
                         None,
                         0,
-                        "cbuk-core-prodgreen-fx-jpm-connector.redis.cache.windows.net",
+                        "example-service-connector.redis.cache.windows.net",
                         None,
                         "{}",
                         None,
@@ -3556,7 +3647,7 @@ class TestCosmosDbFqdnResolution:
                 conn,
                 "sub-1",
                 "Microsoft.Cache/Redis",
-                [{"rg": "rg-redis", "name": "cbuk-core-prodgreen-fx-jpm-connector"}],
+                [{"rg": "rg-redis", "name": "example-service-connector"}],
             )
         finally:
             conn.close()
@@ -4119,7 +4210,7 @@ class TestCloudPosture:
                         "Microsoft.ApiManagement/service",
                         "uksouth",
                         "Developer",
-                        "cbuk-core-prodgreen-api-uksouth.azure-api.net",
+                        "example-api-uksouth.azure-api.net",
                         1,
                         "active",
                         None,
@@ -4142,7 +4233,7 @@ class TestCloudPosture:
                     "appgw-one::route-1",
                     "sub-1",
                     "appgw-one",
-                    '["cbuk-core-prodgreen-api-uksouth.azure-api.net"]',
+                    '["example-api-uksouth.azure-api.net"]',
                     "cop-auth-server-phase2-apim",
                     "listener-one",
                     "/*",
@@ -4158,7 +4249,165 @@ class TestCloudPosture:
             conn.close()
 
         edges = payload["edges"]
+        node_labels = [str(node.get("data", {}).get("label", "")) for node in payload.get("nodes", [])]
         assert any(e["source"] == gw_id and e["target"] == apim_id for e in edges), edges
+        assert any("example-api-uksouth.azure-api.net" in label for label in node_labels), node_labels
+
+    def test_subscription_architecture_payload_joins_appgw_backend_pool_to_ase_sites(self):
+        import json
+        import sqlite3
+
+        from web.app import _build_subscription_architecture_payload
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE subscriptions (
+                    id TEXT PRIMARY KEY,
+                    display_name TEXT,
+                    environment TEXT,
+                    state TEXT,
+                    last_synced TEXT
+                );
+                CREATE TABLE provisioned_assets (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    resource_group TEXT,
+                    name TEXT,
+                    type TEXT,
+                    location TEXT,
+                    sku TEXT,
+                    fqdn TEXT,
+                    is_public INTEGER DEFAULT 0,
+                    status TEXT,
+                    pipeline_tag TEXT,
+                    first_detected TEXT,
+                    last_synced TEXT,
+                    raw_json TEXT,
+                    is_restricted INTEGER DEFAULT 0,
+                    waf_mode TEXT
+                );
+                CREATE TABLE appgw_routing_rules (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    gateway_name TEXT,
+                    backend_fqdns TEXT,
+                    backend_pool_name TEXT,
+                    listener_name TEXT,
+                    url_path TEXT,
+                    protocol TEXT,
+                    waf_policy_name TEXT,
+                    resource_group TEXT,
+                    hostname TEXT
+                );
+                """
+            )
+            conn.execute(
+                "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+                ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+            )
+            gw_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/appgw-one"
+            tn_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/transactionnotifications"
+            portal_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/institution-portal"
+            conn.executemany(
+                """
+                INSERT INTO provisioned_assets (
+                    id, subscription_id, resource_group, name, type, location, sku,
+                    fqdn, is_public, status, pipeline_tag, first_detected, last_synced,
+                    raw_json, is_restricted, waf_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        gw_id,
+                        "sub-1",
+                        "rg-net",
+                        "appgw-one",
+                        "Microsoft.Network/applicationGateways",
+                        "uksouth",
+                        "WAF_v2",
+                        "appgw-one.example.com",
+                        1,
+                        "active",
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        json.dumps({}),
+                        0,
+                        "WAF_v2",
+                    ),
+                    (
+                        tn_id,
+                        "sub-1",
+                        "rg-app",
+                        "transactionnotifications",
+                        "Microsoft.Web/sites",
+                        "uksouth",
+                        "P1v3",
+                        "example-transaction-notifications-f-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                        0,
+                        "active",
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        json.dumps({"kind": "app"}),
+                        0,
+                        None,
+                    ),
+                    (
+                        portal_id,
+                        "sub-1",
+                        "rg-app",
+                        "institution-portal",
+                        "Microsoft.Web/sites",
+                        "uksouth",
+                        "P1v3",
+                        "example-institution-portal-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                        0,
+                        "active",
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        json.dumps({"kind": "app"}),
+                        0,
+                        None,
+                    ),
+                ],
+            )
+            conn.execute(
+                """
+                INSERT INTO appgw_routing_rules (
+                    id, subscription_id, gateway_name, backend_fqdns, backend_pool_name,
+                    listener_name, url_path, protocol, waf_policy_name, resource_group, hostname
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "appgw-one::route-ase",
+                    "sub-1",
+                    "appgw-one",
+                    json.dumps([
+                        "example-transaction-notifications-f-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                        "example-institution-portal-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                    ]),
+                    "ase-backend-pool",
+                    "listener-one",
+                    "/*",
+                    "HTTPS",
+                    None,
+                    "rg-net",
+                    "appgw-one.example.com",
+                ),
+            )
+
+            payload = _build_subscription_architecture_payload(conn, "sub-1", view_mode="full")
+        finally:
+            conn.close()
+
+        edges = payload["edges"]
+        assert any(e["source"] == gw_id and e["target"] == tn_id for e in edges), edges
+        assert any(e["source"] == gw_id and e["target"] == portal_id for e in edges), edges
 
     def test_cloud_architecture_page_labels_tabs_mermaid_and_react_flow(self, monkeypatch):
         import os
@@ -6110,6 +6359,131 @@ class TestCloudPosture:
         assert site_ase["subnet"] == "app-subnet"
         assert site_vnet["vnet"] == "rg-vnet"
         assert site_vnet["subnet"] == "app-subnet"
+
+        os.unlink(tmp.name)
+
+    def test_api_cloud_architecture_surfaces_aks_ingress_routes_in_reactflow(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+        import tempfile
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        conn = sqlite3.connect(tmp.name)
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            CREATE TABLE aks_routes (
+                cluster_name TEXT,
+                namespace TEXT,
+                ingress_name TEXT,
+                host TEXT,
+                path TEXT,
+                service_name TEXT,
+                service_port INTEGER,
+                deployment_name TEXT,
+                git_repository TEXT,
+                resource_group TEXT,
+                pod_template_labels TEXT,
+                subscription_id TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+        aks_id = "/subscriptions/sub-1/resourceGroups/rg-k8s/providers/Microsoft.ContainerService/managedClusters/cluster-one"
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                aks_id,
+                "sub-1",
+                "rg-k8s",
+                "cluster-one",
+                "Microsoft.ContainerService/managedClusters",
+                "ukwest",
+                "Standard",
+                None,
+                0,
+                "active",
+                None,
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+                json.dumps({}),
+                0,
+                None,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO aks_routes (
+                cluster_name, namespace, ingress_name, host, path, service_name,
+                service_port, deployment_name, git_repository, resource_group,
+                pod_template_labels, subscription_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "cluster-one",
+                "default",
+                "orders-ingress",
+                "aks.example.com",
+                "/*",
+                "orders-api",
+                80,
+                "orders-api",
+                "https://github.com/org/repo",
+                "rg-k8s",
+                json.dumps({"app.kubernetes.io/component": "api"}),
+                "sub-1",
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/architecture", query_string={"sub": "sub-1", "view": "reactflow"})
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        labels = [str((node.get("data") or {}).get("label", "")) for node in data.get("nodes", [])]
+        assert any("orders-ingress" in label and "aks.example.com" in label for label in labels), labels
+        assert any(edge.get("source", "").startswith("aks-ingress::") and edge.get("target") == aks_id for edge in data.get("edges", [])), data.get("edges", [])
 
         os.unlink(tmp.name)
 
