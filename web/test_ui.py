@@ -2396,10 +2396,58 @@ class TestIngressDiagramGeneration:
             plan_links=[("rg-app", "orders-fn-app", "rg-app", "test-plan")],
         )
         assert result.get("asset_summary", {}).get("backends") == 2, result.get("asset_summary")
-        assert "hosted on" in result.get("mermaid", ""), result.get("mermaid", "")
-        assert "orders-fn-app" in result.get("mermaid", ""), result.get("mermaid", "")
+        assert "1 app" in result.get("mermaid", ""), result.get("mermaid", "")
         titles = {v.get("title") for v in result.get("node_drilldown_map", {}).values()}
-        assert titles == {"test-plan", "orders-fn-app"}, titles
+        assert "test-plan" in titles, titles
+        assert "orders-fn-app" not in titles, titles
+
+    def test_site_hosting_plan_links_handle_nested_properties_plan_id(self):
+        """Hosted sites should still link to plans when the plan id lives under properties."""
+        import json
+        import sqlite3
+
+        from web.app import _build_site_hosting_plan_links
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute(
+                """
+                CREATE TABLE provisioned_assets (
+                    name TEXT,
+                    resource_group TEXT,
+                    raw_json TEXT,
+                    type TEXT,
+                    subscription_id TEXT
+                )
+                """
+            )
+            plan_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/serverfarms/cbuk-core-prodgreen-institution-portal-uksouth"
+            conn.execute(
+                """
+                INSERT INTO provisioned_assets (name, resource_group, raw_json, type, subscription_id)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    "institution-portal",
+                    "rg-app",
+                    json.dumps({"properties": {"serverFarmId": plan_id}}),
+                    "Microsoft.Web/sites",
+                    "sub-1",
+                ),
+            )
+
+            links = _build_site_hosting_plan_links(conn, "sub-1")
+            assert links == [
+                (
+                    "rg-app",
+                    "institution-portal",
+                    "rg-app",
+                    "cbuk-core-prodgreen-institution-portal-uksouth",
+                )
+            ], links
+        finally:
+            conn.close()
 
     def test_function_app_rows_fold_into_app_service_environment(self):
         """App Service Environment rows should also fold hosted apps beneath the parent node."""
@@ -2431,10 +2479,10 @@ class TestIngressDiagramGeneration:
             rows=rows,
             plan_links=[("rg-app", "orders-fn-app", "rg-app", "test-ase")],
         )
-        assert "hosted on" in result.get("mermaid", ""), result.get("mermaid", "")
-        assert "orders-fn-app" in result.get("mermaid", ""), result.get("mermaid", "")
+        assert "1 app" in result.get("mermaid", ""), result.get("mermaid", "")
         titles = {v.get("title") for v in result.get("node_drilldown_map", {}).values()}
-        assert titles == {"test-ase", "orders-fn-app"}, titles
+        assert "test-ase" in titles, titles
+        assert "orders-fn-app" not in titles, titles
 
     def test_app_service_plan_drilldown_lists_hosted_apps(self):
         """The App Service Plan drilldown must list hosted app services."""
@@ -4408,6 +4456,578 @@ class TestCloudPosture:
         edges = payload["edges"]
         assert any(e["source"] == gw_id and e["target"] == tn_id for e in edges), edges
         assert any(e["source"] == gw_id and e["target"] == portal_id for e in edges), edges
+
+    def test_connectivity_mermaid_resolves_ase_backend_pool_hostnames_to_ase_node(self, monkeypatch):
+        import json
+        import sqlite3
+
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE subscriptions (
+                    id TEXT PRIMARY KEY,
+                    display_name TEXT,
+                    environment TEXT,
+                    state TEXT,
+                    last_synced TEXT
+                );
+                CREATE TABLE provisioned_assets (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    resource_group TEXT,
+                    name TEXT,
+                    type TEXT,
+                    location TEXT,
+                    sku TEXT,
+                    fqdn TEXT,
+                    is_public INTEGER DEFAULT 0,
+                    status TEXT,
+                    pipeline_tag TEXT,
+                    first_detected TEXT,
+                    last_synced TEXT,
+                    raw_json TEXT,
+                    is_restricted INTEGER DEFAULT 0,
+                    waf_mode TEXT
+                );
+                CREATE TABLE appgw_routing_rules (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    gateway_name TEXT,
+                    backend_fqdns TEXT,
+                    backend_pool_name TEXT,
+                    listener_name TEXT,
+                    url_path TEXT,
+                    protocol TEXT,
+                    waf_policy_name TEXT,
+                    resource_group TEXT,
+                    hostname TEXT
+                );
+                """
+            )
+            conn.execute(
+                "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+                ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+            )
+            gw_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/appgw-one"
+            ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/prodgreen-shared-uksouth"
+            conn.executemany(
+                """
+                INSERT INTO provisioned_assets (
+                    id, subscription_id, resource_group, name, type, location, sku,
+                    fqdn, is_public, status, pipeline_tag, first_detected, last_synced,
+                    raw_json, is_restricted, waf_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        gw_id,
+                        "sub-1",
+                        "rg-net",
+                        "appgw-one",
+                        "Microsoft.Network/applicationGateways",
+                        "uksouth",
+                        "WAF_v2",
+                        "appgw-one.example.com",
+                        1,
+                        "active",
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        json.dumps({}),
+                        0,
+                        "WAF_v2",
+                    ),
+                    (
+                        ase_id,
+                        "sub-1",
+                        "rg-app",
+                        "prodgreen-shared-uksouth",
+                        "Microsoft.Web/hostingEnvironments",
+                        "uksouth",
+                        "ASEv3",
+                        "prodgreen-shared-uksouth.appserviceenvironment.net",
+                        0,
+                        "active",
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        json.dumps({"kind": "ASEv3"}),
+                        0,
+                        None,
+                    ),
+                ],
+            )
+            conn.execute(
+                """
+                INSERT INTO appgw_routing_rules (
+                    id, subscription_id, gateway_name, backend_fqdns, backend_pool_name,
+                    listener_name, url_path, protocol, waf_policy_name, resource_group, hostname
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "appgw-one::route-ase",
+                    "sub-1",
+                    "appgw-one",
+                    json.dumps([
+                        "cbuk-core-prodgreen-institution-portal-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                    ]),
+                    "institution-portal",
+                    "listener-one",
+                    "/*",
+                    "HTTPS",
+                    None,
+                    "rg-net",
+                    "appgw-one.example.com",
+                ),
+            )
+            conn.commit()
+
+            monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+            client = app_module.app.test_client()
+            resp = client.get("/api/cloud/architecture?sub=sub-1&view=connectivity")
+        finally:
+            conn.close()
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        mermaid = resp.get_json()["views"]["connectivity"]["mermaid"]
+        assert 'prodgreen_shared_uksouth["' in mermaid, mermaid
+        assert "appserviceenvironment.net" not in mermaid, mermaid
+        assert any(
+            line.startswith("    rg_net_appgw_one -->") and "rg_app_prodgreen_shared_uksouth" in line
+            for line in mermaid.splitlines()
+        ), mermaid
+
+    def test_subscription_architecture_payload_routes_appgw_pool_to_hidden_ase_child_parent(self, monkeypatch):
+        import json
+        import sqlite3
+
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE subscriptions (
+                    id TEXT PRIMARY KEY,
+                    display_name TEXT,
+                    environment TEXT,
+                    state TEXT,
+                    last_synced TEXT
+                );
+                CREATE TABLE provisioned_assets (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    resource_group TEXT,
+                    name TEXT,
+                    type TEXT,
+                    location TEXT,
+                    sku TEXT,
+                    fqdn TEXT,
+                    is_public INTEGER DEFAULT 0,
+                    status TEXT,
+                    pipeline_tag TEXT,
+                    first_detected TEXT,
+                    last_synced TEXT,
+                    raw_json TEXT,
+                    is_restricted INTEGER DEFAULT 0,
+                    waf_mode TEXT
+                );
+                CREATE TABLE appgw_routing_rules (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    gateway_name TEXT,
+                    backend_fqdns TEXT,
+                    backend_pool_name TEXT,
+                    listener_name TEXT,
+                    url_path TEXT,
+                    protocol TEXT,
+                    waf_policy_name TEXT,
+                    resource_group TEXT,
+                    hostname TEXT
+                );
+                """
+            )
+            conn.execute(
+                "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+                ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+            )
+            gw_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/appgw-one"
+            ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/prodgreen-shared-uksouth"
+            site_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/institution-portal"
+            conn.executemany(
+                """
+                INSERT INTO provisioned_assets (
+                    id, subscription_id, resource_group, name, type, location, sku,
+                    fqdn, is_public, status, pipeline_tag, first_detected, last_synced,
+                    raw_json, is_restricted, waf_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        gw_id,
+                        "sub-1",
+                        "rg-net",
+                        "appgw-one",
+                        "Microsoft.Network/applicationGateways",
+                        "uksouth",
+                        "WAF_v2",
+                        "appgw-one.example.com",
+                        1,
+                        "active",
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        json.dumps({}),
+                        0,
+                        "WAF_v2",
+                    ),
+                    (
+                        ase_id,
+                        "sub-1",
+                        "rg-app",
+                        "prodgreen-shared-uksouth",
+                        "Microsoft.Web/hostingEnvironments",
+                        "uksouth",
+                        "ASEv3",
+                        "prodgreen-shared-uksouth.appserviceenvironment.net",
+                        0,
+                        "active",
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        json.dumps({"kind": "ASEv3"}),
+                        0,
+                        None,
+                    ),
+                    (
+                        site_id,
+                        "sub-1",
+                        "rg-app",
+                        "institution-portal",
+                        "Microsoft.Web/sites",
+                        "uksouth",
+                        "P1v3",
+                        "institution-portal.azurewebsites.net",
+                        0,
+                        "active",
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        json.dumps({"siteConfig": {"hostingEnvironmentProfile": {"id": ase_id}}}),
+                        0,
+                        None,
+                    ),
+                ],
+            )
+            conn.execute(
+                """
+                INSERT INTO appgw_routing_rules (
+                    id, subscription_id, gateway_name, backend_fqdns, backend_pool_name,
+                    listener_name, url_path, protocol, waf_policy_name, resource_group, hostname
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "appgw-one::route-ase",
+                    "sub-1",
+                    "appgw-one",
+                    json.dumps([
+                        "cbuk-core-prodgreen-institution-portal-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                    ]),
+                    "institution-portal",
+                    "listener-one",
+                    "/*",
+                    "HTTPS",
+                    None,
+                    "rg-net",
+                    "appgw-one.example.com",
+                ),
+            )
+            conn.commit()
+
+            monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+            client = app_module.app.test_client()
+            resp = client.get("/api/subscriptions/sub-1/diagram")
+        finally:
+            conn.close()
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        mermaid = resp.get_json()["ingress_diagram"]["mermaid"]
+        assert "agpool_rg_net_appgw_one_institution_portal" in mermaid, mermaid
+        assert "rg_app_prodgreen_shared_uksouth" in mermaid, mermaid
+        assert any(
+            line.startswith("    agpool_rg_net_appgw_one_institution_portal -->")
+            and "rg_app_prodgreen_shared_uksouth" in line
+            for line in mermaid.splitlines()
+        ), mermaid
+
+    def test_subscription_architecture_payload_keeps_appgw_pool_edge_when_multiple_pools_share_ase_target(self, monkeypatch):
+        import json
+        import sqlite3
+
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE subscriptions (
+                    id TEXT PRIMARY KEY,
+                    display_name TEXT,
+                    environment TEXT,
+                    state TEXT,
+                    last_synced TEXT
+                );
+                CREATE TABLE provisioned_assets (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    resource_group TEXT,
+                    name TEXT,
+                    type TEXT,
+                    location TEXT,
+                    sku TEXT,
+                    fqdn TEXT,
+                    is_public INTEGER DEFAULT 0,
+                    status TEXT,
+                    pipeline_tag TEXT,
+                    first_detected TEXT,
+                    last_synced TEXT,
+                    raw_json TEXT,
+                    is_restricted INTEGER DEFAULT 0,
+                    waf_mode TEXT
+                );
+                CREATE TABLE appgw_routing_rules (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    gateway_name TEXT,
+                    backend_fqdns TEXT,
+                    backend_pool_name TEXT,
+                    listener_name TEXT,
+                    url_path TEXT,
+                    protocol TEXT,
+                    waf_policy_name TEXT,
+                    resource_group TEXT,
+                    hostname TEXT
+                );
+                """
+            )
+            conn.execute(
+                "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+                ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+            )
+            gw_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/appgw-one"
+            ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/prodgreen-shared-uksouth"
+            conn.executemany(
+                """
+                INSERT INTO provisioned_assets (
+                    id, subscription_id, resource_group, name, type, location, sku,
+                    fqdn, is_public, status, pipeline_tag, first_detected, last_synced,
+                    raw_json, is_restricted, waf_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        gw_id,
+                        "sub-1",
+                        "rg-net",
+                        "appgw-one",
+                        "Microsoft.Network/applicationGateways",
+                        "uksouth",
+                        "WAF_v2",
+                        "appgw-one.example.com",
+                        1,
+                        "active",
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        json.dumps({}),
+                        0,
+                        "WAF_v2",
+                    ),
+                    (
+                        ase_id,
+                        "sub-1",
+                        "rg-app",
+                        "prodgreen-shared-uksouth",
+                        "Microsoft.Web/hostingEnvironments",
+                        "uksouth",
+                        "ASEv3",
+                        "prodgreen-shared-uksouth.appserviceenvironment.net",
+                        0,
+                        "active",
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        json.dumps({"kind": "ASEv3"}),
+                        0,
+                        None,
+                    ),
+                ],
+            )
+            conn.executemany(
+                """
+                INSERT INTO appgw_routing_rules (
+                    id, subscription_id, gateway_name, backend_fqdns, backend_pool_name,
+                    listener_name, url_path, protocol, waf_policy_name, resource_group, hostname
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        "appgw-one::route-fiapi",
+                        "sub-1",
+                        "appgw-one",
+                        json.dumps([
+                            "cbuk-core-prodgreen-fi-api-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                        ]),
+                        "fiapi",
+                        "listener-one",
+                        "/*",
+                        "HTTPS",
+                        None,
+                        "rg-net",
+                        "appgw-one.example.com",
+                    ),
+                    (
+                        "appgw-one::route-ase",
+                        "sub-1",
+                        "appgw-one",
+                        json.dumps([
+                            "cbuk-core-prodgreen-institution-portal-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                        ]),
+                        "institution-portal",
+                        "listener-two",
+                        "/*",
+                        "HTTPS",
+                        None,
+                        "rg-net",
+                        "appgw-one.example.com",
+                    ),
+                ],
+            )
+            conn.commit()
+
+            monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+            client = app_module.app.test_client()
+            resp = client.get("/api/subscriptions/sub-1/diagram")
+        finally:
+            conn.close()
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        mermaid = resp.get_json()["ingress_diagram"]["mermaid"]
+        assert any(
+            line.startswith("    agpool_rg_net_appgw_one_institution_portal -->")
+            and "rg_app_prodgreen_shared_uksouth" in line
+            for line in mermaid.splitlines()
+        ), mermaid
+        assert any(
+            line.startswith("    agpool_rg_net_appgw_one_fiapi -->")
+            and "rg_app_prodgreen_shared_uksouth" in line
+            for line in mermaid.splitlines()
+        ), mermaid
+
+    def test_subscription_architecture_payload_links_nested_ase_siteconfig_parent(self):
+        import json
+        import sqlite3
+
+        from web.app import _build_subscription_architecture_payload
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE subscriptions (
+                    id TEXT PRIMARY KEY,
+                    display_name TEXT,
+                    environment TEXT,
+                    state TEXT,
+                    last_synced TEXT
+                );
+                CREATE TABLE provisioned_assets (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    resource_group TEXT,
+                    name TEXT,
+                    type TEXT,
+                    location TEXT,
+                    sku TEXT,
+                    fqdn TEXT,
+                    is_public INTEGER DEFAULT 0,
+                    status TEXT,
+                    pipeline_tag TEXT,
+                    first_detected TEXT,
+                    last_synced TEXT,
+                    raw_json TEXT,
+                    is_restricted INTEGER DEFAULT 0,
+                    waf_mode TEXT
+                );
+                """
+            )
+            conn.execute(
+                "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+                ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+            )
+            ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/prodgreen-shared-uksouth"
+            site_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/institution-portal"
+            conn.executemany(
+                """
+                INSERT INTO provisioned_assets (
+                    id, subscription_id, resource_group, name, type, location, sku,
+                    fqdn, is_public, status, pipeline_tag, first_detected, last_synced,
+                    raw_json, is_restricted, waf_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        ase_id,
+                        "sub-1",
+                        "rg-app",
+                        "prodgreen-shared-uksouth",
+                        "Microsoft.Web/hostingEnvironments",
+                        "uksouth",
+                        "ASEv3",
+                        "prodgreen-shared-uksouth.appserviceenvironment.net",
+                        0,
+                        "active",
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        json.dumps({"kind": "ASEv3"}),
+                        0,
+                        None,
+                    ),
+                    (
+                        site_id,
+                        "sub-1",
+                        "rg-app",
+                        "institution-portal",
+                        "Microsoft.Web/sites",
+                        "uksouth",
+                        "P1v3",
+                        "institution-portal.azurewebsites.net",
+                        1,
+                        "active",
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        json.dumps({"siteConfig": {"hostingEnvironmentProfile": {"id": ase_id}}}),
+                        0,
+                        None,
+                    ),
+                ],
+            )
+
+            payload = _build_subscription_architecture_payload(conn, "sub-1", view_mode="full")
+        finally:
+            conn.close()
+
+        edges = payload["edges"]
+        assert any(e["source"] == ase_id and e["target"] == site_id for e in edges), edges
 
     def test_cloud_architecture_page_labels_tabs_mermaid_and_react_flow(self, monkeypatch):
         import os

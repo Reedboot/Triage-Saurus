@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "web"))
 
 from app import _build_ingress_diagram
+from app import _subscription_access_level
 
 
 def test_network_subgraphs_split_by_vnet():
@@ -183,3 +184,9 @@ def test_subnet_subgraph_contains_network_resources():
     assert 'style sub_' in mermaid
     assert 'stroke:#94a3b8' in mermaid
     assert mermaid.index('Subnet: app') < mermaid.index('app-vmss-01')
+
+
+def test_restricted_assets_are_not_classified_as_public():
+    asset = {"is_public": True, "is_restricted": True}
+
+    assert _subscription_access_level(asset) == "IP Restricted"

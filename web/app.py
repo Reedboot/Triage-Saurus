@@ -13254,58 +13254,8 @@ def _build_subscription_architecture_payload(
                 )
             )
 
-        plan_links: list[tuple[str, str, str, str]] = []
-        try:
-            site_plan_rows = conn.execute(
-                """
-                SELECT name, resource_group,
-                       COALESCE(
-                           json_extract(raw_json, '$.appServicePlanId'),
-                           json_extract(raw_json, '$.serverFarmId')
-                       ) AS plan_arm_id
-                FROM provisioned_assets
-                WHERE subscription_id = ?
-                  AND (type LIKE '%Web/sites%' OR type LIKE '%Web/Sites%')
-                  AND COALESCE(
-                        json_extract(raw_json, '$.appServicePlanId'),
-                        json_extract(raw_json, '$.serverFarmId')
-                      ) IS NOT NULL
-                LIMIT 50
-                """,
-                (sub_id,),
-            ).fetchall()
-            for site_name, site_rg, plan_arm_id in site_plan_rows:
-                plan_rg, plan_name = _arm_id_name_and_rg(plan_arm_id)
-                if plan_name:
-                    plan_links.append((site_rg or "", site_name, plan_rg, plan_name))
-        except Exception:
-            pass
-
-        try:
-            ase_site_rows = conn.execute(
-                """
-                SELECT name, resource_group,
-                       COALESCE(
-                           json_extract(raw_json, '$.properties.hostingEnvironmentProfile.id'),
-                           json_extract(raw_json, '$.hostingEnvironmentProfile.id')
-                       ) AS ase_arm_id
-                FROM provisioned_assets
-                WHERE subscription_id = ?
-                  AND (type LIKE '%Web/sites%' OR type LIKE '%Web/Sites%')
-                  AND COALESCE(
-                        json_extract(raw_json, '$.properties.hostingEnvironmentProfile.id'),
-                        json_extract(raw_json, '$.hostingEnvironmentProfile.id')
-                      ) IS NOT NULL
-                LIMIT 50
-                """,
-                (sub_id,),
-            ).fetchall()
-            for site_name, site_rg, ase_arm_id in ase_site_rows:
-                ase_rg, ase_name = _arm_id_name_and_rg(ase_arm_id)
-                if ase_name:
-                    plan_links.append((site_rg or "", site_name, ase_rg, ase_name))
-        except Exception:
-            pass
+        plan_links = _build_site_hosting_plan_links(conn, sub_id)
+        plan_links.extend(_build_site_hosting_ase_links(conn, sub_id))
 
         ingress_diagram = _build_ingress_diagram(overlay_rows, plan_links=plan_links, aks_route_rows=aks_route_rows)
         resource_count = len(asset_rows)
@@ -14063,11 +14013,26 @@ def _build_subscription_architecture_payload(
         if isinstance(raw_json, dict):
             hosting_profile = raw_json.get("hostingEnvironmentProfile") or {}
             hosting_profile_props = (raw_json.get("properties") or {}).get("hostingEnvironmentProfile") or {}
+            site_props = raw_json.get("siteConfig") or {}
+            if not isinstance(site_props, dict):
+                site_props = {}
+            raw_props = raw_json.get("properties") or {}
+            if not isinstance(raw_props, dict):
+                raw_props = {}
+            site_hosting_profile = site_props.get("hostingEnvironmentProfile")
+            site_hosting_profile_id = ""
+            if isinstance(site_hosting_profile, dict):
+                site_hosting_profile_id = site_hosting_profile.get("id") or ""
             parent_arm_id = (
                 raw_json.get("appServicePlanId")
                 or raw_json.get("serverFarmId")
+                or raw_props.get("appServicePlanId")
+                or raw_props.get("serverFarmId")
+                or site_props.get("appServicePlanId")
+                or site_props.get("serverFarmId")
                 or hosting_profile_props.get("id")
                 or hosting_profile.get("id")
+                or site_hosting_profile_id
                 or ""
             )
         if parent_arm_id:
@@ -14165,12 +14130,7 @@ def _build_subscription_architecture_payload(
         
         def _get_access_level(asset: dict) -> str:
             """Determine access level: Public, IP Restricted, or Private."""
-            if asset.get("is_public"):
-                return "Public"
-            elif asset.get("is_restricted"):
-                return "IP Restricted"
-            else:
-                return "Private"
+            return _subscription_access_level(asset)
         
         def _get_resource_display_type(asset_type: str) -> str:
             """Get human-readable resource type."""
@@ -16984,6 +16944,9 @@ def _routing_target_candidates(target: dict) -> list[str]:
         text = text.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0].split(":", 1)[0].rstrip(".")
         for candidate in (
             text,
+            text.removesuffix(".appserviceenvironment.net").rsplit(".", 1)[-1]
+            if text.endswith(".appserviceenvironment.net") and "." in text.removesuffix(".appserviceenvironment.net")
+            else "",
             text.split(".", 1)[0] if "." in text else "",
             text.removesuffix(".appserviceenvironment.net") if text.endswith(".appserviceenvironment.net") else "",
             text.removesuffix(".azure-api.net") if text.endswith(".azure-api.net") else "",
@@ -18358,58 +18321,8 @@ def api_subscription_diagram(sub_id: str):
         # Query App Service / Function App hosting relationships from raw_json.
         # raw_json stores appServicePlanId/serverFarmId and hostingEnvironmentProfile.id
         # as full ARM resource IDs.
-        plan_links: list[tuple[str, str, str, str]] = []
-        try:
-            site_plan_rows = conn.execute(
-                """
-                SELECT name, resource_group,
-                       COALESCE(
-                           json_extract(raw_json, '$.appServicePlanId'),
-                           json_extract(raw_json, '$.serverFarmId')
-                       ) AS plan_arm_id
-                FROM provisioned_assets
-                WHERE subscription_id = ?
-                  AND (type LIKE '%Web/sites%' OR type LIKE '%Web/Sites%')
-                  AND COALESCE(
-                        json_extract(raw_json, '$.appServicePlanId'),
-                        json_extract(raw_json, '$.serverFarmId')
-                      ) IS NOT NULL
-                LIMIT 50
-                """,
-                (sub_id,),
-            ).fetchall()
-            for site_name, site_rg, plan_arm_id in site_plan_rows:
-                plan_rg, plan_name = _arm_id_name_and_rg(plan_arm_id)
-                if plan_name:
-                    plan_links.append((site_rg or "", site_name, plan_rg, plan_name))
-        except Exception:
-            pass  # Non-critical — proceed without plan links if query fails
-
-        try:
-            ase_site_rows = conn.execute(
-                """
-                SELECT name, resource_group,
-                       COALESCE(
-                           json_extract(raw_json, '$.properties.hostingEnvironmentProfile.id'),
-                           json_extract(raw_json, '$.hostingEnvironmentProfile.id')
-                       ) AS ase_arm_id
-                FROM provisioned_assets
-                WHERE subscription_id = ?
-                  AND (type LIKE '%Web/sites%' OR type LIKE '%Web/Sites%')
-                  AND COALESCE(
-                        json_extract(raw_json, '$.properties.hostingEnvironmentProfile.id'),
-                        json_extract(raw_json, '$.hostingEnvironmentProfile.id')
-                      ) IS NOT NULL
-                LIMIT 50
-                """,
-                (sub_id,),
-            ).fetchall()
-            for site_name, site_rg, ase_arm_id in ase_site_rows:
-                ase_rg, ase_name = _arm_id_name_and_rg(ase_arm_id)
-                if ase_name:
-                    plan_links.append((site_rg or "", site_name, ase_rg, ase_name))
-        except Exception:
-            pass  # Non-critical — proceed without ASE links if query fails
+        plan_links = _build_site_hosting_plan_links(conn, sub_id)
+        plan_links.extend(_build_site_hosting_ase_links(conn, sub_id))
 
         aks_route_rows: list = []
         try:
@@ -18659,6 +18572,78 @@ def _arm_id_name_and_rg(arm_id: str | None) -> tuple[str, str]:
             rg = parts[idx + 1]
             break
     return rg, name
+
+
+def _build_site_hosting_plan_links(conn, sub_id: str) -> list[tuple[str, str, str, str]]:
+    """Return (site_rg, site_name, parent_rg, parent_name) links for hosted sites."""
+    plan_links: list[tuple[str, str, str, str]] = []
+    try:
+        site_plan_rows = conn.execute(
+            """
+            SELECT name, resource_group,
+                   COALESCE(
+                       json_extract(raw_json, '$.appServicePlanId'),
+                       json_extract(raw_json, '$.serverFarmId'),
+                       json_extract(raw_json, '$.properties.appServicePlanId'),
+                       json_extract(raw_json, '$.properties.serverFarmId'),
+                       json_extract(raw_json, '$.siteConfig.appServicePlanId'),
+                       json_extract(raw_json, '$.siteConfig.serverFarmId')
+                   ) AS plan_arm_id
+            FROM provisioned_assets
+            WHERE subscription_id = ?
+              AND (type LIKE '%Web/sites%' OR type LIKE '%Web/Sites%')
+              AND COALESCE(
+                    json_extract(raw_json, '$.appServicePlanId'),
+                    json_extract(raw_json, '$.serverFarmId'),
+                    json_extract(raw_json, '$.properties.appServicePlanId'),
+                    json_extract(raw_json, '$.properties.serverFarmId'),
+                    json_extract(raw_json, '$.siteConfig.appServicePlanId'),
+                    json_extract(raw_json, '$.siteConfig.serverFarmId')
+                  ) IS NOT NULL
+            LIMIT 50
+            """,
+            (sub_id,),
+        ).fetchall()
+        for site_name, site_rg, plan_arm_id in site_plan_rows:
+            plan_rg, plan_name = _arm_id_name_and_rg(plan_arm_id)
+            if plan_name:
+                plan_links.append((site_rg or "", site_name, plan_rg, plan_name))
+    except Exception:
+        pass
+    return plan_links
+
+
+def _build_site_hosting_ase_links(conn, sub_id: str) -> list[tuple[str, str, str, str]]:
+    """Return (site_rg, site_name, parent_rg, parent_name) links for ASE-hosted sites."""
+    ase_links: list[tuple[str, str, str, str]] = []
+    try:
+        ase_site_rows = conn.execute(
+            """
+            SELECT name, resource_group,
+                   COALESCE(
+                       json_extract(raw_json, '$.properties.hostingEnvironmentProfile.id'),
+                       json_extract(raw_json, '$.hostingEnvironmentProfile.id'),
+                       json_extract(raw_json, '$.siteConfig.hostingEnvironmentProfile.id')
+                   ) AS ase_arm_id
+            FROM provisioned_assets
+            WHERE subscription_id = ?
+              AND (type LIKE '%Web/sites%' OR type LIKE '%Web/Sites%')
+              AND COALESCE(
+                    json_extract(raw_json, '$.properties.hostingEnvironmentProfile.id'),
+                    json_extract(raw_json, '$.hostingEnvironmentProfile.id'),
+                    json_extract(raw_json, '$.siteConfig.hostingEnvironmentProfile.id')
+                  ) IS NOT NULL
+            LIMIT 50
+            """,
+            (sub_id,),
+        ).fetchall()
+        for site_name, site_rg, ase_arm_id in ase_site_rows:
+            ase_rg, ase_name = _arm_id_name_and_rg(ase_arm_id)
+            if ase_name:
+                ase_links.append((site_rg or "", site_name, ase_rg, ase_name))
+    except Exception:
+        pass
+    return ase_links
 
 
 def _arm_id_resource_type(arm_id: str | None) -> str:
@@ -19093,7 +19078,7 @@ def _subscription_data_attack_label(asset: dict) -> str:
 
 def _subscription_attack_badges(asset: dict) -> list[str]:
     badges: list[str] = []
-    if asset.get("public"):
+    if asset.get("public") and not asset.get("is_restricted"):
         badges.append("🌐 public")
     if asset.get("has_waf"):
         badges.append("🛡️ waf")
@@ -19106,6 +19091,15 @@ def _subscription_attack_badges(asset: dict) -> list[str]:
     elif asset.get("tier") == "api":
         badges.append("🔑 auth")
     return badges[:2]
+
+
+def _subscription_access_level(asset: dict) -> str:
+    """Return the effective access level for subscription overview grouping."""
+    if asset.get("is_restricted"):
+        return "IP Restricted"
+    if asset.get("is_public"):
+        return "Public"
+    return "Private"
 
 
 def _subscription_asset_label(asset: dict, include_badges: bool = False, include_fqdn: bool = False) -> str:
@@ -20558,6 +20552,38 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 })
         return result
     
+    site_parent_name_by_site_name: dict[str, str] = {}
+    for row in rows:
+        try:
+            name, rtype = row[0], row[1]
+            raw_json = row[12] if len(row) > 12 else None
+        except Exception:
+            continue
+        if "sites" not in str(rtype or "").lower():
+            continue
+        try:
+            parsed_raw = json.loads(raw_json) if isinstance(raw_json, str) and raw_json.strip() else (raw_json or {})
+        except Exception:
+            parsed_raw = {}
+        if not isinstance(parsed_raw, dict):
+            continue
+        parent_arm_id = (
+            parsed_raw.get("appServicePlanId")
+            or parsed_raw.get("serverFarmId")
+            or (parsed_raw.get("properties") or {}).get("appServicePlanId")
+            or (parsed_raw.get("properties") or {}).get("serverFarmId")
+            or (parsed_raw.get("siteConfig") or {}).get("appServicePlanId")
+            or (parsed_raw.get("siteConfig") or {}).get("serverFarmId")
+            or (parsed_raw.get("properties") or {}).get("hostingEnvironmentProfile", {}).get("id")
+            or parsed_raw.get("hostingEnvironmentProfile", {}).get("id")
+            or (parsed_raw.get("siteConfig") or {}).get("hostingEnvironmentProfile", {}).get("id")
+        )
+        if not parent_arm_id:
+            continue
+        parent_rg, parent_name = _arm_id_name_and_rg(str(parent_arm_id))
+        if parent_name:
+            site_parent_name_by_site_name[str(name or "").strip().lower()] = parent_name
+
     # Group resources by type + exposure (only show unique combinations)
     grouped_entry_points = _group_entry_points(entry_points)
     grouped_api_layer = _group_api_services(api_layer)
@@ -21826,9 +21852,9 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         import re as _re_appgw
         _gw_to_pool_edges: set[tuple[str, str, str]] = set()
         
-        # Group ALL routing info by backend target ONLY (not by source pool)
-        # Key: backend_nid, Value: {protocols, has_waf, fqdns, sources}
-        _backend_connections: dict[str, dict] = {}
+        # Keep one edge per source pool → resolved backend target so shared
+        # targets still show the pool that actually owns the route.
+        _backend_connections: dict[tuple[str, str], dict] = {}
         
         for _gw_name, _hostname, _be_fqdns_json, _pool_name, _listener_name, _url_path, _listener_protocol, _waf_policy_name in _iter_appgw_route_rows():
             _gw_nid = node_by_name.get(_gw_name.lower())
@@ -21881,30 +21907,44 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                             node_by_name=node_by_name,
                             node_by_name_normalized=node_by_name_normalized,
                         )
+                if not _be_nid and _pool_name:
+                    _pool_name_key = str(_pool_name or "").strip().lower()
+                    if _pool_name_key:
+                        _parent_name = site_parent_name_by_site_name.get(_pool_name_key)
+                        if not _parent_name and plan_links:
+                            for _site_rg, _site_name, _parent_rg, _parent_name_candidate in plan_links:
+                                if str(_site_name or "").strip().lower() == _pool_name_key:
+                                    _parent_name = _parent_name_candidate
+                                    break
+                        if _parent_name:
+                            _be_nid = _resolve_routing_target_node_id(
+                                {"target": _parent_name, "name": _parent_name},
+                                node_by_resource=node_by_resource,
+                                node_by_resource_type=node_by_resource_type,
+                                node_by_fqdn=node_by_fqdn,
+                                node_by_fqdn_normalized=node_by_fqdn_normalized,
+                                node_by_name=node_by_name,
+                                node_by_name_normalized=node_by_name_normalized,
+                            )
                 
                 if _be_nid and _be_nid != _gw_nid:
-                    # Aggregate by backend target only
-                    if _be_nid not in _backend_connections:
-                        _backend_connections[_be_nid] = {
+                    _conn_key = (_source_nid, _be_nid)
+                    if _conn_key not in _backend_connections:
+                        _backend_connections[_conn_key] = {
                             'protocols': set(),
                             'has_waf': False,
                             'fqdns': set(),
-                            'sources': set(),
+                            'sources': set([_source_nid]),
                             'has_auth': False,  # Placeholder for future auth detection
                         }
-                    
                     if _listener_protocol:
-                        _backend_connections[_be_nid]['protocols'].add(_listener_protocol.upper())
+                        _backend_connections[_conn_key]['protocols'].add(_listener_protocol.upper())
                     if _waf_policy_name:
-                        _backend_connections[_be_nid]['has_waf'] = True
-                    _backend_connections[_be_nid]['fqdns'].add(_fqdn_s)
-                    _backend_connections[_be_nid]['sources'].add(_source_nid)
-        
+                        _backend_connections[_conn_key]['has_waf'] = True
+                    _backend_connections[_conn_key]['fqdns'].add(_fqdn_s)
+
         # Emit ONE arrow per unique backend target
-        for _be_nid, _conn_info in _backend_connections.items():
-            # Pick ONE source to draw the arrow from (prefer first pool source)
-            _source_nid = sorted(_conn_info['sources'])[0]
-            
+        for (_source_nid, _be_nid), _conn_info in _backend_connections.items():
             # Build simple label: protocol + auth/WAF indicator
             _protocols = sorted(_conn_info['protocols']) if _conn_info['protocols'] else ['HTTPS']
             _protocol_str = "/".join(_protocols)

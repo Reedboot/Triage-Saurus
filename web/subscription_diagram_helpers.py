@@ -38,7 +38,8 @@ SUBSCRIPTION_FQDN_SUFFIXES = {
 
 def subscription_node_id(item: dict, sanitise_node_id: Callable[[str], str]) -> str:
     rg = item.get("rg") or "grp"
-    if item.get("parent_vnet_name") and "subnet" in (item.get("arm_type") or "").lower():
+    type_key = (item.get("arm_type") or "").lower()
+    if item.get("parent_vnet_name") and any(token in type_key for token in ("subnet", "hostingenvironment", "serverfarms")):
         combined = f"{rg}_{item.get('parent_vnet_name')}_{item.get('name') or item.get('label') or 'resource'}"
     else:
         combined = f"{rg}_{item.get('name') or item.get('label') or 'resource'}"
@@ -91,13 +92,13 @@ def subscription_asset_tier(arm_type: str, name: str = "") -> str:
         or "privateendpoint" in type_key
         or "privatednszones" in type_key
         or "privatednszone" in type_key
+        or "hostingenvironment" in type_key
     ):
         return "network"
     if (
         "managedcluster" in type_key
         or "containerinstance" in type_key
         or "serverfarms" in type_key
-        or "hostingenvironment" in type_key
         or "datafactory" in type_key
         or "cognitiveservices" in type_key
         or "containerregistry" in type_key
@@ -480,6 +481,15 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
                 public_ip_assets_by_name_rg.setdefault((rg_key, name_key), []).append(asset)
         assets.append(asset)
 
+    def _is_apim_public_ip_asset(asset: dict) -> bool:
+        type_key = (asset.get("arm_type") or "").lower()
+        if "publicipaddresses" not in type_key:
+            return False
+        if asset.get("collapse_into_apim") or asset.get("parent_apim_key"):
+            return True
+        name_key = str(asset.get("name") or "").strip().lower()
+        return "apim" in name_key or name_key.startswith("api-management")
+
     linked_public_ip_ids: set[str] = set()
     for asset in assets:
         if "apimanagement" not in (asset.get("arm_type") or "").lower():
@@ -515,13 +525,89 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
                 asset["public_ips"] = list(dict.fromkeys([*(asset.get("public_ips") or []), *linked_ips]))
                 if not asset.get("public_ip"):
                     asset["public_ip"] = linked_ips[0]
+            for pip in linked_assets:
+                pip["collapse_into_apim"] = True
+                pip["parent_apim_key"] = ((asset.get("rg") or "").lower(), (asset.get("name") or "").lower())
+
+    def _infer_ase_name_from_fqdn(fqdn: str) -> str | None:
+        host = str(fqdn or "").strip().lower()
+        suffix = ".appserviceenvironment.net"
+        if not host.endswith(suffix):
+            return None
+        host = host[: -len(suffix)]
+        if not host or "." not in host:
+            return None
+        return host.rsplit(".", 1)[-1]
+
+    def _is_ase(asset: dict) -> bool:
+        return "hostingenvironment" in (asset.get("arm_type") or "").lower()
+
+    ase_assets_by_key: dict[tuple[str, str], dict] = {}
+    ase_assets_by_name: dict[str, list[dict]] = {}
+    for asset in assets:
+        if not _is_ase(asset):
+            continue
+        key = ((asset.get("rg") or "").lower(), (asset.get("name") or "").lower())
+        ase_assets_by_key[key] = asset
+        ase_assets_by_name.setdefault((asset.get("name") or "").lower(), []).append(asset)
+
+    ase_network_fields = (
+        "parent_vnet_id",
+        "parent_vnet_name",
+        "parent_vnet_resource_group",
+        "vnet_name",
+        "vnet_resource_group",
+        "subnet_id",
+        "subnet_name",
+        "address_prefix",
+        "address_prefixes",
+        "network_security_group_id",
+        "network_security_group_name",
+        "route_table_id",
+        "route_table_name",
+        "delegations",
+    )
+
+    for asset in assets:
+        type_key = (asset.get("arm_type") or "").lower()
+        if "serverfarms" not in type_key:
+            continue
+        if asset.get("subnet_id") or asset.get("parent_vnet_name"):
+            continue
+
+        candidate_ase_name = None
+        for fqdn in asset.get("fqdns") or []:
+            candidate_ase_name = _infer_ase_name_from_fqdn(fqdn)
+            if candidate_ase_name:
+                break
+        if not candidate_ase_name:
+            continue
+
+        candidate_ase = ase_assets_by_key.get(((asset.get("rg") or "").lower(), candidate_ase_name))
+        if candidate_ase is None:
+            matches = ase_assets_by_name.get(candidate_ase_name, [])
+            candidate_ase = matches[0] if matches else None
+        if not candidate_ase:
+            continue
+
+        for field in ase_network_fields:
+            if candidate_ase.get(field) and not asset.get(field):
+                asset[field] = candidate_ase.get(field)
+        if candidate_ase.get("subnet_id") and not asset.get("subnet_id"):
+            asset["subnet_id"] = candidate_ase.get("subnet_id")
+        if candidate_ase.get("subnet_name") and not asset.get("subnet_name"):
+            asset["subnet_name"] = candidate_ase.get("subnet_name")
+        if candidate_ase.get("parent_vnet_name") and not asset.get("parent_vnet_name"):
+            asset["parent_vnet_name"] = candidate_ase.get("parent_vnet_name")
+        if candidate_ase.get("parent_vnet_resource_group") and not asset.get("parent_vnet_resource_group"):
+            asset["parent_vnet_resource_group"] = candidate_ase.get("parent_vnet_resource_group")
+        if candidate_ase.get("parent_vnet_id") and not asset.get("parent_vnet_id"):
+            asset["parent_vnet_id"] = candidate_ase.get("parent_vnet_id")
 
     visible_assets: list[dict] = []
     for asset in assets:
-        if "publicipaddresses" in (asset.get("arm_type") or "").lower():
-            asset_id = str(asset.get("id") or "").strip().lower()
-            if asset_id and asset_id in linked_public_ip_ids:
-                continue
+        if _is_apim_public_ip_asset(asset):
+            continue
         visible_assets.append(asset)
     return visible_assets
 
@@ -727,7 +813,8 @@ def subscription_asset_label(asset: dict, include_badges: bool = False, include_
         asset.get("friendly_type") or asset.get("arm_type") or "resource",
         asset.get("short_name") or asset.get("name") or "resource",
     ]
-    if asset.get("parent_vnet_name") and "subnet" in (asset.get("arm_type") or "").lower():
+    type_key = (asset.get("arm_type") or "").lower()
+    if asset.get("parent_vnet_name") and any(token in type_key for token in ("subnet", "hostingenvironment", "serverfarms")):
         parts.append(f"vnet: {asset.get('parent_vnet_name')}")
         if asset.get("address_prefix"):
             parts.append(str(asset.get("address_prefix")))
@@ -1206,8 +1293,8 @@ def build_subscription_diagrams_by_rg(
         # Network topology: VNet -> subnet and subnet -> contained resources.
         subnet_assets = [
             asset for asset in visible_rg_assets
-            if "subnet" in (asset.get("arm_type") or "").lower()
-            and asset.get("parent_vnet_name")
+            if asset.get("parent_vnet_name")
+            and any(token in (asset.get("arm_type") or "").lower() for token in ("subnet", "hostingenvironment", "serverfarms"))
         ]
         for subnet in subnet_assets:
             subnet_node_id = subscription_node_id(subnet, sanitise_node_id)
