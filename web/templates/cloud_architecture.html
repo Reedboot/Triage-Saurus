@@ -299,6 +299,52 @@
       gap: 8px;
     }
 
+    .cloud-arch-missing-assets {
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg-base);
+      font-size: 0.82rem;
+    }
+
+    .cloud-arch-missing-assets[hidden] {
+      display: none !important;
+    }
+
+    .cloud-arch-missing-assets__title {
+      font-weight: 700;
+      margin-bottom: 8px;
+      color: var(--text);
+    }
+
+    .cloud-arch-missing-assets__list {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .cloud-arch-missing-assets__item {
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+    }
+
+    .cloud-arch-missing-assets__name {
+      display: block;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 2px;
+    }
+
+    .cloud-arch-missing-assets__meta {
+      color: var(--text-muted);
+      font-size: 0.78rem;
+    }
+
     .cloud-arch-pill {
       display: inline-flex;
       align-items: center;
@@ -807,6 +853,7 @@
               <span>Loading architecture from CozoDB…</span>
             </div>
             <div class="cloud-arch-provider-legend" id="cloud-arch-provider-legend"></div>
+            <div class="cloud-arch-missing-assets" id="cloud-arch-missing-assets" hidden></div>
             <div class="cloud-arch-connection-legend" id="cloud-arch-connection-legend" style="margin-top: 12px; padding: 12px; background: var(--bg-base); border-radius: 8px; font-size: 0.85rem; display: none;">
               <div style="font-weight: 700; margin-bottom: 8px; color: var(--text);">🔗 Arrow Colour Key:</div>
               <div style="display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 10px;">

@@ -11,15 +11,21 @@ SUBSCRIPTION_DRILLABLE_ARM_TYPES = {
     "microsoft.apimanagement/service",
     "microsoft.appconfiguration/configurationstores",
     "microsoft.keyvault/vaults",
+    "microsoft.managedidentity/userassignedidentities",
     "microsoft.storage/storageaccounts",
     "microsoft.sql/servers",
     "microsoft.containerservice/managedclusters",
     "microsoft.documentdb/databaseaccounts",
+    "microsoft.machinelearningservices/workspaces",
     "microsoft.web/sites",
     "microsoft.web/serverfarms",
     "microsoft.web/hostingenvironments",
     "microsoft.servicefabric/clusters",
     "microsoft.servicebus/namespaces",
+    "microsoft.logic/workflows",
+    "microsoft.eventgrid/topics",
+    "microsoft.kusto/clusters",
+    "microsoft.databricks/workspaces",
     "microsoft.network/firewallpolicies",
 }
 
@@ -39,7 +45,7 @@ SUBSCRIPTION_FQDN_SUFFIXES = {
 def subscription_node_id(item: dict, sanitise_node_id: Callable[[str], str]) -> str:
     rg = item.get("rg") or "grp"
     type_key = (item.get("arm_type") or "").lower()
-    if item.get("parent_vnet_name") and any(token in type_key for token in ("subnet", "hostingenvironment", "serverfarms")):
+    if item.get("parent_vnet_name") and any(token in type_key for token in ("subnet", "hostingenvironment", "serverfarms", "servicefabric")):
         combined = f"{rg}_{item.get('parent_vnet_name')}_{item.get('name') or item.get('label') or 'resource'}"
     else:
         combined = f"{rg}_{item.get('name') or item.get('label') or 'resource'}"
@@ -84,6 +90,8 @@ def subscription_asset_tier(arm_type: str, name: str = "") -> str:
         return "entry"
     if "apimanagement" in type_key:
         return "api"
+    if "kubernetes_ingress" in type_key or "microsoft.kubernetes/ingresses" in type_key:
+        return "api"
     if (
         "virtualnetwork" in type_key
         or "/subnets" in type_key
@@ -101,8 +109,12 @@ def subscription_asset_tier(arm_type: str, name: str = "") -> str:
         or "serverfarms" in type_key
         or "datafactory" in type_key
         or "cognitiveservices" in type_key
+        or "machinelearningservices" in type_key
         or "containerregistry" in type_key
         or "servicefabric" in type_key
+        or "logic/workflows" in type_key
+        or "eventgrid/topics" in type_key
+        or "databricks/workspaces" in type_key
         # insights/components intentionally excluded — App Insights is a monitoring
         # sink, not a compute backend; classifying it as backend implies it routes traffic
     ):
@@ -111,16 +123,20 @@ def subscription_asset_tier(arm_type: str, name: str = "") -> str:
         return "backend" if not subscription_is_function_app(item) else "backend"
     if "virtualmachinescalesets" in type_key:
         return "backend"
+    if "kubernetes_service" in type_key or "microsoft.kubernetes/services" in type_key:
+        return "backend"
     if (
         "sql" in type_key
         or "documentdb" in type_key
         or "storage" in type_key
         or "keyvault" in type_key
+        or "managedidentity/userassignedidentities" in type_key
         or "servicebus" in type_key
         or "eventhub" in type_key
         or "cache/redis" in type_key
         or "search/search" in type_key
         or "appconfiguration" in type_key
+        or "kusto/clusters" in type_key
     ):
         return "data"
     return "other"
@@ -211,6 +227,28 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
                                 sub = ip_props.get("subnet")
                                 if isinstance(sub, dict):
                                     _add(found, sub.get("id"))
+
+            _props = obj if not isinstance(props, dict) else props
+            virtual_network_profile = _props.get("virtualNetworkProfile")
+            if isinstance(virtual_network_profile, dict):
+                subnet_obj = virtual_network_profile.get("subnet")
+                if isinstance(subnet_obj, dict):
+                    _add(found, subnet_obj.get("id"))
+                _add(found, virtual_network_profile.get("subnetId"))
+                _add(found, virtual_network_profile.get("subnet_id"))
+
+            for node_type in _props.get("nodeTypes") or []:
+                if not isinstance(node_type, dict):
+                    continue
+                _add(found, node_type.get("subnetId"))
+                _add(found, node_type.get("subnet_id"))
+                _add(found, node_type.get("vnetSubnetID"))
+                _add(found, node_type.get("vnetSubnetId"))
+                _add(found, node_type.get("virtualNetworkSubnetId"))
+                _add(found, node_type.get("virtual_network_subnet_id"))
+                subnet_obj = node_type.get("subnet")
+                if isinstance(subnet_obj, dict):
+                    _add(found, subnet_obj.get("id"))
 
             for pool in obj.get("agentPoolProfiles") or []:
                 if not isinstance(pool, dict):
@@ -370,9 +408,128 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
                         if isinstance(ip_addr, str) and ip_addr.strip():
                             asset["public_ip"] = ip_addr.strip()
                             break
+                if "serverfarms" in (rtype or "").lower() and not asset.get("subnet_id") and not asset.get("parent_vnet_name"):
+                    hosting_profile = props.get("hostingEnvironmentProfile") or props.get("hosting_environment_profile")
+                    if hosting_profile is None:
+                        hosting_profile = parsed_raw.get("hostingEnvironmentProfile") or parsed_raw.get("hosting_environment_profile")
+                    hosting_profile_id = ""
+                    if isinstance(hosting_profile, dict):
+                        hosting_profile_id = str(hosting_profile.get("id") or "").strip()
+                    elif isinstance(hosting_profile, str):
+                        hosting_profile_id = hosting_profile.strip()
+
+                    candidate_ase = None
+                    if hosting_profile_id:
+                        hp_lower = hosting_profile_id.lower()
+                        for existing in assets:
+                            if "hostingenvironment" not in (existing.get("arm_type") or "").lower():
+                                continue
+                            if str(existing.get("id") or "").strip().lower() == hp_lower:
+                                candidate_ase = existing
+                                break
+                        if candidate_ase is None:
+                            host_name = hp_lower.rsplit("/", 1)[-1]
+                            host_rg = ""
+                            if "/resourcegroups/" in hp_lower:
+                                host_rg = hp_lower.split("/resourcegroups/", 1)[1].split("/providers/", 1)[0].split("/")[0]
+                            for existing in assets:
+                                if "hostingenvironment" not in (existing.get("arm_type") or "").lower():
+                                    continue
+                                if host_name and str(existing.get("name") or "").strip().lower() != host_name:
+                                    continue
+                                existing_rg = str(existing.get("rg") or "").strip().lower()
+                                if host_rg and existing_rg and existing_rg != host_rg:
+                                    continue
+                                candidate_ase = existing
+                                break
+
+                    if candidate_ase:
+                        asset["vnet_name"] = candidate_ase.get("vnet_name") or candidate_ase.get("parent_vnet_name")
+                        asset["parent_vnet_name"] = candidate_ase.get("parent_vnet_name") or candidate_ase.get("vnet_name")
+                        asset["vnet_resource_group"] = candidate_ase.get("vnet_resource_group") or candidate_ase.get("parent_vnet_resource_group")
+                        asset["parent_vnet_resource_group"] = candidate_ase.get("parent_vnet_resource_group") or candidate_ase.get("vnet_resource_group")
+                        asset["subnet_name"] = candidate_ase.get("subnet_name")
+                        asset["subnet_id"] = candidate_ase.get("subnet_id")
+                        asset["address_prefix"] = candidate_ase.get("address_prefix")
+                        asset["address_prefixes"] = list(candidate_ase.get("address_prefixes") or [])
+                        asset["network_security_group_id"] = candidate_ase.get("network_security_group_id")
+                        asset["network_security_group_name"] = candidate_ase.get("network_security_group_name")
+                        asset["route_table_id"] = candidate_ase.get("route_table_id")
+                        asset["route_table_name"] = candidate_ase.get("route_table_name")
+                        asset["delegations"] = list(candidate_ase.get("delegations") or [])
+                        asset["network"] = dict(candidate_ase.get("network") or {})
+
+            if "serverfarms" in (rtype or "").lower() and not asset.get("subnet_id") and not asset.get("parent_vnet_name"):
+                hosting_profile = None
+                if isinstance(props, dict):
+                    hosting_profile = props.get("hostingEnvironmentProfile") or props.get("hosting_environment_profile")
+                if hosting_profile is None:
+                    hosting_profile = parsed_raw.get("hostingEnvironmentProfile") or parsed_raw.get("hosting_environment_profile")
+                hosting_profile_id = ""
+                if isinstance(hosting_profile, dict):
+                    hosting_profile_id = str(hosting_profile.get("id") or "").strip()
+                elif isinstance(hosting_profile, str):
+                    hosting_profile_id = hosting_profile.strip()
+
+                candidate_ase = None
+                if hosting_profile_id:
+                    hp_lower = hosting_profile_id.lower()
+                    for existing in assets:
+                        if "hostingenvironment" not in (existing.get("arm_type") or "").lower():
+                            continue
+                        if str(existing.get("id") or "").strip().lower() == hp_lower:
+                            candidate_ase = existing
+                            break
+                    if candidate_ase is None:
+                        host_name = hp_lower.rsplit("/", 1)[-1]
+                        host_rg = ""
+                        if "/resourcegroups/" in hp_lower:
+                            host_rg = hp_lower.split("/resourcegroups/", 1)[1].split("/providers/", 1)[0].split("/")[0]
+                        for existing in assets:
+                            if "hostingenvironment" not in (existing.get("arm_type") or "").lower():
+                                continue
+                            if host_name and str(existing.get("name") or "").strip().lower() != host_name:
+                                continue
+                            existing_rg = str(existing.get("rg") or "").strip().lower()
+                            if host_rg and existing_rg and existing_rg != host_rg:
+                                continue
+                            candidate_ase = existing
+                            break
+
+                if candidate_ase:
+                    asset["vnet_name"] = candidate_ase.get("vnet_name") or candidate_ase.get("parent_vnet_name")
+                    asset["parent_vnet_name"] = candidate_ase.get("parent_vnet_name") or candidate_ase.get("vnet_name")
+                    asset["vnet_resource_group"] = candidate_ase.get("vnet_resource_group") or candidate_ase.get("parent_vnet_resource_group")
+                    asset["parent_vnet_resource_group"] = candidate_ase.get("parent_vnet_resource_group") or candidate_ase.get("vnet_resource_group")
+                    asset["subnet_name"] = candidate_ase.get("subnet_name")
+                    asset["subnet_id"] = candidate_ase.get("subnet_id")
+                    asset["address_prefix"] = candidate_ase.get("address_prefix")
+                    asset["address_prefixes"] = list(candidate_ase.get("address_prefixes") or [])
+                    asset["network_security_group_id"] = candidate_ase.get("network_security_group_id")
+                    asset["network_security_group_name"] = candidate_ase.get("network_security_group_name")
+                    asset["route_table_id"] = candidate_ase.get("route_table_id")
+                    asset["route_table_name"] = candidate_ase.get("route_table_name")
+                    asset["delegations"] = list(candidate_ase.get("delegations") or [])
+                    asset["network"] = dict(candidate_ase.get("network") or {})
+
             subnet_id = _extract_subnet_id(parsed_raw)
+            if not subnet_id and "virtualnetworks/subnets" in (rtype or "").lower():
+                asset_id_text = str(asset.get("id") or "").strip()
+                if "/subnets/" in asset_id_text.lower():
+                    subnet_id = asset_id_text
             if subnet_id:
                 asset["subnet_id"] = subnet_id
+                if not asset.get("subnet_name"):
+                    asset["subnet_name"] = subnet_id.split("/subnets/")[-1] if "/subnets/" in subnet_id.lower() else None
+                if not asset.get("vnet_name"):
+                    vnet_name = None
+                    if "/virtualnetworks/" in subnet_id.lower():
+                        vnet_name = subnet_id.split("/virtualNetworks/", 1)[1].split("/")[0]
+                    if vnet_name:
+                        asset["vnet_name"] = vnet_name
+                        asset["parent_vnet_name"] = vnet_name
+                if not asset.get("parent_vnet_id") and "/subnets/" in subnet_id.lower():
+                    asset["parent_vnet_id"] = subnet_id.rsplit("/subnets/", 1)[0]
             extra = parsed_raw.get("_extra") or {}
             if isinstance(extra, dict):
                 if extra.get("subnet_id"):
@@ -590,13 +747,17 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
         if not candidate_ase:
             continue
 
+        if not asset.get("vnet_name"):
+            asset["vnet_name"] = candidate_ase.get("vnet_name") or candidate_ase.get("parent_vnet_name")
+        if not asset.get("vnet_resource_group"):
+            asset["vnet_resource_group"] = candidate_ase.get("vnet_resource_group") or candidate_ase.get("parent_vnet_resource_group")
+        if not asset.get("subnet_name"):
+            asset["subnet_name"] = candidate_ase.get("subnet_name")
+        if not asset.get("subnet_id"):
+            asset["subnet_id"] = candidate_ase.get("subnet_id")
         for field in ase_network_fields:
             if candidate_ase.get(field) and not asset.get(field):
                 asset[field] = candidate_ase.get(field)
-        if candidate_ase.get("subnet_id") and not asset.get("subnet_id"):
-            asset["subnet_id"] = candidate_ase.get("subnet_id")
-        if candidate_ase.get("subnet_name") and not asset.get("subnet_name"):
-            asset["subnet_name"] = candidate_ase.get("subnet_name")
         if candidate_ase.get("parent_vnet_name") and not asset.get("parent_vnet_name"):
             asset["parent_vnet_name"] = candidate_ase.get("parent_vnet_name")
         if candidate_ase.get("parent_vnet_resource_group") and not asset.get("parent_vnet_resource_group"):
@@ -637,6 +798,23 @@ def subscription_apply_plan_hierarchy(assets: list[dict], plan_links: list | Non
     def _is_site_type(asset: dict) -> bool:
         return "sites" in _type(asset)
 
+    def _first_value(*values: object) -> object:
+        for value in values:
+            if value not in (None, "", [], {}):
+                return value
+        return None
+
+    def _merge_list_values(*values: object) -> list:
+        merged_values: list = []
+        for value in values:
+            if not value:
+                continue
+            items = value if isinstance(value, list) else [value]
+            for item in items:
+                if item not in merged_values:
+                    merged_values.append(item)
+        return merged_values
+
     def _merge_asset_payload(base: dict, extra: dict) -> dict:
         merged = dict(base)
         merged_resources = list(merged.get("resources") or [])
@@ -654,6 +832,52 @@ def subscription_apply_plan_hierarchy(assets: list[dict], plan_links: list | Non
         merged["is_restricted"] = bool(merged.get("is_restricted") or extra.get("is_restricted"))
         if not merged.get("public_ip") and extra.get("public_ip"):
             merged["public_ip"] = extra.get("public_ip")
+
+        merged["vnet_name"] = _first_value(merged.get("vnet_name"), extra.get("vnet_name"), merged.get("parent_vnet_name"), extra.get("parent_vnet_name"))
+        merged["parent_vnet_name"] = _first_value(merged.get("parent_vnet_name"), extra.get("parent_vnet_name"), merged.get("vnet_name"), extra.get("vnet_name"))
+        merged["vnet_resource_group"] = _first_value(merged.get("vnet_resource_group"), extra.get("vnet_resource_group"), merged.get("parent_vnet_resource_group"), extra.get("parent_vnet_resource_group"))
+        merged["parent_vnet_resource_group"] = _first_value(
+            merged.get("parent_vnet_resource_group"),
+            extra.get("parent_vnet_resource_group"),
+            merged.get("vnet_resource_group"),
+            extra.get("vnet_resource_group"),
+        )
+        merged["subnet_name"] = _first_value(merged.get("subnet_name"), extra.get("subnet_name"))
+        merged["subnet_id"] = _first_value(merged.get("subnet_id"), extra.get("subnet_id"))
+        merged["address_prefix"] = _first_value(merged.get("address_prefix"), extra.get("address_prefix"))
+        merged["address_prefixes"] = _merge_list_values(merged.get("address_prefixes"), extra.get("address_prefixes"))
+        merged["network_security_group_id"] = _first_value(merged.get("network_security_group_id"), extra.get("network_security_group_id"))
+        merged["network_security_group_name"] = _first_value(merged.get("network_security_group_name"), extra.get("network_security_group_name"))
+        merged["route_table_id"] = _first_value(merged.get("route_table_id"), extra.get("route_table_id"))
+        merged["route_table_name"] = _first_value(merged.get("route_table_name"), extra.get("route_table_name"))
+        merged["delegations"] = _merge_list_values(merged.get("delegations"), extra.get("delegations"))
+        if merged.get("vnet_name") or merged.get("subnet_name") or merged.get("subnet_id"):
+            merged["network"] = {
+                "vnet": _first_value(
+                    (merged.get("network") or {}).get("vnet") if isinstance(merged.get("network"), dict) else None,
+                    merged.get("vnet_name"),
+                    extra.get("vnet_name"),
+                    merged.get("parent_vnet_name"),
+                    extra.get("parent_vnet_name"),
+                ),
+                "subnet": _first_value(
+                    (merged.get("network") or {}).get("subnet") if isinstance(merged.get("network"), dict) else None,
+                    merged.get("subnet_name"),
+                    extra.get("subnet_name"),
+                ),
+                "vnet_resource_group": _first_value(
+                    (merged.get("network") or {}).get("vnet_resource_group") if isinstance(merged.get("network"), dict) else None,
+                    merged.get("vnet_resource_group"),
+                    extra.get("vnet_resource_group"),
+                    merged.get("parent_vnet_resource_group"),
+                    extra.get("parent_vnet_resource_group"),
+                ),
+                "subnet_id": _first_value(
+                    (merged.get("network") or {}).get("subnet_id") if isinstance(merged.get("network"), dict) else None,
+                    merged.get("subnet_id"),
+                    extra.get("subnet_id"),
+                ),
+            }
 
         if base is not extra and (_is_plan_type(base) or _is_plan_type(extra)) and (_is_site_type(base) or _is_site_type(extra)):
             merged["hosted_site_count"] = max(int(merged.get("hosted_site_count") or 0), int(extra.get("hosted_site_count") or 0), 1)
@@ -713,6 +937,29 @@ def subscription_apply_plan_hierarchy(assets: list[dict], plan_links: list | Non
             asset_copy["public"] = bool(asset_copy.get("public") or any(child.get("public") for child in children))
             asset_copy["is_restricted"] = bool(asset_copy.get("is_restricted") or any(child.get("is_restricted") for child in children))
             asset_copy["hosted_site_count"] = len(children)
+            child_networks = [child for child in children if child.get("vnet_name") or child.get("parent_vnet_name") or child.get("subnet_name") or child.get("subnet_id")]
+            if child_networks:
+                network_source = child_networks[0]
+                asset_copy["vnet_name"] = _first_value(asset_copy.get("vnet_name"), asset_copy.get("parent_vnet_name"), network_source.get("vnet_name"), network_source.get("parent_vnet_name"))
+                asset_copy["parent_vnet_name"] = _first_value(asset_copy.get("parent_vnet_name"), network_source.get("parent_vnet_name"), asset_copy.get("vnet_name"), network_source.get("vnet_name"))
+                asset_copy["vnet_resource_group"] = _first_value(asset_copy.get("vnet_resource_group"), asset_copy.get("parent_vnet_resource_group"), network_source.get("vnet_resource_group"), network_source.get("parent_vnet_resource_group"))
+                asset_copy["parent_vnet_resource_group"] = _first_value(asset_copy.get("parent_vnet_resource_group"), network_source.get("parent_vnet_resource_group"), asset_copy.get("vnet_resource_group"), network_source.get("vnet_resource_group"))
+                asset_copy["subnet_name"] = _first_value(asset_copy.get("subnet_name"), network_source.get("subnet_name"))
+                asset_copy["subnet_id"] = _first_value(asset_copy.get("subnet_id"), network_source.get("subnet_id"))
+                asset_copy["address_prefix"] = _first_value(asset_copy.get("address_prefix"), network_source.get("address_prefix"))
+                asset_copy["address_prefixes"] = _merge_list_values(asset_copy.get("address_prefixes"), network_source.get("address_prefixes"))
+                asset_copy["network_security_group_id"] = _first_value(asset_copy.get("network_security_group_id"), network_source.get("network_security_group_id"))
+                asset_copy["network_security_group_name"] = _first_value(asset_copy.get("network_security_group_name"), network_source.get("network_security_group_name"))
+                asset_copy["route_table_id"] = _first_value(asset_copy.get("route_table_id"), network_source.get("route_table_id"))
+                asset_copy["route_table_name"] = _first_value(asset_copy.get("route_table_name"), network_source.get("route_table_name"))
+                asset_copy["delegations"] = _merge_list_values(asset_copy.get("delegations"), network_source.get("delegations"))
+                if asset_copy.get("vnet_name") or asset_copy.get("subnet_name") or asset_copy.get("subnet_id"):
+                    asset_copy["network"] = {
+                        "vnet": _first_value((asset_copy.get("network") or {}).get("vnet") if isinstance(asset_copy.get("network"), dict) else None, asset_copy.get("vnet_name"), asset_copy.get("parent_vnet_name")),
+                        "subnet": _first_value((asset_copy.get("network") or {}).get("subnet") if isinstance(asset_copy.get("network"), dict) else None, asset_copy.get("subnet_name")),
+                        "vnet_resource_group": _first_value((asset_copy.get("network") or {}).get("vnet_resource_group") if isinstance(asset_copy.get("network"), dict) else None, asset_copy.get("vnet_resource_group"), asset_copy.get("parent_vnet_resource_group")),
+                        "subnet_id": _first_value((asset_copy.get("network") or {}).get("subnet_id") if isinstance(asset_copy.get("network"), dict) else None, asset_copy.get("subnet_id")),
+                    }
         elif "fqdns" not in asset_copy:
             resolved_fqdn = subscription_primary_fqdn(asset_copy)
             if resolved_fqdn:
@@ -787,6 +1034,7 @@ def subscription_is_allowlist_target(asset: dict) -> bool:
             "cache/redis",
             "search/search",
             "appconfiguration",
+            "machinelearningservices",
         )
     )
 
@@ -814,7 +1062,7 @@ def subscription_asset_label(asset: dict, include_badges: bool = False, include_
         asset.get("short_name") or asset.get("name") or "resource",
     ]
     type_key = (asset.get("arm_type") or "").lower()
-    if asset.get("parent_vnet_name") and any(token in type_key for token in ("subnet", "hostingenvironment", "serverfarms")):
+    if asset.get("parent_vnet_name") and any(token in type_key for token in ("subnet", "hostingenvironment", "serverfarms", "servicefabric")):
         parts.append(f"vnet: {asset.get('parent_vnet_name')}")
         if asset.get("address_prefix"):
             parts.append(str(asset.get("address_prefix")))
@@ -878,7 +1126,9 @@ def subscription_register_node(
     sanitise_node_id: Callable[[str], str],
 ) -> None:
     arm_type = (asset.get("arm_type") or "").lower()
-    resources = asset.get("resources") or [{"rg": asset.get("rg"), "name": asset.get("name")}]
+    resources = asset.get("resources")
+    if resources is None:
+        resources = [{"rg": asset.get("rg"), "name": asset.get("name")}]
     node_map[subscription_node_id(asset, sanitise_node_id)] = {
         "title": asset.get("name") or asset.get("friendly_type") or "resource",
         "arm_type": asset.get("arm_type"),
@@ -1138,6 +1388,7 @@ def build_subscription_diagrams_by_rg(
     get_icon_path: Callable[[str], str | None],
     normalize_attack_paths: Callable[[object, str | None], list[dict]],
     plan_links: list | None = None,
+    aks_route_rows: list | None = None,
 ) -> list[dict]:
     del sub_name, environment
     from collections import defaultdict
@@ -1145,6 +1396,94 @@ def build_subscription_diagrams_by_rg(
     groups: dict[str, list[dict]] = defaultdict(list)
     for asset in subscription_assets_from_rows(rows, friendly_type):
         groups[asset.get("rg") or "default"].append(asset)
+
+    if aks_route_rows:
+        seen_route_keys: set[str] = set()
+
+        for row in aks_route_rows:
+            try:
+                cluster_name, namespace, ingress_name, host, path, service_name, service_port, deployment_name, git_repository, resource_group, pod_template_labels = row[:11]
+            except Exception:
+                continue
+
+            cluster_rg = str(resource_group or "").strip()
+            cluster_key = (cluster_rg.lower(), str(cluster_name or "").strip().lower())
+            if not cluster_key[1]:
+                continue
+
+            ingress_label = str(ingress_name or host or f"{cluster_name}-ingress").strip()
+            service_label = str(service_name or deployment_name or f"{cluster_name}-service").strip()
+            route_key = "::".join([
+                cluster_key[0],
+                cluster_key[1],
+                str(namespace or "").strip().lower(),
+                ingress_label.lower(),
+                str(host or "").strip().lower(),
+                str(path or "").strip().lower(),
+                service_label.lower(),
+                str(service_port or "").strip().lower(),
+            ])
+            if route_key in seen_route_keys:
+                continue
+            seen_route_keys.add(route_key)
+
+            ingress_asset = {
+                "name": f"{cluster_name}-{namespace}-{ingress_label}-{str(host or path or 'route').replace('/', '_')}-ingress",
+                "node_variant": "aks_ingress",
+                "arm_type": "kubernetes_ingress",
+                "rg": cluster_rg or "default",
+                "fqdn": str(host or "").strip(),
+                "public": bool(str(host or "").strip()),
+                "sku": None,
+                "id": f"aks-ingress::{route_key}",
+                "has_waf": False,
+                "waf_mode": None,
+                "listeners": None,
+                "routing_targets": [{"target": service_label, "name": service_label, "type": "Kubernetes Service"}],
+                "is_restricted": False,
+                "tier": "api",
+                "friendly_type": friendly_type("kubernetes_ingress"),
+                "short_name": ingress_label,
+                "auth_methods": [],
+                "resources": [],
+                "source_cluster_rg": cluster_rg,
+                "source_cluster_name": cluster_name,
+                "source_namespace": namespace,
+                "source_service": service_label,
+                "source_deployment": deployment_name,
+                "source_repo": git_repository,
+                "source_labels": pod_template_labels,
+            }
+            service_asset = {
+                "name": f"{cluster_name}-{namespace}-{service_label}-{str(service_port or 'svc').replace('/', '_')}-service",
+                "node_variant": "aks_service",
+                "arm_type": "kubernetes_service",
+                "rg": cluster_rg or "default",
+                "fqdn": "",
+                "public": False,
+                "sku": None,
+                "id": f"aks-service::{route_key}",
+                "has_waf": False,
+                "waf_mode": None,
+                "listeners": None,
+                "routing_targets": [],
+                "is_restricted": False,
+                "tier": "backend",
+                "friendly_type": friendly_type("kubernetes_service"),
+                "short_name": service_label,
+                "auth_methods": [],
+                "resources": [],
+                "source_cluster_rg": cluster_rg,
+                "source_cluster_name": cluster_name,
+                "source_namespace": namespace,
+                "source_ingress": ingress_label,
+                "source_deployment": deployment_name,
+                "source_repo": git_repository,
+                "source_labels": pod_template_labels,
+            }
+
+            groups[cluster_rg or "default"].append(ingress_asset)
+            groups[cluster_rg or "default"].append(service_asset)
 
     diagrams = []
 
@@ -1185,6 +1524,18 @@ def build_subscription_diagrams_by_rg(
                 and ((asset.get("name") or "").lower(), (asset.get("rg") or "").lower()) in hosted_site_keys
             )
         ]
+        route_nodes_by_cluster: dict[tuple[str, str], list[dict]] = defaultdict(list)
+        for asset in visible_rg_assets:
+            variant = asset.get("node_variant")
+            if variant not in {"aks_ingress", "aks_service"}:
+                continue
+            cluster_key = (
+                str(asset.get("source_cluster_rg") or asset.get("rg") or "").strip().lower(),
+                str(asset.get("source_cluster_name") or "").strip().lower(),
+            )
+            if cluster_key[1]:
+                route_nodes_by_cluster[cluster_key].append(asset)
+
         entries = [a for a in visible_rg_assets if a.get("tier") == "entry"]
         apis = [a for a in visible_rg_assets if a.get("tier") == "api"]
         backends = [a for a in visible_rg_assets if a.get("tier") == "backend"]
@@ -1294,7 +1645,7 @@ def build_subscription_diagrams_by_rg(
         subnet_assets = [
             asset for asset in visible_rg_assets
             if asset.get("parent_vnet_name")
-            and any(token in (asset.get("arm_type") or "").lower() for token in ("subnet", "hostingenvironment", "serverfarms"))
+            and any(token in (asset.get("arm_type") or "").lower() for token in ("subnet", "hostingenvironment", "serverfarms", "servicefabric"))
         ]
         for subnet in subnet_assets:
             subnet_node_id = subscription_node_id(subnet, sanitise_node_id)
@@ -1333,6 +1684,78 @@ def build_subscription_diagrams_by_rg(
                     cluster_nid = subscription_node_id(backend, sanitise_node_id)
                     if cluster_nid in seen_nodes:
                         add_edge(_sub_ctx_node_id, cluster_nid, "routes to", "#f97316", dasharray="6,3")
+
+        def _parse_routing_targets(raw_targets: object) -> list[dict]:
+            if not raw_targets:
+                return []
+            if isinstance(raw_targets, list):
+                return [item for item in raw_targets if isinstance(item, dict)]
+            if isinstance(raw_targets, str):
+                try:
+                    parsed = json.loads(raw_targets)
+                except Exception:
+                    return []
+                if isinstance(parsed, list):
+                    return [item for item in parsed if isinstance(item, dict)]
+            return []
+
+        def _cluster_key(asset: dict) -> tuple[str, str]:
+            return ((asset.get("rg") or "").strip().lower(), (asset.get("name") or "").strip().lower())
+
+        cluster_assets = [
+            asset
+            for asset in backends
+            if any(t in (asset.get("arm_type") or "").lower() for t in _cluster_arm_types)
+        ]
+
+        for backend in backends:
+            if (backend.get("node_variant") or "") in {"aks_ingress", "aks_service"}:
+                continue
+            targets = _parse_routing_targets(backend.get("routing_targets"))
+            if not targets:
+                continue
+            backend_nid = subscription_node_id(backend, sanitise_node_id)
+            if backend_nid not in seen_nodes:
+                continue
+            matched_cluster_keys: set[tuple[str, str]] = set()
+            for target in targets:
+                target_value = str(target.get("target") or target.get("name") or "").strip().lower()
+                target_rid = str(target.get("target_resource_id") or "").strip().lower()
+                for cluster_asset in cluster_assets:
+                    cluster_key = _cluster_key(cluster_asset)
+                    cluster_id = str(cluster_asset.get("id") or "").strip().lower()
+                    cluster_name = cluster_key[1]
+                    if target_rid and target_rid == cluster_id:
+                        matched_cluster_keys.add(cluster_key)
+                    elif target_value and target_value in {cluster_name, str(cluster_asset.get("short_name") or "").strip().lower()}:
+                        matched_cluster_keys.add(cluster_key)
+
+            for cluster_key in matched_cluster_keys:
+                for route_asset in route_nodes_by_cluster.get(cluster_key, []):
+                    if (route_asset.get("node_variant") or "") != "aks_ingress":
+                        continue
+                    route_nid = subscription_node_id(route_asset, sanitise_node_id)
+                    if route_nid in seen_nodes:
+                        add_edge(backend_nid, route_nid, "routes to", "#f97316", dasharray="6,3")
+
+        for cluster_asset in cluster_assets:
+            cluster_key = _cluster_key(cluster_asset)
+            cluster_nid = subscription_node_id(cluster_asset, sanitise_node_id)
+            if cluster_nid not in seen_nodes:
+                continue
+            for route_asset in route_nodes_by_cluster.get(cluster_key, []):
+                route_nid = subscription_node_id(route_asset, sanitise_node_id)
+                if route_nid not in seen_nodes:
+                    continue
+                if (route_asset.get("node_variant") or "") == "aks_ingress":
+                    add_edge(cluster_nid, route_nid, "routes to", "#f97316", dasharray="6,3")
+                elif (route_asset.get("node_variant") or "") == "aks_service":
+                    ingress_asset = next(
+                        (item for item in route_nodes_by_cluster.get(cluster_key, []) if (item.get("node_variant") or "") == "aks_ingress" and str(item.get("source_namespace") or "") == str(route_asset.get("source_namespace") or "")),
+                        None,
+                    )
+                    if ingress_asset:
+                        add_edge(subscription_node_id(ingress_asset, sanitise_node_id), route_nid, "targets", "#22c55e", dasharray="6,3")
 
         for asset in public_assets:
             if asset.get("tier") == "entry":

@@ -305,34 +305,7 @@ document.getElementById('btn-export-png').addEventListener('click', async () => 
   const svg = container.querySelector('svg');
   if (!svg) return;
   try {
-    const clone = svg.cloneNode(true);
-    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-    bg.setAttribute('width',  clone.getAttribute('width')  || '1200');
-    bg.setAttribute('height', clone.getAttribute('height') || '800');
-    bg.setAttribute('fill', '#0d1117');
-    clone.insertBefore(bg, clone.firstChild);
-    const svgData = new XMLSerializer().serializeToString(clone);
-    const blob    = new Blob([svgData], { type: 'image/svg+xml' });
-    const url     = URL.createObjectURL(blob);
-    const img     = new Image();
-    img.onload = () => {
-      const w = parseInt(svg.getAttribute('width'))  || 1200;
-      const h = parseInt(svg.getAttribute('height')) || 800;
-      const canvas = document.createElement('canvas');
-      canvas.width  = w;
-      canvas.height = h;
-      const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#0d1117';
-      ctx.fillRect(0, 0, w, h);
-      ctx.drawImage(img, 0, 0);
-      URL.revokeObjectURL(url);
-      const a = document.createElement('a');
-      a.href     = canvas.toDataURL('image/png');
-      a.download = (document.title || 'diagram').replace(/[^a-z0-9_-]/gi, '_') + '.png';
-      a.click();
-    };
-    img.src = url;
+    await exportDiagramPNG(svg, document.title || 'diagram');
   } catch (err) {
     console.error('[PNG export]', err);
   }

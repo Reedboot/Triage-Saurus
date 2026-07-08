@@ -56,6 +56,7 @@ from Azure import cosmos_db, app_service_plan, service_bus, container_registry, 
 from Azure import redis_cache, event_hub, app_configuration, service_fabric, cognitive_services
 from Azure import data_factory, app_service_environment, app_insights, private_endpoint, traffic_manager
 from Azure import databricks, event_grid, kusto, logic_apps, search_service
+from Azure import machine_learning
 from Azure import front_door, firewall
 from Azure import network_security_group, route_table, public_ip, load_balancer, bastion_host
 from Azure import user_assigned_identity, virtual_machine, virtual_machine_scale_set, image
@@ -99,6 +100,7 @@ PROVIDERS = [
     ("Logic Apps",              logic_apps.harvest),
     ("Data Factory",            data_factory.harvest),
     # ── AI / ML ─────────────────────────────────────────────────────────
+    ("Machine Learning Workspaces", machine_learning.harvest),
     ("Cognitive Services",      cognitive_services.harvest),
     # ── Security / Config ────────────────────────────────────────────────
     ("Key Vaults",              key_vault.harvest),

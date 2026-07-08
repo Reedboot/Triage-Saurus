@@ -62,6 +62,10 @@ def test_new_azure_arm_types_map_to_expected_catalog_entries():
     assert search["friendly_name"] == "Search Service"
     assert search["category"] == "Database"
 
+    ml = resource_type_db.get_resource_type(None, "Microsoft.MachineLearningServices/workspaces")
+    assert ml["friendly_name"] == "Machine Learning Workspace"
+    assert ml["category"] == "Compute"
+
 
 def test_virtual_machine_arm_type_is_catalogued():
     vm = resource_type_db.get_resource_type(None, "Microsoft.Compute/virtualMachines")

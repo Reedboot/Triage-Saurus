@@ -10,7 +10,7 @@ const CLOUD_MERMAID_CONFIG = {
   startOnLoad: false,
   theme: 'dark',
   securityLevel: 'loose',
-  maxTextSize: 500000,
+  maxTextSize: 2000000,
   flowchart: {
     useMaxWidth: false,
     htmlLabels: false,

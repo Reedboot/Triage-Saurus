@@ -1,5 +1,12 @@
 {
   "_notes": "Triage-Saurus runtime settings. Edited via \u2699 Settings in the web UI or manually. Env vars override these values when set.",
+  "ai_behaviour": {
+    "review_mode": "minimal",
+    "enable_themes": false,
+    "enable_image_summaries": false,
+    "stream_timeout_seconds": 600,
+    "job_timeout_seconds": 3600
+  },
   "ai_models": {
     "global_default": "gpt-5.4-mini",
     "architecture": "",
@@ -12,12 +19,5 @@
     "module_scan_concurrency": 1,
     "pipeline_parallel_mode": true,
     "single_writer_queue_enabled": true
-  },
-  "ai_behaviour": {
-    "review_mode": "minimal",
-    "enable_themes": false,
-    "enable_image_summaries": false,
-    "stream_timeout_seconds": 600,
-    "job_timeout_seconds": 3600
   }
 }

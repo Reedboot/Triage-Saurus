@@ -226,10 +226,77 @@ export function applyEmojiIconFallback(svgEl) {
 
 // ── PNG export functionality ───────────────────────────────────────────────────
 
+function sanitizeFileName(name) {
+  return String(name || 'diagram')
+    .replace(/[^a-z0-9_-]+/gi, '_')
+    .replace(/^_+|_+$/g, '') || 'diagram';
+}
+
+function getSvgExportBounds(svgEl) {
+  const fallback = {
+    x: 0,
+    y: 0,
+    width: parseFloat(svgEl?.getAttribute('width') || '') || svgEl?.clientWidth || svgEl?.scrollWidth || 0,
+    height: parseFloat(svgEl?.getAttribute('height') || '') || svgEl?.clientHeight || svgEl?.scrollHeight || 0,
+  };
+
+  if (!svgEl) return fallback;
+
+  let bounds = null;
+
+  try {
+    const vb = svgEl.viewBox?.baseVal;
+    if (vb && vb.width > 0 && vb.height > 0) {
+      bounds = { x: vb.x, y: vb.y, width: vb.width, height: vb.height };
+    }
+  } catch (_) {}
+
+  try {
+    const box = svgEl.getBBox?.();
+    if (box && box.width > 0 && box.height > 0) {
+      if (bounds) {
+        const minX = Math.min(bounds.x, box.x);
+        const minY = Math.min(bounds.y, box.y);
+        const maxX = Math.max(bounds.x + bounds.width, box.x + box.width);
+        const maxY = Math.max(bounds.y + bounds.height, box.y + box.height);
+        bounds = {
+          x: minX,
+          y: minY,
+          width: Math.max(1, maxX - minX),
+          height: Math.max(1, maxY - minY),
+        };
+      } else {
+        bounds = {
+          x: box.x,
+          y: box.y,
+          width: box.width,
+          height: box.height,
+        };
+      }
+    }
+  } catch (_) {}
+
+  return bounds && bounds.width > 0 && bounds.height > 0 ? bounds : fallback;
+}
+
+function resolveExportScale(bounds) {
+  const preferred = Math.max(2, Math.min(4, window.devicePixelRatio || 1));
+  const maxSide = 16384;
+  const maxArea = 268435456;
+  const sideScale = Math.min(
+    maxSide / Math.max(1, bounds.width),
+    maxSide / Math.max(1, bounds.height),
+  );
+  const areaScale = Math.sqrt(maxArea / Math.max(1, bounds.width * bounds.height));
+  return Math.max(1, Math.min(preferred, sideScale, areaScale));
+}
+
 export async function exportDiagramPNG(svgEl, diagramName = 'diagram') {
   if (!svgEl) return;
 
   try {
+    const bounds = getSvgExportBounds(svgEl);
+    const scale = resolveExportScale(bounds);
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     if (!ctx) {
@@ -237,33 +304,55 @@ export async function exportDiagramPNG(svgEl, diagramName = 'diagram') {
       return;
     }
 
-    const rect = svgEl.getBBox?.() || {
-      x: 0,
-      y: 0,
-      width: svgEl.clientWidth,
-      height: svgEl.clientHeight,
-    };
-    
-    canvas.width = rect.width;
-    canvas.height = rect.height;
+    canvas.width = Math.max(1, Math.ceil(bounds.width * scale));
+    canvas.height = Math.max(1, Math.ceil(bounds.height * scale));
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.fillStyle = '#0d1117';
+    ctx.fillRect(0, 0, bounds.width, bounds.height);
+
+    const clone = svgEl.cloneNode(true);
+    if (!clone.getAttribute('xmlns')) {
+      clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    }
+    if (!clone.getAttribute('xmlns:xlink')) {
+      clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+    }
+    clone.setAttribute('viewBox', `${bounds.x} ${bounds.y} ${bounds.width} ${bounds.height}`);
+    clone.setAttribute('width', `${bounds.width}`);
+    clone.setAttribute('height', `${bounds.height}`);
+    clone.style.removeProperty('max-width');
+    clone.style.removeProperty('width');
+    clone.style.removeProperty('height');
+
+    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    bg.setAttribute('x', String(bounds.x));
+    bg.setAttribute('y', String(bounds.y));
+    bg.setAttribute('width', String(bounds.width));
+    bg.setAttribute('height', String(bounds.height));
+    bg.setAttribute('fill', '#0d1117');
+    clone.insertBefore(bg, clone.firstChild);
 
     const serializer = new XMLSerializer();
-    const svgString = serializer.serializeToString(svgEl);
-    const blob = new Blob([svgString], { type: 'image/svg+xml' });
+    const svgString = serializer.serializeToString(clone);
+    const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
     const url = URL.createObjectURL(blob);
 
     const img = new Image();
     img.onload = () => {
-      ctx.drawImage(img, 0, 0);
-      URL.revokeObjectURL(url);
-
-      const pngUrl = canvas.toDataURL('image/png');
-      const link = document.createElement('a');
-      link.href = pngUrl;
-      link.download = `${diagramName}.png`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      try {
+        ctx.drawImage(img, 0, 0, bounds.width, bounds.height);
+        const pngUrl = canvas.toDataURL('image/png');
+        const link = document.createElement('a');
+        link.href = pngUrl;
+        link.download = `${sanitizeFileName(diagramName)}.png`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
     };
     img.onerror = () => {
       console.error('[diagram-base] Failed to load SVG image');

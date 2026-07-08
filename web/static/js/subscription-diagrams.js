@@ -15,7 +15,7 @@ import {
   enhancePlaceholderGlyphs,
   applyEmojiIconFallback,
   exportDiagramPNG,
-} from './diagram-base.js?v=4';
+} from './diagram-base.js?v=5';
 
 import {
   stampSvgDimensions,
@@ -120,27 +120,7 @@ function bindControlHandlers() {
         console.warn(`[subscription-diagrams] No SVG found in ${diagramId}`);
         return;
       }
-
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      const rect = svgEl.getBBox?.() || { x: 0, y: 0, width: svgEl.clientWidth, height: svgEl.clientHeight };
-
-      canvas.width = rect.width;
-      canvas.height = rect.height;
-
-      const serializer = new XMLSerializer();
-      const svgStr = serializer.serializeToString(svgEl);
-      const img = new Image();
-
-      img.onload = () => {
-        ctx.drawImage(img, 0, 0);
-        const link = document.createElement('a');
-        link.href = canvas.toDataURL('image/png');
-        link.download = `diagram-${diagramId}.png`;
-        link.click();
-      };
-
-      img.src = 'data:image/svg+xml;base64,' + btoa(svgStr);
+      await exportDiagramPNG(svgEl, `diagram-${diagramId}`);
     } catch (err) {
       console.error(`[subscription-diagrams] PNG export failed:`, err);
     }

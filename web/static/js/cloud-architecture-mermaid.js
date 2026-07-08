@@ -5,8 +5,8 @@ import {
 import {
   enhancePlaceholderGlyphs,
   applyEmojiIconFallback,
-} from "./diagram-base.js?v=4";
-import { renderMermaidDiagram, postProcessSvg } from "./subscription-diagrams.js?v=4";
+} from "./diagram-base.js?v=5";
+import { renderMermaidDiagram, postProcessSvg } from "./subscription-diagrams.js?v=5";
 import { autoFitDiagram, applyDiagramScale } from "./diagram-base.js?v=5";
 import {
   CONFIG,
@@ -261,6 +261,11 @@ function buildFallbackModalData(resourceId, nodeData, lookup = {}) {
   ])
   .map((value) => String(value || "").trim())
   .filter(Boolean);
+  const resolvedDnsNames = Array.from(new Set([
+    ...fallbackFqdns,
+    String(nodeData?.fqdn || "").trim(),
+    String(primary?.fqdn || "").trim(),
+  ].filter(Boolean)));
   return {
   title: firstNonEmpty(
     lookup.name,
@@ -274,8 +279,8 @@ function buildFallbackModalData(resourceId, nodeData, lookup = {}) {
   resource_group: firstNonEmpty(lookup.resourceGroup, primary?.rg, nodeData?.resourceGroup),
   type_label: firstNonEmpty(lookup.type, nodeData?.typeLabel, nodeData?.type),
   type: firstNonEmpty(lookup.type, nodeData?.resourceType, nodeData?.arm_type, nodeData?.type),
-  fqdn: firstNonEmpty(nodeData?.fqdn, primary?.fqdn),
-  dns_names: fallbackFqdns,
+  fqdn: firstNonEmpty(nodeData?.fqdn, primary?.fqdn, resolvedDnsNames[0]),
+  dns_names: resolvedDnsNames,
   public_ip: firstNonEmpty(nodeData?.public_ip, primary?.public_ip),
   public_ips: fallbackIps,
   icon_path: firstNonEmpty(nodeData?.icon_path, nodeData?.iconPath),
@@ -1373,7 +1378,8 @@ function collectVnet(data) {
     data?.network?.vnet,
     data?.vnet,
     data?.vnetName,
-    data?.vnet_name
+    data?.vnet_name,
+    data?.parent_vnet_name
   );
   return value || "";
 }
@@ -1415,7 +1421,8 @@ function collectSubnet(data) {
     data?.network?.subnet,
     data?.subnet,
     data?.subnetName,
-    data?.subnet_name
+    data?.subnet_name,
+    data?.parent_subnet_name
   );
   return value || "";
 }
@@ -1555,6 +1562,42 @@ function formatManagedRuleSet(ruleSet = {}) {
   return version ? `${type} ${version}` : type;
 }
 
+function buildParentResourceFields(parentResource) {
+  const fields = [];
+  const parentNetwork = parentResource?.network && typeof parentResource.network === "object" ? parentResource.network : null;
+  const parentVnet = firstNonEmpty(
+    parentNetwork?.vnet,
+    parentResource?.vnet,
+    parentResource?.vnet_name,
+    parentResource?.vnetName
+  );
+  const parentSubnet = firstNonEmpty(
+    parentNetwork?.subnet,
+    parentResource?.subnet,
+    parentResource?.subnet_name,
+    parentResource?.subnetName
+  );
+  const parentNetworkType = firstNonEmpty(
+    parentNetwork?.virtual_network_type,
+    parentNetwork?.virtualNetworkType,
+    parentResource?.virtual_network_type
+  );
+
+  if (parentResource?.name) fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Asset Name</div><div class="cloud-arch-modal-field-value">${escapeHtml(String(parentResource.name))}</div></div>`);
+  if (parentResource?.type_label || parentResource?.type) fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Service Type</div><div class="cloud-arch-modal-field-value">${escapeHtml(String(parentResource.type_label || parentResource.type))}</div></div>`);
+  if (parentResource?.resource_group) fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Resource Group</div><div class="cloud-arch-modal-field-value">${escapeHtml(String(parentResource.resource_group))}</div></div>`);
+  if (parentResource?.location) fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Location</div><div class="cloud-arch-modal-field-value">${escapeHtml(String(parentResource.location))}</div></div>`);
+  if (parentResource?.sku) fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">SKU</div><div class="cloud-arch-modal-field-value">${escapeHtml(String(parentResource.sku))}</div></div>`);
+  if (parentVnet) fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Inherited Virtual Network</div><div class="cloud-arch-modal-field-value">${escapeHtml(parentVnet)}</div></div>`);
+  if (parentSubnet) fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Inherited Subnet</div><div class="cloud-arch-modal-field-value">${escapeHtml(parentSubnet)}</div></div>`);
+  if (parentNetworkType) fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Inherited Virtual Network Type</div><div class="cloud-arch-modal-field-value">${escapeHtml(parentNetworkType)}</div></div>`);
+  const parentDnsNames = collectFqdns(parentResource);
+  if (parentDnsNames.length > 0) {
+    fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">${parentDnsNames.length > 1 ? "DNS Names" : "DNS Name"}</div><div class="cloud-arch-modal-field-value">${parentDnsNames.map((fqdn) => `<code>${escapeHtml(String(fqdn))}</code>`).join("<br/>")}</div></div>`);
+  }
+  return fields.join("");
+}
+
 function renderTabularModalContent(data) {
   if (!modalOverlay || !modalTitle || !modalBody) return;
   modalOverlay.hidden = false;
@@ -1575,14 +1618,7 @@ function renderTabularModalContent(data) {
           Parent Resource
         </div>`}
         <div class="cloud-arch-modal-grid">
-          ${[
-            parentResource.name ? `<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Asset Name</div><div class="cloud-arch-modal-field-value">${escapeHtml(String(parentResource.name))}</div></div>` : "",
-            parentResource.type_label || parentResource.type ? `<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Service Type</div><div class="cloud-arch-modal-field-value">${escapeHtml(String(parentResource.type_label || parentResource.type))}</div></div>` : "",
-            parentResource.resource_group ? `<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Resource Group</div><div class="cloud-arch-modal-field-value">${escapeHtml(String(parentResource.resource_group))}</div></div>` : "",
-            parentResource.location ? `<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Location</div><div class="cloud-arch-modal-field-value">${escapeHtml(String(parentResource.location))}</div></div>` : "",
-            parentResource.sku ? `<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">SKU</div><div class="cloud-arch-modal-field-value">${escapeHtml(String(parentResource.sku))}</div></div>` : "",
-            parentResource.fqdn ? `<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">FQDN</div><div class="cloud-arch-modal-field-value"><code>${escapeHtml(String(parentResource.fqdn))}</code></div></div>` : "",
-          ].filter(Boolean).join("")}
+          ${buildParentResourceFields(parentResource)}
         </div>
       </div>
     `
@@ -1827,6 +1863,21 @@ function renderModalContent(data) {
   const publicNetworkAccess = collectPublicNetworkAccess(data);
   const ipRestrictions = collectIpRestrictions(data);
   const childNodes = Array.isArray(data.__node_children) ? data.__node_children : [];
+  const parentResource = data.parent_resource && typeof data.parent_resource === "object" ? data.parent_resource : null;
+  const parentResourceSection = parentResource
+    ? `
+      <div class="cloud-arch-modal-section">
+        ${suppressParentHeading ? "" : `
+        <div class="cloud-arch-modal-section-title">
+          <span class="cloud-arch-modal-section-icon">🧭</span>
+          Parent Resource
+        </div>`}
+        <div class="cloud-arch-modal-grid">
+          ${buildParentResourceFields(parentResource)}
+        </div>
+      </div>
+    `
+    : "";
 
   const sections = [];
 
@@ -1869,7 +1920,7 @@ function renderModalContent(data) {
   const networkFields = [];
   if (fqdns.length > 0) {
     networkFields.push({
-      label: "FQDN",
+      label: fqdns.length > 1 ? "DNS Names" : "DNS Name",
       value: fqdns.map((fqdn) => `<code>${escapeHtml(fqdn)}</code>`).join("<br/>"),
       isHtml: true,
     });
@@ -1942,12 +1993,12 @@ function renderModalContent(data) {
     });
   }
 
-  if (!sections.length) {
+  if (!sections.length && !parentResourceSection) {
     modalBody.innerHTML = '<div class="cloud-arch-modal-empty">No core resource details found for this node.</div>';
     return;
   }
 
-  modalBody.innerHTML = sections
+  modalBody.innerHTML = `${parentResourceSection}${sections
     .map(
       (section) => `
       <div class="cloud-arch-modal-section">
@@ -1971,7 +2022,7 @@ function renderModalContent(data) {
       </div>
     `
     )
-    .join("");
+    .join("")}`;
 }
 
 function renderSummary(payload, subscriptionName, viewMode) {

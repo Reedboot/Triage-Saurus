@@ -37,6 +37,7 @@ from Azure._staged import BackfillJob, StagedRows
 from Azure import app_configuration, storage, aks, key_vault, sql_server, service_bus, event_hub, virtual_network
 from Azure import load_balancer
 from Azure import virtual_machine
+from Azure import machine_learning
 
 
 def _is_ip_address(value: str) -> bool:
@@ -148,6 +149,41 @@ class TestLoadBalancerHarvest:
         assert raw["properties"]["frontendIPConfigurations"][0]["properties"]["publicIPAddress"]["id"] == pip_id
         assert raw["_extra"]["public_ip_resource_ids"] == [pip_id]
         assert raw["_extra"]["routing_targets"][0]["target"] == "power_bi_gateway"
+
+
+class TestMachineLearningHarvest:
+    def test_harvest_extracts_workspace_url_and_public_state(self, monkeypatch):
+        workspace_id = "/subscriptions/sub-1/resourceGroups/rg-ai/providers/Microsoft.MachineLearningServices/workspaces/ml-prod"
+        workspace = {
+            "id": workspace_id,
+            "name": "ml-prod",
+            "resourceGroup": "rg-ai",
+            "type": "Microsoft.MachineLearningServices/workspaces",
+            "location": "uksouth",
+            "properties": {
+                "workspaceUrl": "https://ml-prod.uksouth.api.azureml.ms",
+                "publicNetworkAccess": "Enabled",
+                "privateEndpointConnections": [],
+            },
+            "tags": {"pipeline": "customer"},
+        }
+
+        def fake_az(args, subscription_id):
+            assert args == ["resource", "list", "--resource-type", machine_learning.RESOURCE_TYPE]
+            assert subscription_id == "sub-1"
+            return [workspace]
+
+        monkeypatch.setattr(machine_learning, "az", fake_az)
+
+        rows = machine_learning.harvest("sub-1")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["id"] == workspace_id
+        assert row["fqdn"] == "ml-prod.uksouth.api.azureml.ms"
+        assert row["is_public"] == 1
+        assert row["is_restricted"] == 0
+        raw = json.loads(row["raw_json"])
+        assert raw["_extra"]["workspace_url"] == "https://ml-prod.uksouth.api.azureml.ms"
 
 
 # ---------------------------------------------------------------------------

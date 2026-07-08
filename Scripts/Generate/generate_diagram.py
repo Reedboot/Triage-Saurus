@@ -385,9 +385,14 @@ class HierarchicalDiagramBuilder:
         rtype = (resource.get('resource_type') or '').lower()
         significant_tokens = (
             'key_vault', 'keyvault', 'database', 'sql', 'cosmos', 'storage',
+            'servicebus', 'service_bus', 'eventhub',
+            'service_fabric', 'servicefabric',
             'managed_identity', 'user_assigned_identity', 'automation_account',
             'ecs_cluster', 'lambda_function', 'ecs_service', 'ecs_task',
             'secretsmanager', 'secrets_manager',
+            'cognitive_services', 'cognitiveservices', 'applied_ai_services',
+            'machinelearningservices', 'machine_learning', 'ai_studio', 'openai',
+            'foundry',
             # Multi-cloud resource types that are often important even when
             # connection inference is sparse.
             'oss_bucket', 'objectstorage_bucket', 'compartment',
@@ -1949,6 +1954,10 @@ class HierarchicalDiagramBuilder:
             'function_app', 'linux_function_app', 'windows_function_app',
             'app_service', 'linux_web_app', 'windows_web_app',
             'elastic_beanstalk',
+            'cognitive_services', 'cognitiveservices',
+            'applied_ai_services', 'machinelearningservices',
+            'machine_learning', 'ai_studio', 'openai', 'foundry',
+            'service_fabric', 'servicefabric',
             'cloudfunctions_function', 'cloud_function',  # GCP
             'app_engine', 'appengine',  # GCP App Engine
             'cloud_run', 'cloudrun',  # GCP Cloud Run
@@ -1962,13 +1971,13 @@ class HierarchicalDiagramBuilder:
             'servicebus', 'service_bus', 
             'sqs', 'sns', 
             'pubsub', 'pub_sub',
-            'eventbridge', 'event_hub'
+            'eventbridge', 'event_hub', 'eventhub'
         ])
     
     def is_service_bus_topic(self, resource: dict) -> bool:
         """Check if resource is a topic/SNS."""
         rtype = (resource.get('resource_type') or '').lower()
-        return 'topic' in rtype or 'sns' in rtype
+        return 'topic' in rtype or 'sns' in rtype or 'eventhub' in rtype
     
     def is_service_bus_queue(self, resource: dict) -> bool:
         """Check if resource is a queue/SQS."""
@@ -1978,7 +1987,11 @@ class HierarchicalDiagramBuilder:
     def is_service_bus_subscription(self, resource: dict) -> bool:
         """Check if resource is a subscription."""
         rtype = (resource.get('resource_type') or '').lower()
-        return 'subscription' in rtype and 'servicebus' in rtype
+        return (
+            ('subscription' in rtype and 'servicebus' in rtype)
+            or 'eventhub_consumer_group' in rtype
+            or 'consumer_group' in rtype
+        )
 
     def is_database_resource(self, resource: dict) -> bool:
         """Check if resource looks like a SQL/database endpoint."""
@@ -4449,7 +4462,10 @@ class HierarchicalDiagramBuilder:
             queues = [r for r in ns_children if self.is_service_bus_queue(r)]
 
             # Determine connectivity FIRST so it can influence which children to show.
-            namespace_connected = self._is_connected_name(namespace_name)
+            namespace_connected = (
+                self._is_connected_name(namespace_name)
+                or self._is_architecturally_significant(namespace)
+            )
 
             topics_to_render = []
             for topic in topics:
@@ -4514,15 +4530,15 @@ class HierarchicalDiagramBuilder:
         ]
 
         for topic in orphan_topics:
-            if self._is_connected_name(topic.get('resource_name', '')):
+            if self._is_connected_name(topic.get('resource_name', '')) or self._is_architecturally_significant(topic):
                 _render_topic(topic)
 
         for queue in orphan_queues:
-            if self._is_connected_name(queue.get('resource_name', '')):
+            if self._is_connected_name(queue.get('resource_name', '')) or self._is_architecturally_significant(queue):
                 _render_queue(queue)
 
         for subscription in orphan_subscriptions:
-            if self._is_connected_name(subscription.get('resource_name', '')):
+            if self._is_connected_name(subscription.get('resource_name', '')) or self._is_architecturally_significant(subscription):
                 lines.append(self.render_node(subscription, indent="    "))
                 rendered_ids.add(subscription['id'])
         
@@ -6027,6 +6043,7 @@ class HierarchicalDiagramBuilder:
                 self._is_connected_resource(r)
                 or self._is_exposed_resource(r)
                 or self.children_by_parent.get(r['id'])
+                or self._is_architecturally_significant(r)
             )
         ]
         app_related_ids = {r['id'] for r in app_resources}
@@ -6054,7 +6071,11 @@ class HierarchicalDiagramBuilder:
             and r['id'] not in app_related_ids
             and not r.get('resource_name', '').startswith('${var.')
             and not r.get('resource_name', '').startswith('${local.')
-            and (self._is_connected_resource(r) or self._is_exposed_resource(r))
+            and (
+                self._is_connected_resource(r)
+                or self._is_exposed_resource(r)
+                or self._is_architecturally_significant(r)
+            )
         ]
         _sql_resource_ids_first = {r['id'] for r in sql_resources}
 
@@ -6070,7 +6091,11 @@ class HierarchicalDiagramBuilder:
             and r['id'] not in _sql_resource_ids_first
             and not r.get('resource_name', '').startswith('${var.')
             and not r.get('resource_name', '').startswith('${local.')
-            and (self._is_connected_resource(r) or self._is_exposed_resource(r))
+            and (
+                self._is_connected_resource(r)
+                or self._is_exposed_resource(r)
+                or self._is_architecturally_significant(r)
+            )
         ]
 
         data_related_ids = {r['id'] for r in sql_resources}
@@ -6535,6 +6560,8 @@ class HierarchicalDiagramBuilder:
         if any(t in rtype for t in ['compute', 'vm', 'ec2', 'instance']):
             return 'Compute'
         if any(t in rtype for t in ['kubernetes', 'aks', 'eks', 'gke', 'container', 'deployment', 'service']):
+            return 'Container'
+        if any(t in rtype for t in ['service_fabric', 'servicefabric']):
             return 'Container'
         if any(t in rtype for t in ['database', 'sql', 'rds', 'cosmos', 'dynamodb']):
             return 'Database'

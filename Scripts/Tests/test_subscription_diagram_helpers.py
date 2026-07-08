@@ -11,6 +11,8 @@ sys.path.insert(0, str(ROOT / "web"))
 from subscription_diagram_helpers import (  # type: ignore
     build_subscription_diagrams_by_rg,
     subscription_assets_from_rows,
+    subscription_asset_tier,
+    subscription_is_allowlist_target,
     subscription_node_id,
 )
 
@@ -128,6 +130,76 @@ def test_extracts_app_service_environment_vnet_and_subnet():
     assert ase["parent_vnet_name"] == "app-vnet"
 
 
+def test_extracts_service_fabric_vnet_and_subnet_from_node_types():
+    subnet_id = "/subscriptions/000/resourceGroups/rg-app/providers/Microsoft.Network/virtualNetworks/sf-vnet/subnets/sf-subnet"
+    rows = [
+        (
+            "sf-vnet",
+            "Microsoft.Network/virtualNetworks",
+            "rg-net",
+            None,
+            False,
+            None,
+            "/subscriptions/000/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/sf-vnet",
+            False,
+            None,
+            False,
+            None,
+            None,
+            json.dumps({"properties": {}}),
+            None,
+        ),
+        (
+            "sf-subnet",
+            "Microsoft.Network/virtualNetworks/subnets",
+            "rg-net",
+            None,
+            False,
+            None,
+            "/subscriptions/000/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/sf-vnet/subnets/sf-subnet",
+            False,
+            None,
+            False,
+            None,
+            None,
+            json.dumps({"properties": {}}),
+            None,
+        ),
+        (
+            "sf-cluster",
+            "Microsoft.ServiceFabric/clusters",
+            "rg-app",
+            None,
+            False,
+            None,
+            "/subscriptions/000/resourceGroups/rg-app/providers/Microsoft.ServiceFabric/clusters/sf-cluster",
+            False,
+            None,
+            False,
+            None,
+            None,
+            json.dumps({
+                "properties": {
+                    "nodeTypes": [
+                        {
+                            "subnetId": subnet_id,
+                        }
+                    ]
+                }
+            }),
+            None,
+        ),
+    ]
+
+    assets = subscription_assets_from_rows(rows, _friendly_type)
+    sf = next(asset for asset in assets if asset["name"] == "sf-cluster")
+
+    assert sf["subnet_id"] == subnet_id
+    assert sf["subnet_name"] == "sf-subnet"
+    assert sf["vnet_name"] == "sf-vnet"
+    assert sf["parent_vnet_name"] == "sf-vnet"
+
+
 def test_app_service_environment_renders_inside_vnet_and_subnet():
     subnet_id = "/subscriptions/000/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/app-vnet/subnets/app-subnet"
     rows = [
@@ -230,6 +302,98 @@ def test_app_service_environment_renders_inside_vnet_and_subnet():
     assert plan["subnet_name"] == "app-subnet"
     assert plan["subnet_id"] == subnet_id
     assert f'{subnet_node_id} -->|"in subnet"| {plan_node_id}' in view["mermaid"]
+
+
+def test_service_fabric_cluster_renders_inside_vnet_and_subnet():
+    subnet_id = "/subscriptions/000/resourceGroups/rg-app/providers/Microsoft.Network/virtualNetworks/sf-vnet/subnets/sf-subnet"
+    rows = [
+        (
+            "sf-vnet",
+            "Microsoft.Network/virtualNetworks",
+            "rg-app",
+            None,
+            False,
+            None,
+            "/subscriptions/000/resourceGroups/rg-app/providers/Microsoft.Network/virtualNetworks/sf-vnet",
+            False,
+            None,
+            False,
+            None,
+            None,
+            json.dumps({"properties": {}}),
+            None,
+        ),
+        (
+            "sf-subnet",
+            "Microsoft.Network/virtualNetworks/subnets",
+            "rg-app",
+            None,
+            False,
+            None,
+            "/subscriptions/000/resourceGroups/rg-app/providers/Microsoft.Network/virtualNetworks/sf-vnet/subnets/sf-subnet",
+            False,
+            None,
+            False,
+            None,
+            None,
+            json.dumps({"properties": {}}),
+            None,
+        ),
+        (
+            "sf-cluster",
+            "Microsoft.ServiceFabric/clusters",
+            "rg-app",
+            None,
+            False,
+            None,
+            "/subscriptions/000/resourceGroups/rg-app/providers/Microsoft.ServiceFabric/clusters/sf-cluster",
+            False,
+            None,
+            False,
+            None,
+            None,
+            json.dumps({
+                "properties": {
+                    "nodeTypes": [
+                        {
+                            "subnetId": subnet_id,
+                        }
+                    ]
+                }
+            }),
+            None,
+        ),
+    ]
+
+    diagrams = build_subscription_diagrams_by_rg(
+        "Test Subscription",
+        "production",
+        rows,
+        sanitise_node_id=lambda s: s.replace("/", "_").replace("-", "_"),
+        friendly_type=lambda t: t,
+        get_icon_path=lambda t: None,
+        normalize_attack_paths=lambda *args, **kwargs: [],
+    )
+
+    view = next(d["views"]["connectivity"] for d in diagrams if d["rg"] == "rg-app")
+    assets = subscription_assets_from_rows(rows, _friendly_type)
+    vnet = next(asset for asset in assets if asset["name"] == "sf-vnet")
+    subnet = next(asset for asset in assets if asset["name"] == "sf-subnet")
+    sf = next(asset for asset in assets if asset["name"] == "sf-cluster")
+
+    vnet_node_id = subscription_node_id(vnet, lambda s: s.replace("/", "_").replace("-", "_"))
+    subnet_node_id = subscription_node_id(subnet, lambda s: s.replace("/", "_").replace("-", "_"))
+    sf_node_id = subscription_node_id(sf, lambda s: s.replace("/", "_").replace("-", "_"))
+
+    assert f'{vnet_node_id} -->|"contains"| {subnet_node_id}' in view["mermaid"]
+    assert f'{subnet_node_id} -->|"in subnet"| {sf_node_id}' in view["mermaid"]
+
+
+def test_machine_learning_workspace_is_backend_and_allowlist_target():
+    assert subscription_asset_tier("Microsoft.MachineLearningServices/workspaces", "ml-prod") == "backend"
+    assert subscription_is_allowlist_target({
+        "arm_type": "Microsoft.MachineLearningServices/workspaces",
+    }) is True
 
 
 def test_extracts_vmss_gateway_and_internal_lb_subnets():

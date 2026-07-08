@@ -15,7 +15,7 @@
       window.mermaid.initialize({
         startOnLoad: false,
         securityLevel: 'loose',
-        maxTextSize: 500000,
+        maxTextSize: 2000000,
       });
       console.info('✓ Mermaid initialized');
     }

@@ -18,6 +18,7 @@ const rootEl = document.getElementById("cloud-arch-root");
 const emptyEl = document.getElementById("cloud-arch-empty");
 const summaryLineEl = document.getElementById("cloud-arch-summary-line");
 const legendEl = document.getElementById("cloud-arch-provider-legend");
+const missingAssetsEl = document.getElementById("cloud-arch-missing-assets");
 const errorCardEl = document.getElementById("cloud-arch-error-card");
 const errorEl = document.getElementById("cloud-arch-error");
 const formEl = document.getElementById("cloud-arch-form");
@@ -46,6 +47,16 @@ function escapeMermaidText(value) {
     .replace(/\|/g, "/")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+function isNoisyMonitoringAsset(asset) {
+  const typeKey = String(asset?.type || asset?.resourceType || asset?.type_label || "").toLowerCase();
+  return (
+    typeKey.endsWith("microsoft.insights/actiongroups") ||
+    typeKey.endsWith("microsoft.insights/components") ||
+    typeKey.includes("/actiongroups") ||
+    typeKey.includes("/components")
+  );
 }
 
 function sanitizeMermaidId(value, fallback) {
@@ -789,6 +800,24 @@ function renderModalContent(data) {
   const sections = [];
 
   if (hasDistinctParent) {
+    const parentNetwork = data.parent_resource.network && typeof data.parent_resource.network === "object" ? data.parent_resource.network : null;
+    const parentVnet = firstNonEmpty(
+      parentNetwork?.vnet,
+      data.parent_resource.vnet,
+      data.parent_resource.vnet_name,
+      data.parent_resource.vnetName
+    );
+    const parentSubnet = firstNonEmpty(
+      parentNetwork?.subnet,
+      data.parent_resource.subnet,
+      data.parent_resource.subnet_name,
+      data.parent_resource.subnetName
+    );
+    const parentNetworkType = firstNonEmpty(
+      parentNetwork?.virtual_network_type,
+      parentNetwork?.virtualNetworkType,
+      data.parent_resource.virtual_network_type
+    );
     sections.push({
       title: suppressParentHeading ? "" : "Parent Resource",
       icon: data.parent_resource.icon_path
@@ -798,7 +827,11 @@ function renderModalContent(data) {
         { label: "Name", value: data.parent_resource.name },
         { label: "Type", value: data.parent_resource.type_label || data.parent_resource.type },
         { label: "Resource Group", value: data.parent_resource.resource_group || "—" },
-      ],
+        parentVnet ? { label: "Inherited Virtual Network", value: parentVnet } : null,
+        parentSubnet ? { label: "Inherited Subnet", value: parentSubnet } : null,
+        parentNetworkType ? { label: "Inherited Virtual Network Type", value: parentNetworkType } : null,
+        data.parent_resource.fqdn ? { label: "FQDN", value: data.parent_resource.fqdn } : null,
+      ].filter(Boolean),
     });
   }
 
@@ -1357,17 +1390,51 @@ function App() {
     const resourceCount = payload?.summary?.resource_count ?? 0;
     const displayedCount = payload?.summary?.displayed_resource_count ?? resourceCount;
     const omittedCount = payload?.summary?.omitted_resource_count ?? 0;
+    const missingAssets = (Array.isArray(payload?.summary?.missing_assets) ? payload.summary.missing_assets : [])
+      .filter((asset) => !isNoisyMonitoringAsset(asset));
+    const missingCount = payload?.summary?.missing_asset_count ?? missingAssets.length;
     const connectionCount = payload?.summary?.connection_count ?? 0;
     const modeLabel = viewModeLabel(viewMode);
     summaryLineEl.innerHTML = [
       `<span><strong>${resourceCount}</strong> resources</span>`,
       omittedCount > 0 ? `<span><strong>${displayedCount}</strong> shown</span>` : null,
+      missingCount > 0 ? `<span><strong>${missingCount}</strong> missing</span>` : null,
       `<span><strong>${connectionCount}</strong> connections</span>`,
       payload?.summary?.layout_mode ? `<span><strong>${modeLabel}</strong> mode</span>` : null,
       `<span><strong>${subscriptionName || "subscription-production"}</strong></span>`,
     ]
       .filter(Boolean)
       .join(" ");
+
+    if (missingAssetsEl) {
+      if (missingAssets.length > 0) {
+        const itemsHtml = missingAssets.slice(0, 12).map((asset) => {
+          const name = escapeHtml(asset?.name || asset?.id || "Unknown asset");
+          const typeLabel = escapeHtml(asset?.type_label || asset?.type || "Unknown type");
+          const resourceGroup = asset?.resource_group ? ` • ${escapeHtml(asset.resource_group)}` : "";
+          const reason = escapeHtml(asset?.reason || "Architecturally relevant resource hidden by overview compaction");
+          return `
+            <li class="cloud-arch-missing-assets__item">
+              <span class="cloud-arch-missing-assets__name">${name}</span>
+              <div class="cloud-arch-missing-assets__meta">${typeLabel}${resourceGroup}</div>
+              <div class="cloud-arch-missing-assets__meta">${reason}</div>
+            </li>
+          `;
+        }).join("");
+        const moreCount = missingAssets.length - Math.min(missingAssets.length, 12);
+        missingAssetsEl.hidden = false;
+        missingAssetsEl.innerHTML = `
+          <div class="cloud-arch-missing-assets__title">Missing from chart</div>
+          <ul class="cloud-arch-missing-assets__list">
+            ${itemsHtml}
+          </ul>
+          ${moreCount > 0 ? `<div class="cloud-arch-missing-assets__meta" style="margin-top:8px;">+${moreCount} more omitted resources</div>` : ""}
+        `;
+      } else {
+        missingAssetsEl.hidden = true;
+        missingAssetsEl.innerHTML = "";
+      }
+    }
 
     legendEl.innerHTML = providers
       .map((provider) => {
@@ -1419,6 +1486,10 @@ function App() {
     hideError();
     summaryLineEl.textContent = "Loading architecture from CozoDB…";
     legendEl.innerHTML = "";
+    if (missingAssetsEl) {
+      missingAssetsEl.hidden = true;
+      missingAssetsEl.innerHTML = "";
+    }
 
     const url = new URL("/api/cloud/architecture", window.location.origin);
     const sub = (subscriptionName || "").trim();
@@ -1637,6 +1708,10 @@ function App() {
       showError(err instanceof Error ? err.message : String(err));
       summaryLineEl.textContent = "Unable to load cloud architecture.";
       legendEl.innerHTML = "";
+      if (missingAssetsEl) {
+        missingAssetsEl.hidden = true;
+        missingAssetsEl.innerHTML = "";
+      }
     }
   }, [hideError, renderSummary, showError]);
 

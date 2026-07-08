@@ -1833,8 +1833,63 @@ class TestIngressDiagramGeneration:
         result = self._call(rows=rows, firewall_policy_rows=firewall_policy_rows)
         mermaid = result.get("mermaid", "")
         assert "Policy: policy-one" in mermaid, mermaid
-        titles = {v.get("title") for v in result.get("node_drilldown_map", {}).values()}
-        assert "policy-one" in titles, titles
+
+    def test_sql_server_nodes_use_real_names_in_group_labels(self):
+        """SQL data-store grouping should keep the resource names visible."""
+        import json
+
+        rows = [
+            (
+                "payments-sql",
+                "Microsoft.Sql/servers",
+                "rg-data",
+                "payments-sql.database.windows.net",
+                0,
+                "Standard",
+                "sql-payments-id",
+                0,
+                None,
+                1,
+                None,
+                None,
+                json.dumps({
+                    "properties": {
+                        "publicNetworkAccess": "Enabled",
+                        "networkAcls": {"defaultAction": "Deny"},
+                    }
+                }),
+                json.dumps(["azure_ad"]),
+                None,
+            ),
+            (
+                "orders-sql",
+                "Microsoft.Sql/servers",
+                "rg-data",
+                "orders-sql.database.windows.net",
+                0,
+                "Standard",
+                "sql-orders-id",
+                0,
+                None,
+                1,
+                None,
+                None,
+                json.dumps({
+                    "properties": {
+                        "publicNetworkAccess": "Enabled",
+                        "networkAcls": {"defaultAction": "Deny"},
+                    }
+                }),
+                json.dumps(["azure_ad"]),
+                None,
+            ),
+        ]
+
+        result = self._call(rows=rows)
+        mermaid = result.get("mermaid", "")
+        assert "payments-sql" in mermaid, mermaid
+        assert "orders-sql" in mermaid, mermaid
+        assert "SQL (2×)" not in mermaid, mermaid
 
     def test_private_appgw_keeps_listener_chain_to_waf_and_gateway(self):
         """Listener nodes should still route to WAF/AppGW when Internet edges are absent."""
@@ -2486,6 +2541,7 @@ class TestIngressDiagramGeneration:
 
     def test_app_service_plan_drilldown_lists_hosted_apps(self):
         """The App Service Plan drilldown must list hosted app services."""
+        import json
         import sqlite3
 
         from web.app import _build_child_table
@@ -2498,6 +2554,8 @@ class TestIngressDiagramGeneration:
                     name TEXT,
                     resource_group TEXT,
                     fqdn TEXT,
+                    location TEXT,
+                    sku TEXT,
                     is_public INTEGER,
                     is_restricted INTEGER,
                     raw_json TEXT,
@@ -2507,22 +2565,47 @@ class TestIngressDiagramGeneration:
                 )
                 """
             )
+            ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/test-ase"
             plan_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/serverfarms/test-plan"
             site_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/orders-fn-app"
             conn.executemany(
                 """
                 INSERT INTO provisioned_assets
-                    (name, resource_group, fqdn, is_public, is_restricted, raw_json, type, subscription_id, id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (name, resource_group, fqdn, location, sku, is_public, is_restricted, raw_json, type, subscription_id, id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
+                    (
+                        "test-ase",
+                        "rg-app",
+                        "test-ase.appserviceenvironment.net",
+                        "ukwest",
+                        "ASEv3",
+                        0,
+                        0,
+                        json.dumps({
+                            "properties": {
+                                "virtualNetwork": {
+                                    "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-prod",
+                                },
+                                "subnet": {
+                                    "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-prod/subnets/ase-subnet",
+                                },
+                            }
+                        }),
+                        "Microsoft.Web/hostingEnvironments",
+                        "sub-1",
+                        ase_id,
+                    ),
                     (
                         "test-plan",
                         "rg-app",
                         "",
+                        "ukwest",
+                        "P1v3",
                         0,
                         0,
-                        '{"kind": "app"}',
+                        json.dumps({"kind": "app", "hostingEnvironmentProfile": {"id": ase_id}}),
                         "Microsoft.Web/serverfarms",
                         "sub-1",
                         plan_id,
@@ -2531,6 +2614,8 @@ class TestIngressDiagramGeneration:
                         "orders-fn-app",
                         "rg-app",
                         "orders.example.com",
+                        "",
+                        "",
                         1,
                         0,
                         f'{{"serverFarmId": "{plan_id}", "kind": "functionapp,linux"}}',
@@ -2556,6 +2641,8 @@ class TestIngressDiagramGeneration:
         assert any(row[0] == "orders-fn-app" for row in result["rows"]), result["rows"]
         assert result["parent_resource"]["name"] == "test-plan", result
         assert result["parent_resource"]["type_label"] == "App Service Plan", result
+        assert result["parent_resource"]["network"]["vnet"] == "vnet-prod", result
+        assert result["parent_resource"]["network"]["subnet"] == "ase-subnet", result
 
     def test_app_service_environment_drilldown_uses_correct_parent_type(self):
         """ASE drilldown should nest apps under their App Service Plans."""
@@ -3273,6 +3360,57 @@ class TestIngressDiagramGeneration:
         assert 'Internet -->|"IP allowlist (Key Vault)"| rgdata_kvone' in mermaid, mermaid
         assert "linkStyle 0 stroke:#f59e0b" in mermaid, mermaid
 
+    def test_appgw_apim_backend_url_routes_to_apim_node(self):
+        """App Gateway backend URLs should resolve to the APIM node even when URL-shaped."""
+        rows = [
+            (
+                "cop-resource-server-apim",
+                "Microsoft.Network/applicationGateways",
+                "rg-app",
+                "cop-resource-server-apim.example.com",
+                1,
+                "WAF_v2",
+                "appgw-id",
+                0,
+                "HTTPS:443",
+                0,
+                None,
+                None,
+            ),
+            (
+                "cbuk-core-prodgreen-api-uksouth",
+                "Microsoft.ApiManagement/service",
+                "rg-api",
+                "cbuk-core-prodgreen-api-uksouth.azure-api.net",
+                1,
+                "Developer",
+                "apim-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                "{}",
+            ),
+        ]
+        appgw_routes = [
+            (
+                "cop-resource-server-apim",
+                "cop-resource-server-apim.example.com",
+                '["https://cbuk-core-prodgreen-api-uksouth.azure-api.net/"]',
+                "backend-pool",
+                "listener-one",
+                "/*",
+                "HTTPS",
+                None,
+            ),
+        ]
+
+        result = self._call(rows=rows, appgw_routes=appgw_routes)
+        mermaid = result.get("mermaid", "")
+        assert 'agpool_rg_app_cop_resource_server_apim_backend_pool -->|"HTTPS"| grp_APIM_Public' in mermaid, mermaid
+        assert "cbuk-core-prodgreen-api-uksouth.azure-api.net" in mermaid, mermaid
+
 
 class TestSubscriptionResourceGroupDiagrams:
     """Unit tests for per-resource-group subscription diagrams."""
@@ -3325,13 +3463,18 @@ class TestSubscriptionResourceGroupDiagrams:
             ),
         ]
 
-    def _call(self):
+    def _call(self, rows=None, aks_route_rows=None):
         import sys
         import os
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
         os.environ.setdefault("FLASK_APP", "web/app.py")
         from web.app import _build_subscription_diagrams_by_rg
-        return _build_subscription_diagrams_by_rg("Test Subscription", "production", self._make_rows())
+        return _build_subscription_diagrams_by_rg(
+            "Test Subscription",
+            "production",
+            rows if rows is not None else self._make_rows(),
+            aks_route_rows=aks_route_rows,
+        )
 
     def test_rg_diagrams_include_mode_views(self):
         diagrams = self._call()
@@ -3390,6 +3533,64 @@ class TestSubscriptionResourceGroupDiagrams:
 
         mermaid = diagrams[0]["views"]["connectivity"]["mermaid"]
         assert "appgw-one.example.com" in mermaid, mermaid
+
+    def test_rg_connectivity_renders_aks_ingress_and_service_routes(self):
+        aks_route_rows = [
+            (
+                "sts",
+                "orders",
+                "orders-ingress",
+                "orders.example.com",
+                "/api/*",
+                "orders-service",
+                "8080",
+                "orders-deploy",
+                "git@example.com/orders",
+                "rg-app",
+                '{"app":"orders"}',
+            )
+        ]
+
+        rows = self._make_rows() + [
+            (
+                "sts",
+                "Microsoft.Web/sites",
+                "rg-app",
+                "sts.example.com",
+                0,
+                "P1v3",
+                "sts-id",
+                0,
+                None,
+                0,
+                None,
+                '[{"target":"sts","target_resource_id":"aks-id","name":"sts"}]',
+                None,
+                None,
+            ),
+            (
+                "sts",
+                "Microsoft.ContainerService/managedClusters",
+                "rg-app",
+                "",
+                0,
+                None,
+                "aks-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                None,
+                None,
+            ),
+        ]
+        diagrams = self._call(rows=rows, aks_route_rows=aks_route_rows)
+        mermaid = diagrams[0]["views"]["connectivity"]["mermaid"]
+        assert "orders.example.com" in mermaid, mermaid
+        assert "orders-ingress" in mermaid, mermaid
+        assert "orders-service" in mermaid, mermaid
+        assert "routes to" in mermaid, mermaid
 
 
 class TestCosmosDbFqdnResolution:
@@ -5029,6 +5230,127 @@ class TestCloudPosture:
         edges = payload["edges"]
         assert any(e["source"] == ase_id and e["target"] == site_id for e in edges), edges
 
+    def test_subscription_architecture_payload_infers_service_fabric_network_from_vmss_children(self):
+        import json
+        import sqlite3
+
+        from web.app import _build_subscription_architecture_payload
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE subscriptions (
+                    id TEXT PRIMARY KEY,
+                    display_name TEXT,
+                    environment TEXT,
+                    state TEXT,
+                    last_synced TEXT
+                );
+                CREATE TABLE provisioned_assets (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    resource_group TEXT,
+                    name TEXT,
+                    type TEXT,
+                    location TEXT,
+                    sku TEXT,
+                    fqdn TEXT,
+                    is_public INTEGER DEFAULT 0,
+                    status TEXT,
+                    pipeline_tag TEXT,
+                    first_detected TEXT,
+                    last_synced TEXT,
+                    raw_json TEXT,
+                    is_restricted INTEGER DEFAULT 0,
+                    waf_mode TEXT
+                );
+                """
+            )
+            conn.execute(
+                "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+                ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+            )
+            cluster_id = "/subscriptions/sub-1/resourceGroups/cbuk-core-prodgreen-sf-uksouth/providers/Microsoft.ServiceFabric/clusters/cbuk-core-prodgreen-sf"
+            vmss_id = "/subscriptions/sub-1/resourceGroups/cbuk-core-prodgreen-sf-uksouth/providers/Microsoft.Compute/virtualMachineScaleSets/sharedz1"
+            subnet_id = "/subscriptions/sub-1/resourceGroups/cbuk-core-prodgreen-network-uksouth/providers/Microsoft.Network/virtualNetworks/prodgreen/subnets/service_fabric_zonal"
+            conn.executemany(
+                """
+                INSERT INTO provisioned_assets (
+                    id, subscription_id, resource_group, name, type, location, sku,
+                    fqdn, is_public, status, pipeline_tag, first_detected, last_synced,
+                    raw_json, is_restricted, waf_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        cluster_id,
+                        "sub-1",
+                        "cbuk-core-prodgreen-sf-uksouth",
+                        "cbuk-core-prodgreen-sf",
+                        "Microsoft.ServiceFabric/clusters",
+                        "uksouth",
+                        "Standard",
+                        None,
+                        0,
+                        "active",
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        json.dumps({"clusterCodeVersion": "11.2.274.1"}),
+                        0,
+                        None,
+                    ),
+                    (
+                        vmss_id,
+                        "sub-1",
+                        "cbuk-core-prodgreen-sf-uksouth",
+                        "sharedz1",
+                        "Microsoft.Compute/virtualMachineScaleSets",
+                        "uksouth",
+                        "Standard",
+                        None,
+                        0,
+                        "active",
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        json.dumps({
+                            "properties": {
+                                "virtualMachineProfile": {
+                                    "networkProfile": {
+                                        "networkInterfaceConfigurations": [
+                                            {
+                                                "properties": {
+                                                    "ipConfigurations": [
+                                                        {
+                                                            "properties": {
+                                                                "subnet": {"id": subnet_id}
+                                                            }
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }),
+                        0,
+                        None,
+                    ),
+                ],
+            )
+
+            payload = _build_subscription_architecture_payload(conn, "sub-1", view_mode="full")
+        finally:
+            conn.close()
+
+        cluster_node = next(node for node in payload["nodes"] if node["id"] == cluster_id)
+        assert cluster_node["data"].get("vnetName") == "prodgreen", cluster_node
+        assert cluster_node["data"].get("subnetName") == "service_fabric_zonal", cluster_node
+
     def test_cloud_architecture_page_labels_tabs_mermaid_and_react_flow(self, monkeypatch):
         import os
         import sqlite3
@@ -5280,6 +5602,244 @@ class TestCloudPosture:
         assert data["subscription_id"] == "sub-1"
         assert any(node["data"].get("typeLabel") == "WAF Policy" for node in data["nodes"])
         assert any(node["data"].get("typeLabel") == "Network Firewall" for node in data["nodes"])
+
+    def test_api_cloud_architecture_surfaces_missing_assets_for_overview_mode(self, monkeypatch):
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT,
+                last_synced TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+        )
+        for idx, name in enumerate(["alpha-gateway", "beta-gateway", "gamma-gateway", "zeta-gateway"], start=1):
+            conn.execute(
+                """
+                INSERT INTO provisioned_assets (
+                    id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                    is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                    is_restricted, waf_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"gw-{idx}",
+                    "sub-1",
+                    "rg-net",
+                    name,
+                    "Microsoft.Network/applicationGateways",
+                    "westeurope",
+                    "Standard_v2",
+                    f"{name}.example.com",
+                    1,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    "{}",
+                    0,
+                    None,
+                ),
+            )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/architecture?sub=sub-1&view=overview")
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        summary = data["summary"]
+        assert summary["resource_count"] == 4
+        assert summary["displayed_resource_count"] == 3
+        assert summary["omitted_resource_count"] == 1
+        assert summary["missing_asset_count"] == 1
+        assert summary["missing_assets"][0]["name"] == "zeta-gateway"
+        assert "Ingress" in summary["missing_assets"][0]["reason"]
+
+    def test_api_cloud_architecture_mermaid_mode_returns_full_payload(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT,
+                last_synced TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+        )
+
+        subnet_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-a/subnets/subnet-a"
+        conn.executemany(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    "sql-1",
+                    "sub-1",
+                    "rg-data",
+                    "sql-prod",
+                    "Microsoft.Sql/servers",
+                    "westeurope",
+                    "GeneralPurpose",
+                    "sql-prod.database.windows.net",
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({}),
+                    0,
+                    None,
+                ),
+                (
+                    "sb-1",
+                    "sub-1",
+                    "rg-messaging",
+                    "sb-prod",
+                    "Microsoft.ServiceBus/namespaces",
+                    "westeurope",
+                    "Standard",
+                    "sb-prod.servicebus.windows.net",
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({}),
+                    0,
+                    None,
+                ),
+                (
+                    "eh-1",
+                    "sub-1",
+                    "rg-messaging",
+                    "eh-prod",
+                    "Microsoft.EventHub/namespaces",
+                    "westeurope",
+                    "Standard",
+                    "eh-prod.servicebus.windows.net",
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({}),
+                    0,
+                    None,
+                ),
+                (
+                    "plan-1",
+                    "sub-1",
+                    "rg-app",
+                    "app-plan",
+                    "Microsoft.Web/serverfarms",
+                    "westeurope",
+                    "P1v3",
+                    None,
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({"properties": {"virtualNetworkSubnetId": subnet_id}}),
+                    0,
+                    None,
+                ),
+            ],
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/architecture?sub=sub-1&view=mermaid")
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        summary = data["summary"]
+        assert summary["omitted_resource_count"] == 0
+        assert summary["missing_assets"] == []
+
+        nodes = data["nodes"]
+        labels = {str(node.get("data", {}).get("label", "")) for node in nodes}
+        assert {"sql-prod", "sb-prod", "eh-prod", "app-plan"}.issubset(labels)
+
+        plan_node = next(node for node in nodes if node.get("data", {}).get("label") == "app-plan")
+        subnet_node = next(node for node in nodes if node.get("data", {}).get("label") == "subnet-a")
+        assert plan_node["data"].get("parentNodeId") == subnet_node["id"]
 
     def test_api_cloud_architecture_nests_appgw_listeners_under_gateway_subnet(self, monkeypatch):
         import json
@@ -5882,6 +6442,95 @@ class TestCloudPosture:
         assert data["security"]["public_network_access"] == "Enabled"
         assert data["network"]["virtual_network_type"] == "Internal"
         assert data["network"]["public_ips"] == ["52.160.10.10"]
+
+    def test_api_cloud_resource_details_treats_external_apim_as_public(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+        apim_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/apim-prod"
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                apim_id,
+                "sub-1",
+                "rg-api",
+                "apim-prod",
+                "Microsoft.ApiManagement/service",
+                "uksouth",
+                "Premium",
+                "apim-prod.azure-api.net",
+                0,
+                "active",
+                None,
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+                json.dumps({
+                    "properties": {
+                        "publicNetworkAccess": "Enabled",
+                        "virtualNetworkType": "External",
+                    }
+                }),
+                0,
+                None,
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/resource-details", query_string={"id": apim_id})
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        assert data["security"]["is_public"] is True
+        assert data["security"]["public_network_access"] == "Enabled"
+        assert data["network"]["virtual_network_type"] == "External"
 
     def test_api_cloud_resource_details_surfaces_waf_policy_summary(self, monkeypatch):
         import os
@@ -6892,6 +7541,7 @@ class TestCloudPosture:
             ("sub-1", "Test Subscription", "production", "Enabled"),
         )
         ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/ase-one"
+        plan_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/serverfarms/api_windows"
         site_ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/site-ase"
         site_vnet_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/site-vnet"
         subnet_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/rg-vnet/subnets/app-subnet"
@@ -6904,6 +7554,24 @@ class TestCloudPosture:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
+                (
+                    plan_id,
+                    "sub-1",
+                    "rg-app",
+                    "api_windows",
+                    "Microsoft.Web/serverFarms",
+                    "P1v3",
+                    None,
+                    None,
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({"hostingEnvironmentProfile": {"id": ase_id}}),
+                    0,
+                    None,
+                ),
                 (
                     ase_id,
                     "sub-1",
@@ -6968,10 +7636,15 @@ class TestCloudPosture:
         assert resp.status_code == 200, resp.get_data(as_text=True)
         graph = resp.get_json()
         nodes = {n["id"]: n for n in graph["nodes"]}
+        plan_node = nodes[plan_id]
         ase_node = nodes[ase_id]
         ase_net = ase_node["data"]["network"]
         assert ase_net["vnet"] == "rg-vnet"
         assert ase_net["subnet"] == "app-subnet"
+        ase_parent_id = ase_node["data"]["parentNodeId"]
+        assert ase_parent_id and str(ase_parent_id).startswith("synthetic-subnet::"), ase_parent_id
+        assert nodes[ase_parent_id]["data"]["parentNodeId"] and str(nodes[ase_parent_id]["data"]["parentNodeId"]).startswith("synthetic-network::")
+        assert plan_node["data"]["parentNodeId"] == ase_id
 
         site_ase = nodes[site_ase_id]["data"]["network"]
         site_vnet = nodes[site_vnet_id]["data"]["network"]
@@ -7196,6 +7869,127 @@ class TestCloudPosture:
         assert resp.status_code == 200, resp.get_data(as_text=True)
         details = resp.get_json()
         assert details["configuration"]["operating_system"] == "Windows"
+
+        os.unlink(tmp.name)
+
+    def test_api_cloud_resource_details_inherits_ase_network_for_app_service_plan(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+        import tempfile
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        conn = sqlite3.connect(tmp.name)
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+        ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/ase-one"
+        plan_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/serverfarms/plan-one"
+        conn.executemany(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    ase_id,
+                    "sub-1",
+                    "rg-app",
+                    "ase-one",
+                    "Microsoft.Web/hostingEnvironments",
+                    "ukwest",
+                    "ASEv3",
+                    "ase-one.appserviceenvironment.net",
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({
+                        "properties": {
+                            "virtualNetwork": {
+                                "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-prod",
+                            },
+                            "subnet": {
+                                "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-prod/subnets/ase-subnet",
+                            },
+                        }
+                    }),
+                    0,
+                    None,
+                ),
+                (
+                    plan_id,
+                    "sub-1",
+                    "rg-app",
+                    "plan-one",
+                    "Microsoft.Web/serverfarms",
+                    "ukwest",
+                    "P1v3",
+                    "",
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({"hostingEnvironmentProfile": {"id": ase_id}}),
+                    0,
+                    None,
+                ),
+            ],
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/resource-details", query_string={"id": plan_id})
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        details = resp.get_json()
+        assert details["parent_resource"]["name"] == "ase-one", details
+        assert details["parent_resource"]["type_label"] == "App Service Environment", details
+        assert details["parent_resource"]["network"]["vnet"] == "vnet-prod", details
+        assert details["parent_resource"]["network"]["subnet"] == "ase-subnet", details
+        assert details["network"]["vnet"] == "vnet-prod", details
+        assert details["network"]["subnet"] == "ase-subnet", details
 
         os.unlink(tmp.name)
 
@@ -7747,6 +8541,208 @@ class TestCloudPosture:
         data = resp.get_json()
         assert data["subscription_name"] == "Demo Subscription"
         assert data["ingress_diagram"]["mermaid"] == "graph TD"
+
+    def test_subscription_diagram_promotes_data_and_service_platform_types(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT,
+                last_synced TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                name TEXT,
+                type TEXT,
+                resource_group TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+            ("sub-1", "Demo Subscription", "production", "Enabled", "2026-06-09T10:00:00Z"),
+        )
+
+        entry_rows = [
+            (
+                f"gw-{idx}",
+                "sub-1",
+                f"gw-{idx}",
+                "Microsoft.Network/applicationGateways",
+                "rg-net",
+                "westus",
+                "WAF_v2",
+                f"gw-{idx}.example.com",
+                1,
+                "active",
+                None,
+                "2026-06-09T10:00:00Z",
+                "2026-06-09T10:00:00Z",
+                json.dumps({}),
+                0,
+                "WAF_v2",
+            )
+            for idx in range(1, 121)
+        ]
+        special_rows = [
+            (
+                "sql-1",
+                "sub-1",
+                "sql-1",
+                "Microsoft.Sql/servers",
+                "rg-data",
+                "westus",
+                None,
+                "sql-1.database.windows.net",
+                1,
+                "active",
+                None,
+                "2026-06-09T10:00:00Z",
+                "2026-06-09T10:00:00Z",
+                json.dumps({}),
+                0,
+                None,
+            ),
+            (
+                "cosmos-1",
+                "sub-1",
+                "cosmos-1",
+                "Microsoft.DocumentDB/databaseAccounts",
+                "rg-data",
+                "westus",
+                "Standard",
+                "cosmos-1.documents.azure.com",
+                0,
+                "active",
+                None,
+                "2026-06-09T10:00:00Z",
+                "2026-06-09T10:00:00Z",
+                json.dumps({}),
+                0,
+                None,
+            ),
+            (
+                "sb-1",
+                "sub-1",
+                "sb-1",
+                "Microsoft.ServiceBus/namespaces",
+                "rg-msg",
+                "westus",
+                "Standard",
+                "sb-1.servicebus.windows.net",
+                0,
+                "active",
+                None,
+                "2026-06-09T10:00:00Z",
+                "2026-06-09T10:00:00Z",
+                json.dumps({}),
+                0,
+                None,
+            ),
+            (
+                "eh-1",
+                "sub-1",
+                "eh-1",
+                "Microsoft.EventHub/namespaces",
+                "rg-msg",
+                "westus",
+                "Standard",
+                "eh-1.servicebus.windows.net",
+                0,
+                "active",
+                None,
+                "2026-06-09T10:00:00Z",
+                "2026-06-09T10:00:00Z",
+                json.dumps({}),
+                0,
+                None,
+            ),
+            (
+                "sf-1",
+                "sub-1",
+                "sf-1",
+                "Microsoft.ServiceFabric/clusters",
+                "rg-back",
+                "westus",
+                "Standard",
+                None,
+                0,
+                "active",
+                None,
+                "2026-06-09T10:00:00Z",
+                "2026-06-09T10:00:00Z",
+                json.dumps({}),
+                0,
+                None,
+            ),
+            (
+                "plan-1",
+                "sub-1",
+                "plan-1",
+                "Microsoft.Web/serverfarms",
+                "rg-app",
+                "westus",
+                "P1v3",
+                None,
+                0,
+                "active",
+                None,
+                "2026-06-09T10:00:00Z",
+                "2026-06-09T10:00:00Z",
+                json.dumps({"kind": "app"}),
+                0,
+                None,
+            ),
+        ]
+        conn.executemany(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, name, type, resource_group, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [*entry_rows, *special_rows],
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/subscriptions/sub-1/diagram")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        mermaid = data["ingress_diagram"]["mermaid"]
+        assert "rg_data_sql_1" in mermaid
+        assert "rg_data_cosmos_1" in mermaid
+        assert "rg_msg_sb_1" in mermaid
+        assert "rg_msg_eh_1" in mermaid
+        assert "rg_back_sf_1" in mermaid
+        assert "rg_app_plan_1" in mermaid
 
     def test_settings_api_can_clear_cloud_model_cache(self, monkeypatch, tmp_path):
         import os

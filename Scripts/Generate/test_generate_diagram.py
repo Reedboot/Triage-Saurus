@@ -238,6 +238,158 @@ def test_apim_public_ip_is_collapsed_into_apim_node(monkeypatch):
     assert "shared-apim-pip" not in diagram
 
 
+def test_unconnected_data_and_ai_services_remain_visible(monkeypatch):
+    """SQL, Cosmos, Service Bus, and AI resources should not disappear when disconnected."""
+    builder = HierarchicalDiagramBuilder("exp-1")
+
+    resources = [
+        {
+            "id": 1,
+            "resource_name": "customer-sql",
+            "resource_type": "azurerm_mssql_server",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 2,
+            "resource_name": "customer-cosmos",
+            "resource_type": "azurerm_cosmosdb_account",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 3,
+            "resource_name": "customer-servicebus",
+            "resource_type": "azurerm_servicebus_namespace",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 4,
+            "resource_name": "customer-ai",
+            "resource_type": "azurerm_cognitive_services",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+    ]
+
+    def fake_load_data():
+        builder.resources = resources
+        builder.connections = []
+        builder.children_by_parent = {}
+        builder.exposed_resources = {}
+        builder.resource_by_id = {r["id"]: r for r in resources}
+        builder.resource_by_name = {r["resource_name"]: r for r in resources}
+
+    monkeypatch.setattr(builder, "load_data", fake_load_data)
+    monkeypatch.setattr(builder, "infer_connections", lambda: False)
+
+    diagram = builder.generate()
+
+    assert "customer-sql" in diagram
+    assert "customer-cosmos" in diagram
+    assert "customer-servicebus" in diagram
+    assert "customer-ai" in diagram
+
+
+def test_eventhub_servicebus_and_service_fabric_render(monkeypatch):
+    """Event Hub, Service Bus, SQL, and Service Fabric resources should render when linked."""
+    builder = HierarchicalDiagramBuilder("exp-1")
+
+    resources = [
+        {
+            "id": 1,
+            "resource_name": "customer-api",
+            "resource_type": "azurerm_function_app",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 2,
+            "resource_name": "customer-sql",
+            "resource_type": "azurerm_mssql_server",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 3,
+            "resource_name": "customer-servicebus",
+            "resource_type": "azurerm_servicebus_namespace",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 4,
+            "resource_name": "customer-servicebus-queue",
+            "resource_type": "azurerm_servicebus_queue",
+            "provider": "azure",
+            "repo_name": "repo",
+            "parent_resource_id": 3,
+        },
+        {
+            "id": 5,
+            "resource_name": "customer-eventhub-namespace",
+            "resource_type": "azurerm_eventhub_namespace",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 6,
+            "resource_name": "customer-eventhub",
+            "resource_type": "azurerm_eventhub",
+            "provider": "azure",
+            "repo_name": "repo",
+            "parent_resource_id": 5,
+        },
+        {
+            "id": 8,
+            "resource_name": "customer-eventhub-cg",
+            "resource_type": "azurerm_eventhub_consumer_group",
+            "provider": "azure",
+            "repo_name": "repo",
+            "parent_resource_id": 6,
+        },
+        {
+            "id": 7,
+            "resource_name": "customer-service-fabric",
+            "resource_type": "azurerm_service_fabric_cluster",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+    ]
+
+    def fake_load_data():
+        builder.resources = resources
+        builder.connections = [
+            {"source": "customer-api", "target": "customer-sql", "connection_type": "uses_database", "confirmed": True},
+            {"source": "customer-api", "target": "customer-servicebus-queue", "connection_type": "depends_on", "confirmed": True},
+            {"source": "customer-api", "target": "customer-eventhub", "connection_type": "depends_on", "confirmed": True},
+            {"source": "customer-api", "target": "customer-eventhub-cg", "connection_type": "depends_on", "confirmed": True},
+            {"source": "customer-api", "target": "customer-service-fabric", "connection_type": "routes_to", "confirmed": True},
+        ]
+        builder.children_by_parent = {
+            3: [resources[3]],
+            5: [resources[5]],
+            6: [resources[6]],
+        }
+        builder.exposed_resources = {}
+        builder.resource_by_id = {r["id"]: r for r in resources}
+        builder.resource_by_name = {r["resource_name"]: r for r in resources}
+
+    monkeypatch.setattr(builder, "load_data", fake_load_data)
+    monkeypatch.setattr(builder, "infer_connections", lambda: False)
+
+    diagram = builder.generate()
+
+    assert "customer-sql" in diagram
+    assert "customer-servicebus" in diagram
+    assert "customer-servicebus-queue" in diagram
+    assert "customer-eventhub-namespace" in diagram
+    assert "customer-eventhub" in diagram
+    assert "customer-eventhub-cg" in diagram
+    assert "customer-service-fabric" in diagram
+
+
 def test_application_gateway_routing_rule_stays_with_subnet(monkeypatch):
     """App Gateway routing rules should render inside the gateway's subnet."""
     builder = HierarchicalDiagramBuilder("exp-1")
