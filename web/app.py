@@ -20536,6 +20536,9 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 _item["vnet_resource_group"] = _candidate_ase.get("vnet_resource_group")
                 _item["subnet_name"] = _candidate_ase.get("subnet_name")
                 _item["subnet_id"] = _candidate_ase.get("subnet_id")
+                # Tag the plan with its ASE name so edge generation can reference it
+                # after _group_backends_by_type strips raw_json from the items.
+                _item["hosting_ase_name"] = _candidate_ase.get("name") or ""
 
     aks_ingress_entries: list[dict] = []
     aks_service_entries: list[dict] = []
@@ -21280,6 +21283,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                         "vnet_resource_group": item.get("vnet_resource_group") or item.get("parent_vnet_resource_group"),
                         "subnet_name": item.get("subnet_name"),
                         "subnet_id": item.get("subnet_id"),
+                        "hosting_ase_name": item.get("hosting_ase_name") or "",
                     })
             else:
                 _acr_req_values = {i.get("acr_requires_credentials") for i in items if i.get("acr_requires_credentials") is not None}
@@ -22803,6 +22807,11 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 backend_nid = _get_node_id(backend)
                 if backend_nid in _vmss_node_ids:
                     continue
+                # App Service Environments are infrastructure containers — APIM routes
+                # to the hosted App Service Plans, not directly to the ASE itself.
+                _backend_type_lc = (backend.get("arm_type") or backend.get("type") or "").lower()
+                if "hostingenvironment" in _backend_type_lc:
+                    continue
                 _add_link(f'    {api_node} --> {backend_nid}', "white")
 
     aks_cluster_assets = [
@@ -23132,7 +23141,30 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             node_id = _get_node_id(item)
             _add_link(f'    Internet -->|"{_allowlist_target_label(item)}"| {node_id}', "#f59e0b")
 
-    
+    # App Service Plan → App Service Environment "Hosted in" edges.
+    # Each serverfarm that has a hostingEnvironmentProfile points to its ASE
+    # to make the hosting relationship explicit in the diagram.
+    _ase_node_ids_rendered: dict[str, str] = {
+        str(item.get("name") or "").strip().lower(): _get_node_id(item)
+        for item in shown_backend
+        if "hostingenvironment" in (item.get("arm_type") or item.get("type") or "").lower()
+        and _get_node_id(item) in rendered_node_ids
+    }
+    if _ase_node_ids_rendered:
+        for item in shown_backend:
+            _plan_type = (item.get("arm_type") or item.get("type") or "").lower()
+            if "serverfarms" not in _plan_type:
+                continue
+            plan_nid = _get_node_id(item)
+            if plan_nid not in rendered_node_ids:
+                continue
+            _ase_name_key = str(item.get("hosting_ase_name") or "").strip().lower()
+            if not _ase_name_key:
+                continue
+            _ase_nid = _ase_node_ids_rendered.get(_ase_name_key)
+            if _ase_nid and _ase_nid != plan_nid:
+                _add_link(f'    {plan_nid} -.->|"Hosted in"| {_ase_nid}', "#94a3b8", dasharray="4 2")
+
     # Styling - stroke-only (no fill) to match ArchitectureAgent standards
     lines.append("")
     # Apply per-link styles: solid or dashed, coloured by exposure level.
