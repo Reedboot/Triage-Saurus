@@ -21579,6 +21579,53 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 if fqdn_norm:
                     node_by_fqdn_normalized.setdefault(fqdn_norm, node_id)
 
+    # Augment node_by_fqdn with site-FQDN → parent-plan-node-ID entries.
+    # subscription_apply_plan_hierarchy folds individual app sites into their
+    # parent App Service Plans, so site FQDNs are NOT in shown_backend and
+    # therefore missing from node_by_fqdn.  Without this augmentation, App
+    # Gateway backend pools (and APIM routes) that reference an app FQDN like
+    # "cbuk-core-prodgreen-fi-api-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net"
+    # fail to resolve and fall back to _routing_target_candidates, which extracts
+    # "prodgreen-shared-uksouth" (the ASE name) as a candidate — matching the ASE
+    # node instead of the correct App Service Plan.
+    if plan_links and rows:
+        # Build site_name -> parent_plan_node_id from plan_links.
+        # plan_links contains BOTH site→plan (serverfarm) AND site→ASE entries.
+        # Only serverfarm entries are useful here — use setdefault so the first
+        # (plan) entry wins and the ASE entry from _build_site_hosting_ase_links
+        # never overwrites it.  Restrict to serverfarms by checking node_by_resource_type.
+        _site_to_plan_nid: dict[str, str] = {}
+        for _pl_row in plan_links:
+            _pl_site_name = str(_pl_row[1] or "").strip().lower()
+            _pl_plan_rg = str(_pl_row[2] or "").strip().lower()
+            _pl_plan_name = str(_pl_row[3] or "").strip().lower()
+            if not _pl_site_name or not _pl_plan_name:
+                continue
+            # Prefer the serverfarm-typed node; fall back to any matching name.
+            _plan_nid = (
+                node_by_resource_type.get((_pl_plan_rg, _pl_plan_name, "microsoft.web/serverfarms"))
+                or node_by_resource.get((_pl_plan_rg, _pl_plan_name))
+                or node_by_name.get(_pl_plan_name)
+            )
+            if _plan_nid:
+                _site_to_plan_nid.setdefault(_pl_site_name, _plan_nid)  # first match wins
+
+        # Add each site FQDN to node_by_fqdn pointing at the parent plan node
+        for _row in rows:
+            _rtype = str(_row[1] or "").lower()
+            if "sites" not in _rtype:
+                continue
+            _site_name = str(_row[0] or "").strip().lower()
+            _site_fqdn = str(_row[3] or "").strip().lower()
+            if not _site_fqdn:
+                continue
+            _plan_nid = _site_to_plan_nid.get(_site_name)
+            if _plan_nid:
+                node_by_fqdn.setdefault(_site_fqdn, _plan_nid)
+                _site_fqdn_norm = _routing_lookup_key(_site_fqdn)
+                if _site_fqdn_norm:
+                    node_by_fqdn_normalized.setdefault(_site_fqdn_norm, _plan_nid)
+
     def _resolve_routing_target(target: dict) -> str | None:
         return _resolve_routing_target_node_id(
             target,

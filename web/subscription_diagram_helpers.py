@@ -931,9 +931,15 @@ def subscription_apply_plan_hierarchy(assets: list[dict], plan_links: list | Non
         key = _key(asset_copy)
         children = hosted_by_parent.get(key)
         if children and any(token in _type(asset_copy) for token in ("serverfarms", "hostingenvironment")):
-            child_fqdns = [subscription_primary_fqdn(child) for child in children if subscription_primary_fqdn(child)]
-            merged_fqdns = list(dict.fromkeys([*(asset_copy.get("fqdns") or []), *child_fqdns]))
-            asset_copy["fqdns"] = merged_fqdns
+            is_ase = "hostingenvironment" in _type(asset_copy)
+            # For App Service Environments, do NOT inherit child app FQDNs — routing
+            # resolution should land on the App Service Plan (serverfarm), not the ASE
+            # container.  Giving the ASE all app FQDNs causes node_by_fqdn to map every
+            # app FQDN to the ASE node instead of the correct plan node.
+            if not is_ase:
+                child_fqdns = [subscription_primary_fqdn(child) for child in children if subscription_primary_fqdn(child)]
+                merged_fqdns = list(dict.fromkeys([*(asset_copy.get("fqdns") or []), *child_fqdns]))
+                asset_copy["fqdns"] = merged_fqdns
             asset_copy["public"] = bool(asset_copy.get("public") or any(child.get("public") for child in children))
             asset_copy["is_restricted"] = bool(asset_copy.get("is_restricted") or any(child.get("is_restricted") for child in children))
             asset_copy["hosted_site_count"] = len(children)
@@ -1615,6 +1621,8 @@ def build_subscription_diagrams_by_rg(
 
         def add_edge(src: str, dst: str, label: str, color: str, *, width: str = "2px", dasharray: str | None = None) -> None:
             if src not in seen_nodes or dst not in seen_nodes:
+                return
+            if src == dst:
                 return
             key = (src, dst, label)
             if key in edge_keys:
