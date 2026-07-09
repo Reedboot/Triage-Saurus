@@ -14196,6 +14196,15 @@ def _build_subscription_architecture_payload(
         )
         by_key[key] = asset
 
+    def _append_routing_target(asset: dict, target: dict) -> None:
+        merged_targets = list(asset.get("routing_targets") or [])
+        target_marker = json.dumps(target, sort_keys=True)
+        for existing in merged_targets:
+            if isinstance(existing, dict) and json.dumps(existing, sort_keys=True) == target_marker:
+                return
+        merged_targets.append(target)
+        asset["routing_targets"] = merged_targets
+
     for asset in assets:
         raw_id = str(asset.get("id") or "").lower()
         if not raw_id:
@@ -14237,12 +14246,28 @@ def _build_subscription_architecture_payload(
         if parent_arm_id:
             parent = by_id.get(str(parent_arm_id).lower())
             if parent:
+                parent_type = str(parent.get("type") or "").lower()
+                asset_type = str(asset.get("type") or "").lower()
+                if "servicefabric" in asset_type and "keyvault" in parent_type:
+                    parent = None
+            if parent:
                 asset["parent_id"] = parent.get("id")
                 asset["parent_name"] = parent.get("name")
                 asset["parent_resource_group"] = parent.get("resource_group")
                 asset["parent_type_label"] = parent.get("display_type_label") or parent.get("type_label")
                 asset["is_child"] = True
                 asset["depth"] = 1
+                parent_type = str(parent.get("type") or "").lower()
+                if "hostingenvironment" in parent_type:
+                    _append_routing_target(
+                        asset,
+                        {
+                            "target_resource_id": str(parent.get("id") or "").strip(),
+                            "target": str(parent.get("fqdn") or parent.get("name") or "").strip(),
+                            "name": str(parent.get("name") or "").strip(),
+                            "type": str(parent.get("type") or "").strip(),
+                        },
+                    )
                 continue
 
         if asset.get("parent_name") and asset.get("parent_resource_group") and asset.get("parent_type_label"):
@@ -14995,8 +15020,9 @@ def _build_subscription_architecture_payload(
 
     entry_route_targets: dict[str, list[str]] = {}
     routing_issues: list[dict] = []
-    full_entry_assets = [a for a in assets if a.get("tier") == "entry"]
-    def _full_entry_route_label(entry: dict) -> str:
+    routable_assets = [a for a in assets if _entry_routing_targets(a)]
+
+    def _route_label(entry: dict) -> str:
         entry_type = str(entry.get("type") or entry.get("arm_type") or "").lower()
         if "loadbalancer" in entry_type:
             return "Load balancing"
@@ -15008,7 +15034,7 @@ def _build_subscription_architecture_payload(
             return "Routing"
         return "Routing"
 
-    for entry in full_entry_assets:
+    for entry in routable_assets:
         resolved_targets: list[str] = []
         unresolved_targets: list[str] = []
         for target in _entry_routing_targets(entry):
@@ -15038,7 +15064,7 @@ def _build_subscription_architecture_payload(
                 "unresolved_targets": unresolved_targets,
             })
 
-    for entry in full_entry_assets:
+    for entry in routable_assets:
         entry_id = str(entry.get("id") or "")
         if not entry_id:
             continue
@@ -15047,7 +15073,7 @@ def _build_subscription_architecture_payload(
                 "id": f"edge-route-{entry_id}-{target_id}",
                 "source": entry_id,
                 "target": target_id,
-                "label": _full_entry_route_label(entry),
+                "label": _route_label(entry),
                 "data": {
                     "connection_type": "routing",
                     "protocol": None,
@@ -17215,6 +17241,11 @@ def _resolve_parent_resource(conn, asset_row: sqlite3.Row) -> dict | None:
     if not subscription_id or not asset_id or not asset_name:
         return None
 
+    try:
+        raw_json = json.loads(asset_row["raw_json"] or "{}") if isinstance(asset_row["raw_json"], str) else (asset_row["raw_json"] or {})
+    except Exception:
+        raw_json = {}
+
     candidate_rows = conn.execute(
         """
         SELECT id, name, type, resource_group, fqdn, raw_json
@@ -17261,6 +17292,26 @@ def _resolve_parent_resource(conn, asset_row: sqlite3.Row) -> dict | None:
             return candidate
         if best_match is None:
             best_match = candidate
+
+    if "servicefabric" in asset_type and _collect_subnet_ids(raw_json):
+        subnet_id = _collect_subnet_ids(raw_json)[0]
+        vnet_name = _parse_vnet_from_subnet_id(subnet_id)
+        subnet_name = _parse_subnet_from_subnet_id(subnet_id)
+        subnet_rg = ""
+        if "/resourceGroups/" in subnet_id:
+            subnet_rg = subnet_id.split("/resourceGroups/")[-1].split("/")[0] or ""
+        return {
+            "id": subnet_id,
+            "name": subnet_name or vnet_name or asset_name,
+            "type": "Microsoft.Network/virtualNetworks/subnets",
+            "type_label": "Subnet",
+            "resource_group": subnet_rg,
+            "icon_path": _resource_icon_path("Microsoft.Network/virtualNetworks/subnets"),
+            "network": {
+                "vnet": vnet_name,
+                "subnet": subnet_name,
+            },
+        }
 
     return best_match
 
@@ -18205,10 +18256,10 @@ def api_cloud_assets_all():
             """
         ).fetchall()
 
-        # Build site→plan/ASE parent map using a small targeted query (only sites rows).
+        # Build site→plan/ASE parent map using a small targeted query (sites and plans).
         parent_map: dict = {}
         try:
-            site_parents = conn.execute(
+            site_and_plan_parents = conn.execute(
                 """
                 SELECT pa.id,
                        lower(COALESCE(
@@ -18220,7 +18271,11 @@ def api_cloud_assets_all():
                            json_extract(pa.raw_json, '$.hostingEnvironmentProfile.id')
                        )) AS ase_arm_id
                 FROM provisioned_assets pa
-                WHERE lower(pa.type) LIKE '%/sites%'
+                WHERE (
+                        lower(pa.type) LIKE '%/sites%'
+                     OR lower(pa.type) LIKE '%/serverfarms%'
+                     OR lower(pa.type) LIKE '%/serviceplans%'
+                      )
                   AND COALESCE(
                         json_extract(pa.raw_json, '$.appServicePlanId'),
                         json_extract(pa.raw_json, '$.serverFarmId'),
@@ -18243,7 +18298,7 @@ def api_cloud_assets_all():
                     "parent_id": p_row[1], "parent_name": p_row[2],
                     "parent_resource_group": p_row[3], "parent_arm_type": p_row[4],
                 }
-            for sp in site_parents:
+            for sp in site_and_plan_parents:
                 arm_id = sp[1] or sp[2]
                 if arm_id and arm_id in parents_by_arm_id:
                     parent_map[sp[0]] = parents_by_arm_id[arm_id]
@@ -20445,6 +20500,43 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
 
     backends = _shared_subscription_apply_plan_hierarchy(backends, plan_links)
 
+    # Propagate VNet/subnet info from ASE items to their hosted App Service Plans.
+    # Plans in an ASE have no direct VNet configuration in their ARM JSON; the
+    # network membership is inherited from the hosting App Service Environment.
+    _ase_by_name: dict[str, dict] = {}
+    for _item in backends:
+        _type_lc = ((_item.get("arm_type") or _item.get("type") or "")).lower()
+        if "hostingenvironment" in _type_lc and (_item.get("vnet_name") or _item.get("subnet_name") or _item.get("subnet_id")):
+            _ase_by_name[str(_item.get("name") or "").strip().lower()] = _item
+    if _ase_by_name:
+        for _item in backends:
+            _type_lc = ((_item.get("arm_type") or _item.get("type") or "")).lower()
+            if "serverfarms" not in _type_lc:
+                continue
+            if _item.get("vnet_name") or _item.get("subnet_id"):
+                continue
+            _raw_text = _item.get("raw_json")
+            try:
+                _parsed = json.loads(_raw_text) if isinstance(_raw_text, str) and _raw_text.strip() else (_raw_text or {})
+            except Exception:
+                _parsed = {}
+            if not isinstance(_parsed, dict):
+                continue
+            _hp = _parsed.get("hostingEnvironmentProfile") or (_parsed.get("properties") or {}).get("hostingEnvironmentProfile")
+            if not isinstance(_hp, dict):
+                continue
+            _hp_id = str(_hp.get("id") or "").strip()
+            if not _hp_id:
+                continue
+            _ase_name = _hp_id.rsplit("/", 1)[-1].strip().lower()
+            _candidate_ase = _ase_by_name.get(_ase_name)
+            if _candidate_ase:
+                _item["vnet_name"] = _candidate_ase.get("vnet_name")
+                _item["parent_vnet_name"] = _candidate_ase.get("vnet_name")
+                _item["vnet_resource_group"] = _candidate_ase.get("vnet_resource_group")
+                _item["subnet_name"] = _candidate_ase.get("subnet_name")
+                _item["subnet_id"] = _candidate_ase.get("subnet_id")
+
     aks_ingress_entries: list[dict] = []
     aks_service_entries: list[dict] = []
     if aks_route_rows:
@@ -22533,7 +22625,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 routing_label = '"Routing (IP restricted)"'
             else:
                 routing_label = '"Routing"'
-            _add_link(f'    {entry_nid} -->|{routing_label}| {api_nid}', "orange")
+            if entry_nid != api_nid:
+                _add_link(f'    {entry_nid} -->|{routing_label}| {api_nid}', "orange")
 
     # Entry Points → Backends (orange — fallback when no APIM; Traffic Manager, App Gateway, etc.)
     # Without APIM, entry points route directly to backend services. Traffic Manager specifically
@@ -22564,7 +22657,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 routing_label = '"Routing (IP restricted)"'
             else:
                 routing_label = '"Routing"'
-            _add_link(f'    {entry_nid} -->|{routing_label}| {first_backend_nid}', "orange")
+            if entry_nid != first_backend_nid:
+                _add_link(f'    {entry_nid} -->|{routing_label}| {first_backend_nid}', "orange")
 
     # P0-E: AppGW → API Layer routing (using backend FQDNs from routing rules).
     # Prefer the exact backend asset resolved from the routed FQDN so AppGW -> APIM
@@ -22705,39 +22799,11 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             if api_node in api_route_targets:
                 continue
             api_type_lc = (api.get("arm_type") or api.get("type") or "").lower()
-            is_apim = "apimanagement" in api_type_lc
-
-            if is_apim:
-                # Group backends into logical backend pools
-                _pool_groups: dict[str, list[dict]] = {}
-                for backend in shown_backend:
-                    if _get_node_id(backend) in _vmss_node_ids:
-                        continue
-                    cat = _apim_pool_category(backend)
-                    _pool_groups.setdefault(cat, []).append(backend)
-
-                for cat, pool_items in _pool_groups.items():
-                    if not pool_items:
-                        continue
-                    if len(pool_items) == 1:
-                        # Single item — direct edge, no intermediate pool node
-                        _add_link(f'    {api_node} --> {_get_node_id(pool_items[0])}', "white")
-                    else:
-                        pool_nid = f"apim_pool_{cat}"
-                        pool_label = _apim_pool_labels.get(cat, cat)
-                        if pool_nid not in rendered_node_ids:
-                            _node_indent[0] = "    "
-                            lines.append(_node_line(pool_nid, pool_label, "microsoft.apimanagement/service/backends"))
-                            rendered_node_ids.add(pool_nid)
-                        _add_link(f'    {api_node} --> {pool_nid}', "white")
-                        for bk in pool_items:
-                            _add_link(f'    {pool_nid} --> {_get_node_id(bk)}', "white")
-            else:
-                for backend in shown_backend:
-                    backend_nid = _get_node_id(backend)
-                    if backend_nid in _vmss_node_ids:
-                        continue
-                    _add_link(f'    {api_node} --> {backend_nid}', "white")
+            for backend in shown_backend:
+                backend_nid = _get_node_id(backend)
+                if backend_nid in _vmss_node_ids:
+                    continue
+                _add_link(f'    {api_node} --> {backend_nid}', "white")
 
     aks_cluster_assets = [
         item for item in shown_backend
@@ -22792,9 +22858,13 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             backend_nid = _get_node_id(backend)
             for cluster_key in _targets_cluster(backend):
                 for ingress in ingress_by_cluster.get(cluster_key, []):
-                    _add_link(f'    {backend_nid} -->|\"routes to\"| {_get_node_id(ingress)}', "orange")
+                    ingress_nid = _get_node_id(ingress)
+                    if backend_nid != ingress_nid:
+                        _add_link(f'    {backend_nid} -->|\"routes to\"| {ingress_nid}', "orange")
                     for service in service_by_cluster.get(cluster_key, []):
-                        _add_link(f'    {_get_node_id(ingress)} -->|\"targets\"| {_get_node_id(service)}', "green")
+                        service_nid = _get_node_id(service)
+                        if ingress_nid != service_nid:
+                            _add_link(f'    {ingress_nid} -->|\"targets\"| {service_nid}', "green")
 
     # P1-A: AppGW → Direct Backend edges (routes that bypass APIM).
     # SIMPLIFIED: One arrow per unique backend, labeled with protocol + auth type.
@@ -23086,11 +23156,6 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     lines.append('    classDef listenerHttp stroke:#d32f2f,stroke-width:2px,fill:#3b0a0a,stroke-dasharray:4,2;')  # Red dashed = HTTP listener
     lines.append('    classDef listenerHttps stroke:#00897b,stroke-width:2px,fill:#0f2f2b;')  # Teal = HTTPS listener
     lines.append('    classDef wafPolicy stroke:#e65100,stroke-width:2px,fill:#3d1c0d;')  # Deep orange = WAF policy
-    # Apply apimBackendPool class to all rendered pool nodes
-    for _pool_cat in _apim_pool_labels:
-        _pool_nid = f"apim_pool_{_pool_cat}"
-        if _pool_nid in rendered_node_ids:
-            lines.append(f'    class {_pool_nid} apimBackendPool;')
     for item in shown_entry:
         if item.get("parent_lb_key"):
             continue
