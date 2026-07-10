@@ -18121,12 +18121,43 @@ def get_apim_child_apis():
             for op in operations
         ]
         api["operation_count"] = len(api["operations"])
-    
+
+    columns = [
+        "API",
+        "Path",
+        "Protocols",
+        "Exposure",
+        "Subscription Key",
+        "Operations",
+        "Backend URL",
+        "Service URL",
+    ]
+    rows = [
+        [
+            api["name"],
+            api["path"],
+            ", ".join(api["protocols"]) if api["protocols"] else "—",
+            api["exposure"],
+            "Required" if api["requires_subscription"] else "Not required",
+            api.get("operation_count", 0),
+            api["backend_url"] or "—",
+            api["service_url"] or "—",
+        ]
+        for api in child_apis
+    ]
+
     return jsonify({
-        "apim_id": resource_id,
-        "apim_name": apim_name,
-        "child_apis": child_apis,
+        "id": resource_id,
+        "title": f"{apim_name} — APIs",
+        "name": apim_name,
+        "type_label": "API Management",
+        "resource_group": "",
+        "view_type": "table",
+        "columns": columns,
+        "rows": rows,
+        "empty_message": "No APIs were found for this APIM instance.",
         "api_count": len(child_apis),
+        "child_apis": child_apis,
     })
 
 
@@ -19019,6 +19050,7 @@ def api_subscription_diagram(sub_id: str):
         # Used to flag App Service Plans whose hosted apps aren't confirmed
         # in APIM routing as potentially unprotected.
         apim_backend_urls: set[str] = set()
+        apim_route_map: dict[str, list[str]] = {}  # apim_name (lower) → [backend_urls]
         try:
             apim_rows = conn.execute(
                 "SELECT url FROM apim_backends WHERE subscription_id = ? AND url IS NOT NULL LIMIT 50",
@@ -19028,6 +19060,21 @@ def api_subscription_diagram(sub_id: str):
                 apim_backend_urls.add(str(url).strip().lower().rstrip("/"))
         except Exception:
             pass  # Non-critical — proceed without APIM backend data
+
+        try:
+            if _table_exists(conn, "apim_api_routes"):
+                for _apim_n, _be_url in conn.execute(
+                    "SELECT DISTINCT apim_name, COALESCE(backend_url, service_url) "
+                    "FROM apim_api_routes "
+                    "WHERE subscription_id=? AND (backend_url IS NOT NULL OR service_url IS NOT NULL)",
+                    (sub_id,),
+                ).fetchall():
+                    _key = str(_apim_n or "").strip().lower()
+                    _u = str(_be_url or "").strip()
+                    if _key and _u:
+                        apim_route_map.setdefault(_key, []).append(_u)
+        except Exception:
+            pass  # Non-critical
 
         # Count APIM APIs that require no subscription key (unauthenticated / open).
         apim_open_api_count: int = 0
@@ -19059,7 +19106,7 @@ def api_subscription_diagram(sub_id: str):
                 waf_select = "waf_policy_name" if "waf_policy_name" in appgw_cols else "NULL AS waf_policy_name"
                 appgw_routes = conn.execute(
                     f"SELECT gateway_name, hostname, backend_fqdns, backend_pool_name, {listener_select}, {path_select}, {protocol_select}, {waf_select}"
-                    " FROM appgw_routing_rules WHERE subscription_id=? LIMIT 20",
+                    " FROM appgw_routing_rules WHERE subscription_id=? LIMIT 500",
                     (sub_id,),
                 ).fetchall()
                 _pub_rows = conn.execute(
@@ -19159,6 +19206,7 @@ def api_subscription_diagram(sub_id: str):
             rows,
             plan_links=plan_links,
             apim_backend_urls=apim_backend_urls,
+            apim_route_map=apim_route_map,
             apim_open_api_count=apim_open_api_count,
             appgw_routes=appgw_routes,
             aks_route_rows=aks_route_rows,
@@ -20118,7 +20166,7 @@ def _build_subscription_overlay_views(rows: list, plan_links: list | None = None
     )
 
 
-def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_backend_urls: set[str] | None = None, apim_open_api_count: int = 0, appgw_routes: list | None = None, aks_route_rows: list | None = None, appgw_waf_policy_rows: list | None = None, firewall_policy_rows: list | None = None, ilb_ase_names: set[str] | None = None, public_appgw_names: set[str] | None = None) -> dict:
+def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_backend_urls: set[str] | None = None, apim_route_map: dict[str, list[str]] | None = None, apim_open_api_count: int = 0, appgw_routes: list | None = None, aks_route_rows: list | None = None, appgw_waf_policy_rows: list | None = None, firewall_policy_rows: list | None = None, ilb_ase_names: set[str] | None = None, public_appgw_names: set[str] | None = None) -> dict:
     """Build a high-level ingress flow diagram showing entry points and key services.
     
     Simplifies the architecture to: HTTP → WAF → App Gateway → APIM → Backend services
@@ -20129,6 +20177,10 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     apim_backend_urls: set of lowercase backend URLs from apim_backends table.
     Used to flag App Service Plans whose hosted apps aren't confirmed in APIM
     routing (potentially unprotected public exposure).
+
+    apim_route_map: dict mapping APIM resource name (lowercase) to list of backend
+    URLs harvested from apim_api_routes. Used to draw explicit APIM → backend arrows
+    (including APIM-to-APIM routes) that are absent from provisioned_assets routing_targets.
     """
     from collections import defaultdict as _dd
     
@@ -20540,7 +20592,48 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 # after _group_backends_by_type strips raw_json from the items.
                 _item["hosting_ase_name"] = _candidate_ase.get("name") or ""
 
-    aks_ingress_entries: list[dict] = []
+    # Propagate parent App Service Plan's network info back to hosted sites so that
+    # individual app/function-app nodes appear inside the correct VNet/subnet subgraph
+    # alongside their hosting plan rather than in the generic backbone subgraph.
+    _plan_network_by_name: dict[str, dict] = {}
+    for _item in backends:
+        _type_lc = (_item.get("arm_type") or _item.get("type") or "").lower()
+        if "serverfarms" in _type_lc and (_item.get("vnet_name") or _item.get("subnet_name") or _item.get("subnet_id")):
+            _plan_key = str(_item.get("name") or "").strip().lower()
+            if _plan_key:
+                _plan_network_by_name[_plan_key] = {
+                    "vnet_name": _item.get("vnet_name"),
+                    "parent_vnet_name": _item.get("parent_vnet_name") or _item.get("vnet_name"),
+                    "subnet_name": _item.get("subnet_name"),
+                    "subnet_id": _item.get("subnet_id"),
+                    "vnet_resource_group": _item.get("vnet_resource_group") or _item.get("parent_vnet_resource_group"),
+                }
+    if _plan_network_by_name:
+        _site_to_plan_name: dict[str, str] = {}
+        for _s_rg, _s_name, _p_rg, _p_name in (plan_links or []):
+            if _s_name and _p_name:
+                _site_to_plan_name[str(_s_name).strip().lower()] = str(_p_name).strip().lower()
+        for _item in backends:
+            _type_lc = (_item.get("arm_type") or _item.get("type") or "").lower()
+            if "sites" not in _type_lc:
+                continue
+            if _item.get("vnet_name") or _item.get("subnet_name") or _item.get("subnet_id"):
+                continue  # already has network placement
+            _site_key = str(_item.get("name") or "").strip().lower()
+            _parent_plan_name = _site_to_plan_name.get(_site_key)
+            if not _parent_plan_name:
+                continue
+            _plan_net = _plan_network_by_name.get(_parent_plan_name)
+            if not _plan_net:
+                continue
+            _item["vnet_name"] = _plan_net["vnet_name"]
+            _item["parent_vnet_name"] = _plan_net["parent_vnet_name"]
+            _item["subnet_name"] = _plan_net["subnet_name"]
+            _item["subnet_id"] = _plan_net["subnet_id"]
+            _item["vnet_resource_group"] = _plan_net["vnet_resource_group"]
+
+    aks_ingress_entries: list[dict] = []          # public-facing → entry_points
+    aks_ingress_backend_entries: list[dict] = []  # private/internal FQDNs → backends
     aks_service_entries: list[dict] = []
     if aks_route_rows:
         aks_clusters = [
@@ -21182,8 +21275,9 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             })
         return result
     
-    # Sites hosted by a known App Service Plan/ASE should not appear as standalone
-    # ingress backend nodes. They remain discoverable via App Service Plan drilldown.
+    # Build a set of (rg, site_name) keys for sites that have a known parent App Service Plan.
+    # These sites are rendered as explicit nodes (App → Plan → ASE) rather than hidden
+    # inside their parent plan's aggregated count.
     hosted_site_keys: set[tuple[str, str]] = set()
     for _site_rg, _site_name, _plan_rg, _plan_name in (plan_links or []):
         if not _site_name or not _plan_name:
@@ -21213,10 +21307,6 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
 
         for item in backend_items:
             type_key = (item.get("type") or "").lower()
-            if "sites" in type_key:
-                site_key = (str(item.get("rg") or "").strip().lower(), str(item.get("name") or "").strip().lower())
-                if site_key in hosted_site_keys:
-                    continue
             if "managedcluster" in type_key:
                 category = "AKS"
             elif "sites" in type_key and _is_function_app(item):
@@ -21262,7 +21352,10 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     if category == "APIM":
                         label = _apim_label(label, item_fqdns)
                     hosted_site_count = item.get("hosted_site_count")
-                    if hosted_site_count:
+                    # Suppress the "X apps" count on App Service Plan nodes: individual
+                    # app nodes are now rendered explicitly with App → Plan → ASE edges,
+                    # so the aggregated count would be redundant and confusing.
+                    if hosted_site_count and category not in ("App Service Plan", "App Service Environment"):
                         label = f"{label} ({hosted_site_count} app{'s' if hosted_site_count != 1 else ''})"
                     result.append({
                         "name": item["name"],
@@ -21580,14 +21673,15 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     node_by_fqdn_normalized.setdefault(fqdn_norm, node_id)
 
     # Augment node_by_fqdn with site-FQDN → parent-plan-node-ID entries.
-    # subscription_apply_plan_hierarchy folds individual app sites into their
-    # parent App Service Plans, so site FQDNs are NOT in shown_backend and
-    # therefore missing from node_by_fqdn.  Without this augmentation, App
-    # Gateway backend pools (and APIM routes) that reference an app FQDN like
+    # Individual app/function-app sites hosted by a plan are now rendered as
+    # explicit nodes, so their FQDNs will already be in node_by_fqdn pointing at
+    # the site node.  For sites NOT present in shown_backend (e.g. sites that are
+    # out-of-scope or in a different resource group), this augmentation falls back
+    # their FQDN to the parent App Service Plan node so that App Gateway / APIM
+    # backend-pool entries that reference an app FQDN like
     # "cbuk-core-prodgreen-fi-api-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net"
-    # fail to resolve and fall back to _routing_target_candidates, which extracts
-    # "prodgreen-shared-uksouth" (the ASE name) as a candidate — matching the ASE
-    # node instead of the correct App Service Plan.
+    # still resolve correctly instead of matching the ASE node.  The setdefault
+    # call means a site's own node ID (added first) always wins over the plan fallback.
     if plan_links and rows:
         # Build site_name -> parent_plan_node_id from plan_links.
         # plan_links contains BOTH site→plan (serverfarm) AND site→ASE entries.
@@ -21680,7 +21774,17 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
 
     for api in shown_api:
         api_targets: list[str] = []
-        for target in _parse_routing_targets(api.get("routing_targets")):
+        routing_target_list = list(_parse_routing_targets(api.get("routing_targets")))
+
+        # APIM resources have NULL routing_targets in provisioned_assets — augment
+        # from apim_route_map (built from apim_api_routes) so APIM→backend arrows
+        # (including APIM-to-APIM routes like cop-resource-server → another APIM) are drawn.
+        if not routing_target_list and apim_route_map:
+            _api_name_key = str(api.get("name") or "").strip().lower()
+            for _be_url in apim_route_map.get(_api_name_key, []):
+                routing_target_list.append({"target": _be_url, "name": _be_url})
+
+        for target in routing_target_list:
             target_node_id = _resolve_routing_target(target)
             if not target_node_id or target_node_id in _vmss_node_ids:
                 continue  # Skip unresolvable targets and raw VMSS nodes
@@ -22277,7 +22381,11 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         """Protocol-appropriate 🔴 label for direct Internet exposure arrows."""
         t = (arm_type or "").lower()
         if "apimanagement" in t:
-            return f'API "Product"' if count == 1 else f'API "Product" x{count}'
+            # "API Product" was misleading — it echoes the APIM sub-resource type
+            # (azurerm_api_management_product) rather than the gateway itself.
+            # APIM public access is governed by virtualNetworkType (External/None = public,
+            # Internal = private), not by a public IP, so label it accordingly.
+            return "APIM Gateway" if count == 1 else f"APIM Gateway x{count}"
         if "eventhub" in t or "servicebus" in t:
             proto = "AMQP"
         elif "keyvault" in t or "storage" in t or "appconfiguration" in t:
@@ -23003,24 +23111,48 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                                 node_by_name_normalized=node_by_name_normalized,
                             )
                 
+                # Fallback for unresolved internal FQDNs (e.g. *.internal.cbinnovation.uk).
+                # These are typically AKS ingress controller endpoints whose cluster
+                # may not have harvested ingress route data. Match by name-token
+                # overlap against known AKS cluster nodes so the arrow is still drawn.
+                if not _be_nid and ".internal." in _fqdn_s:
+                    _host_prefix = _fqdn_s.split(".internal.", 1)[0]
+                    _host_tokens = [t for t in _host_prefix.split("-") if len(t) > 2]
+                    _best_aks_nid: str | None = None
+                    _best_match_count = 0
+                    for _aks_item in aks_cluster_assets:
+                        _aks_name = str(_aks_item.get("name") or "").strip().lower()
+                        if not _aks_name:
+                            continue
+                        _match_count = sum(1 for t in _host_tokens if t in _aks_name)
+                        if _match_count > _best_match_count:
+                            _best_match_count = _match_count
+                            _best_aks_nid = _get_node_id(_aks_item)
+                    if _best_aks_nid:
+                        _be_nid = _best_aks_nid
+
                 if _be_nid and _be_nid != _gw_nid:
-                    _conn_key = (_source_nid, _be_nid)
+                    # Key by (gateway, backend) so multiple pools routing to the
+                    # same destination collapse into one arrow from the gateway.
+                    _conn_key = (_gw_nid, _be_nid)
                     if _conn_key not in _backend_connections:
                         _backend_connections[_conn_key] = {
                             'protocols': set(),
                             'has_waf': False,
                             'fqdns': set(),
-                            'sources': set([_source_nid]),
+                            'sources': set([_source_nid]),  # pool node(s) — kept for metadata
                             'has_auth': False,  # Placeholder for future auth detection
                         }
+                    else:
+                        _backend_connections[_conn_key]['sources'].add(_source_nid)
                     if _listener_protocol:
                         _backend_connections[_conn_key]['protocols'].add(_listener_protocol.upper())
                     if _waf_policy_name:
                         _backend_connections[_conn_key]['has_waf'] = True
                     _backend_connections[_conn_key]['fqdns'].add(_fqdn_s)
 
-        # Emit ONE arrow per unique backend target
-        for (_source_nid, _be_nid), _conn_info in _backend_connections.items():
+        # Emit ONE arrow per gateway→backend pair (deduplicated across all pools)
+        for (_gw_emit_nid, _be_nid), _conn_info in _backend_connections.items():
             # Build simple label: protocol + auth/WAF indicator
             _protocols = sorted(_conn_info['protocols']) if _conn_info['protocols'] else ['HTTPS']
             _protocol_str = "/".join(_protocols)
@@ -23054,7 +23186,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 _metadata_json = _metadata_json[:_max_metadata_len] + '..."}'
             
             _add_link(
-                f'    %% {_metadata_json}\n    {_source_nid} -->|"{_edge_label}"| {_be_nid}',
+                f'    %% {_metadata_json}\n    {_gw_emit_nid} -->|"{_edge_label}"| {_be_nid}',
                 "#f59e0b",
             )
 
@@ -23077,13 +23209,20 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 "white",
             )
 
-    # Fallback hosted-on arrows for any site nodes that remain visible
+    # App → App Service Plan "hosted on" arrows.
+    # Individual app and function-app nodes are now rendered as explicit nodes.
+    # Draw an edge from each site node to its parent App Service Plan.
+    # App Service Plan → ASE "Hosted in" edges are drawn separately below, so we
+    # only emit site → plan edges here (skip site → ASE plan_links entries so that
+    # apps don't bypass the plan and connect directly to the ASE container).
     if plan_links:
-        # Build lookup: plan_name (lower) → plan node_id (from shown_backend nodes)
+        # Build lookup: plan_name (lower) → plan node_id restricted to App Service Plan
+        # type only (not App Service Environment) so that ASE plan_links entries
+        # don't accidentally create App → ASE edges that bypass the plan node.
         plan_node_ids: dict[str, str] = {}
         for item in shown_backend:
             type_cat = item.get("type") or item.get("friendly_type") or ""
-            if type_cat in ("App Service Plan", "App Service Environment"):
+            if type_cat == "App Service Plan":
                 plan_name_lower = (item.get("name") or "").lower()
                 if plan_name_lower:
                     plan_node_ids[plan_name_lower] = _get_node_id(item)
@@ -23140,10 +23279,13 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         if item.get("rbac_label") and any(token in arm_type for token in ("keyvault", "storage", "appconfiguration", "documentdb")):
             return f"{item['rbac_label']} · {label}"
         if "apimanagement" in arm_type:
-            api_name = str(item.get("api_display_name") or item.get("api_name") or "Product").strip()
-            if not api_name:
-                api_name = "Product"
-            return f'API "{api_name}"'
+            # Prefer the FQDN (already in `label`) so reviewers can verify the endpoint.
+            # Avoid "API Product" which mirrors the APIM sub-resource type and suggests
+            # the wrong cause; APIM accessibility is determined by virtualNetworkType
+            # (None/External = internet-reachable, Internal = VNet-only).
+            if fqdns:
+                return label  # FQDN-based label computed above
+            return "APIM Gateway"
         return label
 
     for item in shown_backend:
