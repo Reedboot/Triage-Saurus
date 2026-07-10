@@ -2156,10 +2156,9 @@ class TestIngressDiagramGeneration:
 
         result = self._call(rows=rows, aks_route_rows=aks_route_rows)
         mermaid = result.get("mermaid", "")
-        assert "orders-ingress" in mermaid, mermaid
-        assert "aks.example.com" in mermaid, mermaid
-        assert "Ingress" in mermaid, mermaid
+        assert "Kubernetes Ingress" in mermaid, mermaid
         assert "aks-prod" in mermaid, mermaid
+        assert "Routing" in mermaid, mermaid
 
     def test_apim_public_ip_is_rendered_on_apim_details(self):
         """APIM-linked Public IPs should appear on the APIM drilldown, not as a separate node."""
@@ -3591,6 +3590,68 @@ class TestSubscriptionResourceGroupDiagrams:
         assert "orders-ingress" in mermaid, mermaid
         assert "orders-service" in mermaid, mermaid
         assert "routes to" in mermaid, mermaid
+
+    def test_rg_connectivity_does_not_self_route_aks_ingress_nodes(self):
+        import sys
+        import os
+
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        from web.subscription_diagram_helpers import build_subscription_diagrams_by_rg
+
+        rows = [
+            (
+                "aks-prod",
+                "Microsoft.ContainerService/managedClusters",
+                "rg-app",
+                "",
+                0,
+                None,
+                "aks-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                None,
+                None,
+            ),
+        ]
+        aks_route_rows = [
+            (
+                "aks-prod",
+                "default",
+                "orders-ingress",
+                "orders.example.com",
+                "/*",
+                "orders-service",
+                "8080",
+                "orders-deploy",
+                "git@example.com/orders",
+                "rg-app",
+                '{"app":"orders"}',
+            )
+        ]
+
+        diagrams = build_subscription_diagrams_by_rg(
+            "Test Subscription",
+            "production",
+            rows,
+            aks_route_rows=aks_route_rows,
+            sanitise_node_id=lambda s: s.replace("/", "_").replace(" ", "_"),
+            friendly_type=lambda arm_type: "App Gateway" if "applicationgateway" in (arm_type or "").lower() else arm_type,
+            get_icon_path=lambda _resource_type: None,
+            normalize_attack_paths=lambda raw_paths, reviewer=None: raw_paths,
+        )
+
+        mermaid = diagrams[0]["views"]["connectivity"]["mermaid"]
+        for line in mermaid.splitlines():
+            if "-->" not in line:
+                continue
+            left, right = line.split("-->", 1)
+            source = left.strip().split()[-1]
+            target = right.strip().split()[-1]
+            assert source != target, mermaid
 
 
 class TestCosmosDbFqdnResolution:
@@ -5229,6 +5290,7 @@ class TestCloudPosture:
 
         edges = payload["edges"]
         assert any(e["source"] == ase_id and e["target"] == site_id for e in edges), edges
+        assert any(e["source"] == site_id and e["target"] == ase_id for e in edges), edges
 
     def test_subscription_architecture_payload_infers_service_fabric_network_from_vmss_children(self):
         import json
@@ -6532,6 +6594,131 @@ class TestCloudPosture:
         assert data["security"]["public_network_access"] == "Enabled"
         assert data["network"]["virtual_network_type"] == "External"
 
+    def test_api_cloud_apim_child_apis_returns_table_payload(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                raw_json TEXT
+            );
+            CREATE TABLE apim_api_routes (
+                apim_name TEXT,
+                subscription_id TEXT,
+                api_name TEXT,
+                api_display_name TEXT,
+                api_path TEXT,
+                api_protocols TEXT,
+                backend_url TEXT,
+                service_url TEXT,
+                exposure_level TEXT,
+                requires_subscription INTEGER
+            );
+            CREATE TABLE apim_api_operations (
+                operation_id TEXT,
+                display_name TEXT,
+                method TEXT,
+                url_template TEXT,
+                description TEXT,
+                requires_subscription INTEGER,
+                apim_name TEXT,
+                api_name TEXT,
+                subscription_id TEXT
+            );
+            """
+        )
+        apim_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/apim-prod"
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (id, subscription_id, resource_group, name, type, raw_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                apim_id,
+                "sub-1",
+                "rg-api",
+                "apim-prod",
+                "Microsoft.ApiManagement/service",
+                json.dumps({"properties": {}}),
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO apim_api_routes (
+                apim_name, subscription_id, api_name, api_display_name, api_path, api_protocols,
+                backend_url, service_url, exposure_level, requires_subscription
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "apim-prod",
+                "sub-1",
+                "orders",
+                "Orders API",
+                "/orders",
+                json.dumps(["HTTPS"]),
+                "https://orders.internal",
+                "https://apim-prod.azure-api.net",
+                "Public",
+                1,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO apim_api_operations (
+                operation_id, display_name, method, url_template, description,
+                requires_subscription, apim_name, api_name, subscription_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "orders-get",
+                "Get orders",
+                "GET",
+                "/orders",
+                "List orders",
+                1,
+                "apim-prod",
+                "orders",
+                "sub-1",
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/apim-child-apis", query_string={"resource_id": apim_id})
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        assert data["view_type"] == "table", data
+        assert data["api_count"] == 1, data
+        assert data["columns"][:3] == ["API", "Path", "Protocols"], data["columns"]
+        assert data["rows"][0][0] == "Orders API", data["rows"]
+        assert data["rows"][0][5] == 1, data["rows"]
+
     def test_api_cloud_resource_details_surfaces_waf_policy_summary(self, monkeypatch):
         import os
         import sqlite3
@@ -7305,6 +7492,144 @@ class TestCloudPosture:
         assert details["network"]["vnet"] == "rg-vnet"
         assert details["network"]["subnet"] == "vmss-subnet"
         assert "20.30.40.60" in details["network"]["public_ips"]
+
+        os.unlink(tmp.name)
+
+    def test_api_cloud_resource_details_prefers_service_fabric_network_parent_over_key_vault(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+        import tempfile
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        conn = sqlite3.connect(tmp.name)
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+        cluster_id = "/subscriptions/sub-1/resourceGroups/cbuk-core-prodgreen-sf-uksouth/providers/Microsoft.ServiceFabric/clusters/cbuk-core-prodgreen-sf"
+        key_vault_id = "/subscriptions/sub-1/resourceGroups/cbuk-core-prodgreen-sf-uksouth/providers/Microsoft.KeyVault/vaults/cbuk-core-prodgreen-kv"
+        subnet_id = "/subscriptions/sub-1/resourceGroups/cbuk-core-prodgreen-network-uksouth/providers/Microsoft.Network/virtualNetworks/prodgreen/subnets/service_fabric_zonal"
+        conn.executemany(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    cluster_id,
+                    "sub-1",
+                    "cbuk-core-prodgreen-sf-uksouth",
+                    "cbuk-core-prodgreen-sf",
+                    "Microsoft.ServiceFabric/clusters",
+                    "uksouth",
+                    "Standard",
+                    None,
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({
+                        "properties": {
+                            "virtualMachineProfile": {
+                                "networkProfile": {
+                                    "networkInterfaceConfigurations": [
+                                        {
+                                            "properties": {
+                                                "ipConfigurations": [
+                                                    {
+                                                        "properties": {
+                                                            "subnet": {"id": subnet_id}
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    }),
+                    0,
+                    None,
+                ),
+                (
+                    key_vault_id,
+                    "sub-1",
+                    "cbuk-core-prodgreen-sf-uksouth",
+                    "cbuk-core-prodgreen-kv",
+                    "Microsoft.KeyVault/vaults",
+                    "uksouth",
+                    "Standard",
+                    None,
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({"properties": {"vaultUri": "https://cbuk-core-prodgreen-sf.vault.azure.net/"}}),
+                    0,
+                    None,
+                ),
+            ],
+        )
+        conn.commit()
+
+        def _db():
+            c = sqlite3.connect(tmp.name)
+            c.row_factory = sqlite3.Row
+            return c
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", _db)
+        client = app_module.app.test_client()
+
+        details_resp = client.get("/api/cloud/resource-details", query_string={"id": cluster_id})
+        assert details_resp.status_code == 200, details_resp.get_data(as_text=True)
+        details = details_resp.get_json()
+        assert details["name"] == "cbuk-core-prodgreen-sf"
+        assert details["parent_resource"]["type_label"] != "Key Vault"
+        assert details["parent_resource"]["type_label"] in {"Subnet", "Virtual Network"}
+        assert details["network"]["vnet"] == "prodgreen"
+        assert details["network"]["subnet"] == "service_fabric_zonal"
 
         os.unlink(tmp.name)
 

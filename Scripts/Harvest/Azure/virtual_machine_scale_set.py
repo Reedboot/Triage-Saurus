@@ -10,21 +10,6 @@ from ._helpers import az, safe_str
 RESOURCE_TYPE = "Microsoft.Compute/virtualMachineScaleSets"
 
 
-def _has_public_ip_configuration(resource: dict[str, Any]) -> bool:
-    props = resource.get("properties") or {}
-    vm_profile = props.get("virtualMachineProfile") or {}
-    net_profile = vm_profile.get("networkProfile") or {}
-    nic_configs = net_profile.get("networkInterfaceConfigurations") or []
-    for nic in nic_configs:
-        nic_props = nic.get("properties") or {}
-        ip_configs = nic_props.get("ipConfigurations") or []
-        for ip_cfg in ip_configs:
-            ip_props = ip_cfg.get("properties") or {}
-            if ip_props.get("publicIPAddressConfiguration"):
-                return True
-    return False
-
-
 def _subnet_refs(resource: dict[str, Any]) -> list[str]:
     props = resource.get("properties") or {}
     vm_profile = props.get("virtualMachineProfile") or {}
@@ -75,12 +60,10 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     rows = harvest_resource_list(
         subscription_id,
         RESOURCE_TYPE,
-        is_public_fn=_has_public_ip_configuration,
         extra_fn=lambda resource: {
             "instance_count": (((resource.get("sku") or {}).get("capacity"))),
             "orchestration_mode": ((resource.get("properties") or {}).get("orchestrationMode")),
             "upgrade_policy_mode": (((resource.get("properties") or {}).get("upgradePolicy") or {}).get("mode")),
-            "has_public_ip_configuration": _has_public_ip_configuration(resource),
         },
     )
 
@@ -105,7 +88,6 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             if os_type:
                 extra["os_type"] = os_type
             row["raw_json"] = json.dumps({**details, "_extra": extra})
-            row["is_public"] = 1 if _has_public_ip_configuration(details) else row["is_public"]
             # Keep the original row shape but store the richer VMSS payload so the
             # architecture view can infer the VNet boundary from nested NIC config.
         results.append(row)

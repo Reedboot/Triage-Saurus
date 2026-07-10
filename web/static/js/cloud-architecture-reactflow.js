@@ -702,10 +702,57 @@ function openModal(resourceId, nodeData, lookup = {}) {
     });
 }
 
+function isApimNode(nodeData) {
+  const haystack = [
+    nodeData?.arm_type,
+    nodeData?.type,
+    nodeData?.resourceType,
+    nodeData?.typeLabel,
+    nodeData?.label,
+    nodeData?.name,
+  ]
+    .map((value) => String(value || "").toLowerCase())
+    .join(" ");
+  return haystack.includes("apimanagement") || haystack.includes("api management") || haystack === "apim";
+}
+
+function openApimApisModal(resourceId) {
+  if (!modalOverlay || !resourceId) return;
+  const controller = startModalRequest();
+  const url = new URL("/api/cloud/apim-child-apis", window.location.origin);
+  url.searchParams.set("resource_id", resourceId);
+
+  fetch(cacheBustUrl(url.toString()), {
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+    signal: controller.signal,
+  })
+    .then(async (resp) => {
+      if (controller.signal.aborted) return;
+      const data = await readJsonResponse(resp);
+      if (!resp.ok) {
+        throw new Error(data?.error || `Request failed with status ${resp.status}`);
+      }
+      if (data?.error) {
+        throw new Error(data.error);
+      }
+      if (controller.signal.aborted) return;
+      renderModalContent(data);
+    })
+    .catch((err) => {
+      if (err?.name === "AbortError") return;
+      showModalError(`Error loading APIM APIs: ${err.message}`);
+    });
+}
+
 function openNodePopup(resourceId, nodeData) {
   const resources = Array.isArray(nodeData?.resources) ? nodeData.resources.filter(Boolean) : [];
   const isGroupedNode = Boolean(nodeData?.is_group || nodeData?.isGroupNode || nodeData?.summaryNode || nodeData?.groupType);
   const armType = String(nodeData?.arm_type || nodeData?.type || nodeData?.resourceType || "").toLowerCase();
+  if (isApimNode(nodeData)) {
+    openApimApisModal(resourceId);
+    return;
+  }
   const prefersChildDrilldown =
     armType.includes("applicationgateway") ||
     armType.includes("serverfarms") ||
@@ -1609,7 +1656,7 @@ function App() {
         
         return {
           ...edge,
-          type: connType === "public" || connType === "waf_protection" || connType === "firewall_ingress" || connType === "firewall" ? "straight" : "smoothstep",
+          type: "smoothstep",
           sourcePosition: edge.sourcePosition || Position.Right,
           targetPosition: edge.targetPosition || Position.Left,
           style: {

@@ -43,7 +43,11 @@ def _bastion_show(subscription_id: str, resource_group: str, name: str) -> dict[
         ["network", "bastion", "show", "--resource-group", resource_group, "--name", name],
         subscription_id,
     )
-    if isinstance(details, dict):
+    if isinstance(details, dict) and details:
+        return details
+    resource_id = f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.Network/bastionHosts/{name}"
+    details = az(["resource", "show", "--ids", resource_id], subscription_id)
+    if isinstance(details, dict) and details:
         return details
     return None
 

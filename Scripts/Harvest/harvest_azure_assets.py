@@ -482,10 +482,16 @@ def check_prerequisites() -> bool:
         return False
 
     # 3. Logged in to Azure
-    login_check = subprocess.run(
-        ["az", "account", "show", "--output", "json"],
-        capture_output=True, text=True, timeout=20,
-    )
+    try:
+        login_check = subprocess.run(
+            ["az", "account", "show", "--output", "json"],
+            capture_output=True, text=True, timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        print("[prereq] ✗ 'az account show' timed out after 60 s.", file=sys.stderr)
+        print("         This usually means network/proxy issues or a stale token refresh.", file=sys.stderr)
+        print("         Try: az login  (or check your network/proxy settings)", file=sys.stderr)
+        return False
     if login_check.returncode != 0:
         print("[prereq] ✗ Not logged in to Azure.", file=sys.stderr)
         print("         Run: az login", file=sys.stderr)

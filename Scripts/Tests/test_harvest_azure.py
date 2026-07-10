@@ -24,6 +24,7 @@ import apim_routing_map
 import appgw_routing_map
 import correlate_assets
 import db_helpers
+from Azure import app_service_environment
 from Azure._helpers import (
     safe_str,
     infer_fqdn,
@@ -669,7 +670,7 @@ class TestVirtualMachineScaleSetHarvest:
                                                 {
                                                     "properties": {
                                                         "subnet": {"id": subnet_id},
-                                                        "publicIPAddressConfiguration": None,
+                                                        "publicIPAddressConfiguration": {"name": "pip-config"},
                                                     }
                                                 }
                                             ]
@@ -704,12 +705,17 @@ class TestVirtualMachineScaleSetHarvest:
         rows = virtual_machine_scale_set.harvest("sub-1")
 
         assert len(rows) == 1
+        assert rows[0]["is_public"] == 0
         raw = json.loads(rows[0]["raw_json"])
         extra = raw["_extra"]
+        assert extra["instance_count"] == 2
+        assert extra["orchestration_mode"] is None
+        assert extra["upgrade_policy_mode"] is None
         assert extra["subnet_id"] == subnet_id
         assert extra["subnet_name"] == "app"
         assert extra["vnet_name"] == "vnet-one"
         assert extra["vnet_resource_group"] == "rg-net"
+        assert "has_public_ip_configuration" not in extra
 
 
 # ---------------------------------------------------------------------------
@@ -1153,9 +1159,50 @@ class TestBastionPublicIpDetection:
         assert raw["_extra"]["public_ip_resource_ids"] == [pip_id]
         assert row["fqdn"] == "bastion-one.example.contoso.com"
 
+    def test_harvest_falls_back_to_resource_show_when_network_show_is_empty(self, monkeypatch):
+        bastion_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/bastionHosts/bastion-one"
+        pip_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/publicIPAddresses/bastion-one"
 
-class TestVmssPublicIpDetection:
-    def test_detects_public_ip_configuration_in_network_profile(self):
+        list_row = {
+            "id": bastion_id,
+            "name": "bastion-one",
+            "resourceGroup": "rg-net",
+            "type": "Microsoft.Network/bastionHosts",
+            "location": "ukwest",
+        }
+        detailed_row = {
+            **list_row,
+            "properties": {
+                "ipConfigurations": [
+                    {"properties": {"publicIPAddress": {"id": pip_id}}}
+                ],
+                "dnsName": "bastion-one.example.contoso.com",
+            },
+        }
+
+        def fake_az(args, subscription_id):
+            if args[:3] == ["resource", "list", "--resource-type"]:
+                return [list_row]
+            if args[:3] == ["network", "bastion", "show"]:
+                return {}
+            if args[:3] == ["resource", "show", "--ids"]:
+                return detailed_row
+            return []
+
+        monkeypatch.setattr(bastion_host, "az", fake_az)
+
+        rows = bastion_host.harvest("sub-1")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["is_public"] == 1
+        assert row["fqdn"] == "bastion-one.example.contoso.com"
+        raw = json.loads(row["raw_json"])
+        assert raw["_extra"]["public_ip_resource_ids"] == [pip_id]
+
+
+class TestVmssNetworkExtraction:
+    def test_extracts_subnet_refs_from_network_profile(self):
+        subnet_id = "/subscriptions/000/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-one/subnets/app"
         resource = {
             "properties": {
                 "virtualMachineProfile": {
@@ -1164,7 +1211,12 @@ class TestVmssPublicIpDetection:
                             {
                                 "properties": {
                                     "ipConfigurations": [
-                                        {"properties": {"publicIPAddressConfiguration": {"name": "pip-config"}}}
+                                        {
+                                            "properties": {
+                                                "subnet": {"id": subnet_id},
+                                                "publicIPAddressConfiguration": {"name": "pip-config"},
+                                            }
+                                        }
                                     ]
                                 }
                             }
@@ -1173,7 +1225,7 @@ class TestVmssPublicIpDetection:
                 }
             }
         }
-        assert virtual_machine_scale_set._has_public_ip_configuration(resource) is True
+        assert virtual_machine_scale_set._subnet_refs(resource) == [subnet_id]
 
 
 class TestApimHarvestConcurrency:
@@ -1639,7 +1691,36 @@ class TestServiceFabricHarvest:
                 "upgradeMode": "Manual",
             },
         }
-        monkeypatch.setattr(service_fabric, "az", lambda args, subscription_id: [cluster])
+        vmss = {
+            "virtualMachineProfile": {
+                "networkProfile": {
+                    "networkInterfaceConfigurations": [
+                        {
+                            "properties": {
+                                "ipConfigurations": [
+                                    {
+                                        "properties": {
+                                            "subnet": {
+                                                "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/prodgreen/subnets/service_fabric_zonal"
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+
+        def fake_az(args, subscription_id):
+            if args[:2] == ["sf", "cluster"]:
+                return [cluster]
+            if args[:3] == ["vmss", "show", "--resource-group"]:
+                return vmss
+            return []
+
+        monkeypatch.setattr(service_fabric, "az", fake_az)
 
         class _Result:
             def __init__(self, stdout):
@@ -1681,6 +1762,44 @@ class TestServiceFabricHarvest:
         assert svc["name"] == "fabric:/OrderApp/OrderService"
         assert svc["resource_group"] == "rg-sf"
         assert svc["fqdn"] == "sfha.example.com"
+        cluster_row = next(r for r in rows if r["type"] == "Microsoft.ServiceFabric/clusters")
+        assert cluster_row["vnet_name"] == "prodgreen"
+        assert cluster_row["subnet_name"] == "service_fabric_zonal"
+        assert cluster_row["subnet_id"] == "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/prodgreen/subnets/service_fabric_zonal"
+
+
+class TestAppServiceEnvironmentHarvest:
+    def test_harvest_exposes_network_scope_for_diagram_grouping(self, monkeypatch):
+        ase = {
+            "id": "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/prodgreen-shared-uksouth",
+            "name": "prodgreen-shared-uksouth",
+            "resourceGroup": "rg-app",
+            "location": "uksouth",
+            "type": "Microsoft.Web/hostingEnvironments",
+            "kind": "ASEV3",
+            "properties": {
+                "dnsSuffix": "prodgreen-shared-uksouth.appserviceenvironment.net",
+                "internalLoadBalancingMode": "Web, Publishing",
+                "virtualNetwork": {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/prodgreen",
+                    "subnet": {
+                        "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/prodgreen/subnets/shared_ase"
+                    },
+                },
+            },
+        }
+
+        monkeypatch.setattr(app_service_environment, "az", lambda args, subscription_id: [ase])
+
+        rows = app_service_environment.harvest("sub-1")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["name"] == "prodgreen-shared-uksouth"
+        assert row["vnet_name"] == "prodgreen"
+        assert row["subnet_name"] == "shared_ase"
+        assert row["subnet_id"].endswith("/subnets/shared_ase")
+        raw = json.loads(row["raw_json"])
+        assert raw["_extra"]["vnet_name"] == "prodgreen"
 
 
 class TestFirewallNatRules:
@@ -2159,6 +2278,48 @@ class TestAppGatewayRewriteHarvest:
         assert row[2] == "backend.example.com/v1"
         assert row[3] == "https://backend.example.com/v1"
         assert row[4] == "https"
+
+    def test_apim_route_bundle_resolves_backend_id_to_url(self, monkeypatch):
+        service = {
+            "name": "cbuk-core-prodgreen-api-uksouth",
+            "resourceGroup": "cbuk-core-prodgreen-api-uksouth",
+            "id": "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.ApiManagement/service/cbuk-core-prodgreen-api-uksouth",
+        }
+        api = {
+            "name": "account_identification",
+            "properties": {
+                "displayName": "account_identification",
+                "path": "accountIdentification",
+                "serviceUrl": "",
+                "subscriptionRequired": True,
+                "protocols": ["https"],
+            },
+        }
+        backend = {
+            "name": "account-identification-api-backend-aks",
+            "url": "https://prodgreen-account-identification.internal.cbinnovation.uk",
+        }
+
+        monkeypatch.setattr(
+            apim,
+            "_az_show_policy",
+            lambda *args, **kwargs: '<policies><inbound><base /><set-backend-service backend-id="account-identification-api-backend-aks" /></inbound></policies>',
+        )
+        monkeypatch.setattr(apim, "_az_list_operations", lambda *args, **kwargs: [])
+
+        route, operations = apim._fetch_api_bundle(
+            service,
+            api,
+            "sub-1",
+            "2026-06-01T00:00:00Z",
+            apim._build_backend_lookup([backend]),
+        )
+
+        assert operations == []
+        assert route is not None
+        assert route["backend_id"] == "account-identification-api-backend-aks"
+        assert route["backend_url"] == "https://prodgreen-account-identification.internal.cbinnovation.uk"
+        assert route["service_url"] is None
 
     def test_invokes_apim_backend_links_harvest(self, monkeypatch):
         calls = []

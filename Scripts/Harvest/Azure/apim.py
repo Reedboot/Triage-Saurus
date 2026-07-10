@@ -122,18 +122,35 @@ def _get_gateway_hosts(service: dict[str, Any]) -> list[str]:
 
 
 def _get_apim_exposure_level(service_or_props: dict[str, Any]) -> str:
+    """Return "Internal" or "Public" for an APIM service.
+
+    Azure APIM public accessibility is governed by ``virtualNetworkType``:
+      - "None"     – no VNet integration; gateway is internet-reachable.
+      - "External" – VNet-injected but gateway and developer portal remain
+                     internet-reachable (only backend reach uses the VNet).
+      - "Internal" – VNet-injected; gateway/portal are NOT internet-reachable.
+
+    ``publicNetworkAccess`` is an explicit override that can disable internet
+    access even when virtualNetworkType is None/External.
+
+    The historical heuristic of inferring visibility from the presence or
+    absence of publicIpAddresses / privateIPAddresses is unreliable: Azure may
+    omit these fields even for internet-reachable APIM instances.  We therefore
+    rely on virtualNetworkType as the authoritative signal.
+    """
     props = service_or_props.get("properties") or service_or_props
     virtual_network_type = (props.get("virtualNetworkType") or service_or_props.get("virtualNetworkType") or "").lower()
     public_network_access = (props.get("publicNetworkAccess") or service_or_props.get("publicNetworkAccess") or "Enabled").lower()
-    public_ips = props.get("publicIpAddresses") or service_or_props.get("publicIpAddresses") or []
-    private_ips = props.get("privateIPAddresses") or service_or_props.get("privateIPAddresses") or []
 
+    # Internal VNet mode: gateway is not reachable from the internet.
     if virtual_network_type == "internal":
         return "Internal"
+
+    # Explicit public-network-access override wins regardless of VNet type.
     if public_network_access == "disabled":
         return "Internal"
-    if not public_ips and private_ips:
-        return "Internal"
+
+    # "External" and "None" (or unknown) VNet types expose the gateway publicly.
     return "Public"
 
 
@@ -193,6 +210,14 @@ def _get_api_count(service_name: str | None, subscription_id: str, rg: str | Non
 def _az_list_apis(service_name: str, resource_group: str, subscription_id: str) -> list[dict[str, Any]] | None:
     return az([
         "apim", "api", "list",
+        "--service-name", service_name,
+        "--resource-group", resource_group,
+    ], subscription_id)
+
+
+def _az_list_backends(service_name: str, resource_group: str, subscription_id: str) -> list[dict[str, Any]] | None:
+    return az([
+        "apim", "backend", "list",
         "--service-name", service_name,
         "--resource-group", resource_group,
     ], subscription_id)
@@ -362,11 +387,62 @@ def _policy_flags(policy_xml: str | None) -> dict[str, Any]:
     }
 
 
+def _normalize_backend_key(value: str | None) -> str | None:
+    key = safe_str(value)
+    return key.lower() if key else None
+
+
+def _backend_url_from_row(backend: dict[str, Any]) -> str | None:
+    props = backend.get("properties") or {}
+    return safe_str(backend.get("url") or props.get("url"))
+
+
+def _build_backend_lookup(backends: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
+    lookup: dict[str, dict[str, Any]] = {}
+    for backend in backends or []:
+        name = _normalize_backend_key(backend.get("name"))
+        if name:
+            lookup[name] = backend
+        backend_id = _normalize_backend_key(backend.get("id"))
+        if backend_id:
+            lookup[backend_id] = backend
+    return lookup
+
+
+def _resolve_backend_reference(
+    backend_ids: list[str],
+    backend_urls: list[str],
+    service_url: str | None,
+    backend_lookup: dict[str, dict[str, Any]],
+) -> tuple[str | None, str | None]:
+    if backend_urls:
+        backend_url = safe_str(backend_urls[0])
+        if backend_url:
+            return None, backend_url
+
+    for backend_id in backend_ids:
+        lookup_key = _normalize_backend_key(backend_id)
+        if not lookup_key:
+            continue
+        backend = backend_lookup.get(lookup_key)
+        if backend:
+            resolved_id = safe_str(backend.get("name") or backend.get("id") or backend_id)
+            backend_url = _backend_url_from_row(backend)
+            if backend_url:
+                return resolved_id or backend_id, backend_url
+
+    backend_url = safe_str(service_url)
+    if backend_url:
+        return None, backend_url
+    return None, None
+
+
 def _fetch_api_bundle(
     service: dict[str, Any],
     api: dict[str, Any],
     subscription_id: str,
     now: str,
+    backend_lookup: dict[str, dict[str, Any]],
     *,
     include_operations: bool = True,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
@@ -391,7 +467,12 @@ def _fetch_api_bundle(
     )
     api_policy_flags = _policy_flags(api_policy)
     service_url = safe_str(props.get("serviceUrl") or api.get("serviceUrl"))
-    api_backend_url = api_policy_flags["backend_urls"][0] if api_policy_flags["backend_urls"] else service_url
+    backend_id, api_backend_url = _resolve_backend_reference(
+        api_policy_flags["backend_ids"],
+        api_policy_flags["backend_urls"],
+        service_url,
+        backend_lookup,
+    )
     if not api_backend_url:
         return None, []
 
@@ -407,7 +488,7 @@ def _fetch_api_bundle(
         "api_display_name": api_display,
         "api_path": api_path,
         "api_protocols": json.dumps(protocols),
-        "backend_id": None,
+        "backend_id": backend_id,
         "backend_url": api_backend_url,
         "service_url": service_url,
         "requires_subscription": requires_subscription,
@@ -540,6 +621,15 @@ def _harvest_service_route_bundle(
     if not apim_name or not resource_group:
         return None, [], []
 
+    print(f"    [apim-routes] {apim_name}: discovering backends...", flush=True)
+    backends_started = time.perf_counter()
+    backends = _az_list_backends(apim_name, resource_group, subscription_id)
+    backend_lookup = _build_backend_lookup(backends)
+    print(
+        f"    [apim-routes] {apim_name}: discovered {len(backends) if backends else 0} backend(s) in {_format_elapsed(time.perf_counter() - backends_started)}",
+        flush=True,
+    )
+
     print(f"    [apim-routes] {apim_name}: discovering APIs...", flush=True)
     discover_started = time.perf_counter()
     apis = _az_list_apis(apim_name, resource_group, subscription_id)
@@ -566,6 +656,7 @@ def _harvest_service_route_bundle(
                     api,
                     subscription_id,
                     now,
+                    backend_lookup,
                     include_operations=not stage_backfill,
                 ): safe_str(api.get("name")) or "<unknown>"
                 for api in apis

@@ -14,6 +14,30 @@ from ._helpers import az, safe_str
 RESOURCE_TYPE = "Microsoft.Web/hostingEnvironments"
 
 
+def _subnet_id_from_virtual_network(props: dict[str, Any]) -> str | None:
+    virtual_network = props.get("virtualNetwork") or {}
+    if not isinstance(virtual_network, dict):
+        return None
+    subnet = virtual_network.get("subnet") or {}
+    if isinstance(subnet, dict):
+        subnet_id = safe_str(subnet.get("id"))
+        if subnet_id:
+            return subnet_id
+    return safe_str(virtual_network.get("subnetId") or virtual_network.get("subnet_id"))
+
+
+def _vnet_name_from_subnet_id(subnet_id: str | None) -> str | None:
+    if not subnet_id or "/virtualNetworks/" not in subnet_id:
+        return None
+    return subnet_id.split("/virtualNetworks/")[-1].split("/")[0] or None
+
+
+def _resource_group_from_arm_id(resource_id: str | None) -> str | None:
+    if not resource_id or "/resourceGroups/" not in resource_id:
+        return None
+    return resource_id.split("/resourceGroups/")[-1].split("/")[0] or None
+
+
 def _worker_os_type(ase: dict[str, Any]) -> str | None:
     props = ase.get("properties") or ase
     os_types: list[str] = []
@@ -47,6 +71,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
 
         # Internal ASE DNS suffix: <ase-name>.<region>.appserviceenvironment.net
         dns_suffix = safe_str(props.get("dnsSuffix"))
+        subnet_id = _subnet_id_from_virtual_network(props)
 
         extra = {
             "kind": ase.get("kind"),          # ASEV2 or ASEV3
@@ -59,6 +84,10 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "worker_pools": len(props.get("workerPools") or []),
             "virtual_network": (props.get("virtualNetwork") or {}).get("id"),
             "subnet": (props.get("virtualNetwork") or {}).get("subnet"),
+            "vnet_name": _vnet_name_from_subnet_id(subnet_id),
+            "vnet_resource_group": _resource_group_from_arm_id(subnet_id),
+            "subnet_name": subnet_id.split("/subnets/")[-1] if subnet_id and "/subnets/" in subnet_id else None,
+            "subnet_id": subnet_id,
             "upgrade_availability": props.get("upgradeAvailability"),
             "hosted_service_families": ["App Service", "Function App"],
             "hosted_resource_types": ["Microsoft.Web/sites"],
@@ -84,6 +113,16 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "auth_methods": json.dumps([]),
             "fqdn": dns_suffix,
             "pipeline_tag": None,
+            "vnet_name": extra["vnet_name"],
+            "vnet_resource_group": extra["vnet_resource_group"],
+            "subnet_name": extra["subnet_name"],
+            "subnet_id": extra["subnet_id"],
+            "network": {
+                "vnet": extra["vnet_name"],
+                "subnet": extra["subnet_name"],
+                "vnet_resource_group": extra["vnet_resource_group"],
+                "subnet_id": extra["subnet_id"],
+            },
             "raw_json": json.dumps({**ase, "_extra": extra}),
         })
 

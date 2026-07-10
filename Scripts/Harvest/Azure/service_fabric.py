@@ -66,6 +66,57 @@ def _sanitize_sf_name(value: str | None) -> str:
     return raw.replace("fabric:/", "").replace("fabric:", "").replace("/", "_")
 
 
+def _subnet_id_from_vmss(vmss: dict[str, Any]) -> str | None:
+    props = vmss.get("properties") or vmss
+    vm_profile = props.get("virtualMachineProfile") or {}
+    net_profile = vm_profile.get("networkProfile") or {}
+    for nic_cfg in net_profile.get("networkInterfaceConfigurations") or []:
+        nic_props = nic_cfg.get("properties") or {}
+        for ip_cfg in nic_props.get("ipConfigurations") or nic_cfg.get("ipConfigurations") or []:
+            ip_props = ip_cfg.get("properties") or {}
+            subnet = ip_props.get("subnet") or ip_cfg.get("subnet") or {}
+            subnet_id = safe_str((subnet or {}).get("id"))
+            if subnet_id:
+                return subnet_id
+    return None
+
+
+def _vnet_name_from_subnet_id(subnet_id: str | None) -> str | None:
+    if not subnet_id or "/virtualNetworks/" not in subnet_id:
+        return None
+    return subnet_id.split("/virtualNetworks/")[-1].split("/")[0] or None
+
+
+def _resource_group_from_arm_id(resource_id: str | None) -> str | None:
+    if not resource_id or "/resourceGroups/" not in resource_id:
+        return None
+    return resource_id.split("/resourceGroups/")[-1].split("/")[0] or None
+
+
+def _cluster_network_scope(subscription_id: str, cluster_rg: str | None, node_types: list[dict[str, Any]]) -> dict[str, str | None]:
+    if not cluster_rg:
+        return {"vnet_name": None, "vnet_resource_group": None, "subnet_name": None, "subnet_id": None}
+
+    for node_type in node_types:
+        node_name = safe_str(node_type.get("name"))
+        if not node_name:
+            continue
+        vmss = az(["vmss", "show", "--resource-group", cluster_rg, "--name", node_name], subscription_id)
+        if not isinstance(vmss, dict) or not vmss:
+            continue
+        subnet_id = _subnet_id_from_vmss(vmss)
+        if not subnet_id:
+            continue
+        return {
+            "vnet_name": _vnet_name_from_subnet_id(subnet_id),
+            "vnet_resource_group": _resource_group_from_arm_id(subnet_id),
+            "subnet_name": subnet_id.split("/subnets/")[-1] if "/subnets/" in subnet_id else None,
+            "subnet_id": subnet_id,
+        }
+
+    return {"vnet_name": None, "vnet_resource_group": None, "subnet_name": None, "subnet_id": None}
+
+
 def _extract_placement_constraints(svc_props: dict[str, Any]) -> dict[str, Any]:
     """Extract placement constraint information from service properties.
     
@@ -124,6 +175,10 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
 
         node_types = props.get("nodeTypes") or []
         node_type_names = [nt.get("name") for nt in node_types if nt.get("name")]
+        cluster_id = cluster.get("id")
+        cluster_rg = cluster.get("resourceGroup")
+        cluster_name = cluster.get("name")
+        network_scope = _cluster_network_scope(subscription_id, cluster_rg, node_types)
         extra = {
             "cluster_state": props.get("clusterState"),
             "cluster_code_version": props.get("clusterCodeVersion"),
@@ -141,11 +196,8 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "reliability_level": props.get("reliabilityLevel"),
             "upgrade_mode": props.get("upgradeMode"),
             "add_on_features": props.get("addOnFeatures") or [],
+            **network_scope,
         }
-
-        cluster_id = cluster.get("id")
-        cluster_rg = cluster.get("resourceGroup")
-        cluster_name = cluster.get("name")
 
         applications = _az_sf_json(
             ["application", "list", "--resource-group", cluster_rg, "--cluster-name", cluster_name],
@@ -272,6 +324,16 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "auth_methods": json.dumps(["azure_ad", "client_certificate"]),
             "fqdn": fqdn,
             "pipeline_tag": (cluster.get("tags") or {}).get("pipeline") or (cluster.get("tags") or {}).get("ado-pipeline"),
+            "vnet_name": network_scope["vnet_name"],
+            "vnet_resource_group": network_scope["vnet_resource_group"],
+            "subnet_name": network_scope["subnet_name"],
+            "subnet_id": network_scope["subnet_id"],
+            "network": {
+                "vnet": network_scope["vnet_name"],
+                "subnet": network_scope["subnet_name"],
+                "vnet_resource_group": network_scope["vnet_resource_group"],
+                "subnet_id": network_scope["subnet_id"],
+            },
             "raw_json": json.dumps({**cluster, "_extra": extra}),
         })
 

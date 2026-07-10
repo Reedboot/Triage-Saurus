@@ -1542,6 +1542,24 @@ def build_subscription_diagrams_by_rg(
             if cluster_key[1]:
                 route_nodes_by_cluster[cluster_key].append(asset)
 
+        # Collect unique FQDN hostnames per cluster from aks_ingress routes.
+        # Each distinct FQDN will become its own ingress entry-point node so
+        # upstream routing (APIM → backend → FQDN → cluster) is visible.
+        _fqdn_entries_by_cluster: dict[tuple[str, str], list[str]] = defaultdict(list)
+        _seen_fqdn_route_keys: set[tuple] = set()
+        for _ck, _route_assets in route_nodes_by_cluster.items():
+            for _ra in _route_assets:
+                if _ra.get("node_variant") != "aks_ingress":
+                    continue
+                _fqdn = str(_ra.get("fqdn") or "").strip()
+                if not _fqdn:
+                    continue
+                _fk = (_ck, _fqdn.lower())
+                if _fk in _seen_fqdn_route_keys:
+                    continue
+                _seen_fqdn_route_keys.add(_fk)
+                _fqdn_entries_by_cluster[_ck].append(_fqdn)
+
         entries = [a for a in visible_rg_assets if a.get("tier") == "entry"]
         apis = [a for a in visible_rg_assets if a.get("tier") == "api"]
         backends = [a for a in visible_rg_assets if a.get("tier") == "backend"]
@@ -1610,6 +1628,23 @@ def build_subscription_diagrams_by_rg(
 
         for asset in visible_rg_assets:
             add_asset_node(asset, badges=False, include_fqdn=False)
+
+        # Add one synthetic FQDN ingress node per unique hostname per AKS cluster.
+        # These sit between external callers and the cluster, making the routing
+        # chain (e.g. APIM → backend → FQDN endpoint → cluster) explicit.
+        fqdn_node_ids_by_cluster: dict[tuple[str, str], list[str]] = defaultdict(list)
+        for _ck, _fqdns in _fqdn_entries_by_cluster.items():
+            for _fqdn in _fqdns:
+                _fqdn_nid = sanitise_node_id(f"aks_fqdn_{_ck[0]}_{_ck[1]}_{_fqdn}")
+                if _fqdn_nid not in seen_nodes:
+                    seen_nodes.add(_fqdn_nid)
+                    nodes.append({
+                        "id": _fqdn_nid,
+                        "label": _fqdn,
+                        "arm_type": "kubernetes_ingress",
+                        "class_name": "apiGateway",
+                    })
+                fqdn_node_ids_by_cluster[_ck].append(_fqdn_nid)
 
         edges: list[dict] = []
         edge_keys: set[tuple[str, str, str]] = set()
@@ -1685,12 +1720,22 @@ def build_subscription_diagrams_by_rg(
 
         # For cluster-only RGs, connect each cluster to the synthetic APIM context node
         # so it's clear the cluster is not orphaned — it's reachable from the subscription-level APIM.
+        # If the cluster exposes FQDN ingress nodes, route APIM → FQDN → cluster instead of
+        # directly to the cluster, making the ingress entry point visible.
         if _sub_ctx_node_id:
             for backend in backends:
                 arm_type_low = (backend.get("arm_type") or "").lower()
                 if any(t in arm_type_low for t in _cluster_arm_types):
                     cluster_nid = subscription_node_id(backend, sanitise_node_id)
-                    if cluster_nid in seen_nodes:
+                    if cluster_nid not in seen_nodes:
+                        continue
+                    _bk = ((backend.get("rg") or "").strip().lower(), (backend.get("name") or "").strip().lower())
+                    _ctx_fqdn_nids = fqdn_node_ids_by_cluster.get(_bk, [])
+                    if _ctx_fqdn_nids:
+                        for _fqdn_nid in _ctx_fqdn_nids:
+                            add_edge(_sub_ctx_node_id, _fqdn_nid, "routes to", "#f97316", dasharray="6,3")
+                            add_edge(_fqdn_nid, cluster_nid, "routes to", "#f97316", dasharray="6,3")
+                    else:
                         add_edge(_sub_ctx_node_id, cluster_nid, "routes to", "#f97316", dasharray="6,3")
 
         def _parse_routing_targets(raw_targets: object) -> list[dict]:
@@ -1739,18 +1784,29 @@ def build_subscription_diagrams_by_rg(
                         matched_cluster_keys.add(cluster_key)
 
             for cluster_key in matched_cluster_keys:
-                for route_asset in route_nodes_by_cluster.get(cluster_key, []):
-                    if (route_asset.get("node_variant") or "") != "aks_ingress":
-                        continue
-                    route_nid = subscription_node_id(route_asset, sanitise_node_id)
-                    if route_nid in seen_nodes:
-                        add_edge(backend_nid, route_nid, "routes to", "#f97316", dasharray="6,3")
+                _backend_fqdn_nids = fqdn_node_ids_by_cluster.get(cluster_key, [])
+                if _backend_fqdn_nids:
+                    # Route via the FQDN ingress entry nodes so the chain
+                    # (backend → FQDN endpoint → cluster) is explicit in the diagram.
+                    for _fqdn_nid in _backend_fqdn_nids:
+                        add_edge(backend_nid, _fqdn_nid, "routes to", "#f97316", dasharray="6,3")
+                else:
+                    # No FQDN nodes harvested — fall back to individual ingress routes.
+                    for route_asset in route_nodes_by_cluster.get(cluster_key, []):
+                        if (route_asset.get("node_variant") or "") != "aks_ingress":
+                            continue
+                        route_nid = subscription_node_id(route_asset, sanitise_node_id)
+                        if route_nid in seen_nodes:
+                            add_edge(backend_nid, route_nid, "routes to", "#f97316", dasharray="6,3")
 
         for cluster_asset in cluster_assets:
             cluster_key = _cluster_key(cluster_asset)
             cluster_nid = subscription_node_id(cluster_asset, sanitise_node_id)
             if cluster_nid not in seen_nodes:
                 continue
+            # Connect each FQDN ingress node to this cluster (FQDN → cluster).
+            for _fqdn_nid in fqdn_node_ids_by_cluster.get(cluster_key, []):
+                add_edge(_fqdn_nid, cluster_nid, "routes to", "#f97316", dasharray="6,3")
             for route_asset in route_nodes_by_cluster.get(cluster_key, []):
                 route_nid = subscription_node_id(route_asset, sanitise_node_id)
                 if route_nid not in seen_nodes:

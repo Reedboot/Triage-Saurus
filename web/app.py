@@ -18775,7 +18775,7 @@ _SUBSCRIPTION_DIAGRAM_CACHE: dict[str, tuple[float, str, dict]] = {}
 _SUBSCRIPTION_DIAGRAM_CACHE_TTL = 600  # 10 minutes
 # Bump this whenever diagram rendering logic changes (listener icons, pool icons, edge labels, etc.)
 # so the DB cache is automatically invalidated for all subscriptions.
-_DIAGRAM_CODE_VERSION = "v20"  # bump to invalidate cached subscription diagrams after Bastion/Storage visibility fix
+_DIAGRAM_CODE_VERSION = "v22"  # bump to invalidate cached subscription diagrams after site subnet co-location fix
 
 
 def _subscription_diagram_cache_signature(conn, sub_id: str) -> tuple[str | None, tuple[str, str] | None]:
@@ -19323,7 +19323,7 @@ def _build_site_hosting_plan_links(conn, sub_id: str) -> list[tuple[str, str, st
                     json_extract(raw_json, '$.siteConfig.appServicePlanId'),
                     json_extract(raw_json, '$.siteConfig.serverFarmId')
                   ) IS NOT NULL
-            LIMIT 50
+            LIMIT 500
             """,
             (sub_id,),
         ).fetchall()
@@ -19356,7 +19356,7 @@ def _build_site_hosting_ase_links(conn, sub_id: str) -> list[tuple[str, str, str
                     json_extract(raw_json, '$.hostingEnvironmentProfile.id'),
                     json_extract(raw_json, '$.siteConfig.hostingEnvironmentProfile.id')
                   ) IS NOT NULL
-            LIMIT 50
+            LIMIT 500
             """,
             (sub_id,),
         ).fetchall()
@@ -20627,14 +20627,20 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             _type_lc = (_item.get("arm_type") or _item.get("type") or "").lower()
             if "sites" not in _type_lc:
                 continue
-            if _item.get("vnet_name") or _item.get("subnet_name") or _item.get("subnet_id"):
-                continue  # already has network placement
             _site_key = str(_item.get("name") or "").strip().lower()
             _parent_plan_name = _site_to_plan_name.get(_site_key)
             if not _parent_plan_name:
                 continue
             _plan_net = _plan_network_by_name.get(_parent_plan_name)
             if not _plan_net:
+                continue
+            _plan_vnet = str(_plan_net.get("vnet_name") or "").strip().lower()
+            _site_vnet = str(_item.get("vnet_name") or _item.get("parent_vnet_name") or "").strip().lower()
+            # Skip only if site is on a genuinely different VNet — a site with outbound
+            # VNet integration to a *different* subnet of the same VNet should still land
+            # in the plan's subnet subgraph so that the "hosted on" relationship is
+            # visually co-located.  Completely different VNets are left as-is.
+            if _site_vnet and _plan_vnet and _site_vnet != _plan_vnet:
                 continue
             _item["vnet_name"] = _plan_net["vnet_name"]
             _item["parent_vnet_name"] = _plan_net["parent_vnet_name"]
@@ -23448,6 +23454,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         "microsoft.containerservice/managedclusters",
         "microsoft.documentdb/databaseaccounts",
         "microsoft.web/sites",
+        "microsoft.web/functionapps",
         "microsoft.web/serverfarms",
     }
 
@@ -24651,7 +24658,34 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
         }
 
     # ── App Service / Function App → deployment slots ───────────────────────
-    elif "sites" in arm_type_lc and "slots" not in arm_type_lc:
+    elif ("sites" in arm_type_lc or "functionapps" in arm_type_lc) and "slots" not in arm_type_lc:
+        # Resolve the parent App Service Plan for this site from its raw_json and
+        # override parent_resource so the modal header shows the hosting plan.
+        if names and not parent_resource:
+            try:
+                site_row = conn.execute(
+                    """SELECT COALESCE(
+                           json_extract(raw_json, '$.appServicePlanId'),
+                           json_extract(raw_json, '$.serverFarmId'),
+                           json_extract(raw_json, '$.properties.appServicePlanId'),
+                           json_extract(raw_json, '$.properties.serverFarmId'),
+                           json_extract(raw_json, '$.siteConfig.appServicePlanId'),
+                           json_extract(raw_json, '$.siteConfig.serverFarmId')
+                       ) AS plan_arm_id
+                       FROM provisioned_assets
+                       WHERE subscription_id = ? AND LOWER(name) = LOWER(?) LIMIT 1""",
+                    (sub_id, names[0]),
+                ).fetchone()
+                if site_row and site_row[0]:
+                    plan_rg, plan_name = _arm_id_name_and_rg(str(site_row[0]))
+                    if plan_name:
+                        parent_resource = _lookup_parent_resource(
+                            {"name": plan_name, "rg": plan_rg},
+                            "microsoft.web/serverfarms",
+                        )
+            except Exception:
+                pass
+
         title = "App Service / Function App — Deployment Slots"
         columns = ["Slot", "Resource Group", "URL / FQDN", "Exposure", "Kind", "Parent App"]
         ph_apps = ",".join("?" * len(names)) if names else "''"
