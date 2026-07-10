@@ -18775,7 +18775,7 @@ _SUBSCRIPTION_DIAGRAM_CACHE: dict[str, tuple[float, str, dict]] = {}
 _SUBSCRIPTION_DIAGRAM_CACHE_TTL = 600  # 10 minutes
 # Bump this whenever diagram rendering logic changes (listener icons, pool icons, edge labels, etc.)
 # so the DB cache is automatically invalidated for all subscriptions.
-_DIAGRAM_CODE_VERSION = "v19"  # bump to invalidate cached subscription diagrams after preview selection fix
+_DIAGRAM_CODE_VERSION = "v20"  # bump to invalidate cached subscription diagrams after Bastion/Storage visibility fix
 
 
 def _subscription_diagram_cache_signature(conn, sub_id: str) -> tuple[str | None, tuple[str, str] | None]:
@@ -18996,26 +18996,27 @@ def api_subscription_diagram(sub_id: str):
                 CASE 
                     WHEN pa.type LIKE '%applicationGateway%' THEN 1
                     WHEN pa.type LIKE '%frontDoor%' THEN 2
-                    WHEN pa.type LIKE '%trafficManager%' THEN 3
-                    WHEN pa.type LIKE '%apiManagement%' THEN 4
-                    WHEN pa.type LIKE '%Sql%' AND pa.type NOT LIKE '%databases%' THEN 5
-                    WHEN pa.type LIKE '%documentDB%' THEN 6
-                    WHEN pa.type LIKE '%servicebus%' THEN 7
-                    WHEN pa.type LIKE '%eventhub%' THEN 8
-                    WHEN pa.type LIKE '%servicefabric%' THEN 9
-                    WHEN pa.type LIKE '%hostingEnvironment%' THEN 10
-                    WHEN pa.type LIKE '%serverFarms%' THEN 11
-                    WHEN pa.type LIKE '%sites%' AND pa.type NOT LIKE '%slots%' THEN 12
-                    WHEN pa.type LIKE '%managedCluster%' THEN 13
-                    WHEN pa.type LIKE '%Firewall%' AND pa.type NOT LIKE '%policies%' THEN 14
-                    WHEN pa.type LIKE '%publicIP%' THEN 15
-                    WHEN pa.type LIKE '%loadBalancer%' THEN 16
-                    WHEN pa.type LIKE '%KeyVault%' AND pa.type NOT LIKE '%secrets%' THEN 17
-                    WHEN pa.type LIKE '%storageAccounts%' AND pa.type NOT LIKE '%blobServices%' THEN 18
+                    WHEN pa.type LIKE '%bastionHost%' THEN 3
+                    WHEN pa.type LIKE '%trafficManager%' THEN 4
+                    WHEN pa.type LIKE '%apiManagement%' THEN 5
+                    WHEN pa.type LIKE '%Sql%' AND pa.type NOT LIKE '%databases%' THEN 6
+                    WHEN pa.type LIKE '%documentDB%' THEN 7
+                    WHEN pa.type LIKE '%servicebus%' THEN 8
+                    WHEN pa.type LIKE '%eventhub%' THEN 9
+                    WHEN pa.type LIKE '%servicefabric%' THEN 10
+                    WHEN pa.type LIKE '%hostingEnvironment%' THEN 11
+                    WHEN pa.type LIKE '%serverFarms%' THEN 12
+                    WHEN pa.type LIKE '%sites%' AND pa.type NOT LIKE '%slots%' THEN 13
+                    WHEN pa.type LIKE '%managedCluster%' THEN 14
+                    WHEN pa.type LIKE '%Firewall%' AND pa.type NOT LIKE '%policies%' THEN 15
+                    WHEN pa.type LIKE '%publicIP%' THEN 16
+                    WHEN pa.type LIKE '%loadBalancer%' THEN 17
+                    WHEN pa.type LIKE '%KeyVault%' AND pa.type NOT LIKE '%secrets%' THEN 18
+                    WHEN pa.type LIKE '%storageAccounts%' AND pa.type NOT LIKE '%blobServices%' THEN 19
                     ELSE 99
                 END,
                 pa.resource_group, pa.name
-            LIMIT 180
+            LIMIT 500
             """,
             (sub_id,),
         ).fetchall()
@@ -20477,6 +20478,13 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     item["subnet_name"] = extra.get("subnet_name").strip()
                 if isinstance(extra.get("subnet_id"), str) and extra.get("subnet_id").strip():
                     item["subnet_id"] = extra.get("subnet_id").strip()
+                # ASE harvest stores the subnet ARM ID in _extra.virtual_network even when
+                # _extra.subnet_id is null.  Parse it so the ASE (and its hosted plans/apps)
+                # land in the correct subnet subgraph.
+                if not item.get("subnet_id"):
+                    _vn_arm = extra.get("virtual_network")
+                    if isinstance(_vn_arm, str) and "/subnets/" in _vn_arm.lower():
+                        item["subnet_id"] = _vn_arm.strip()
             if not item.get("subnet_id"):
                 subnet_ids = _collect_subnet_ids(parsed_raw)
                 if subnet_ids:
@@ -20611,8 +20619,10 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     if _plan_network_by_name:
         _site_to_plan_name: dict[str, str] = {}
         for _s_rg, _s_name, _p_rg, _p_name in (plan_links or []):
-            if _s_name and _p_name:
-                _site_to_plan_name[str(_s_name).strip().lower()] = str(_p_name).strip().lower()
+            if _s_name and _p_name and _p_name.lower() in _plan_network_by_name:
+                # Use setdefault so the first matching serverfarm entry wins over
+                # any later site→ASE entry that shares the same site name.
+                _site_to_plan_name.setdefault(str(_s_name).strip().lower(), str(_p_name).strip().lower())
         for _item in backends:
             _type_lc = (_item.get("arm_type") or _item.get("type") or "").lower()
             if "sites" not in _type_lc:
@@ -22633,7 +22643,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     for spec in firewall_policy_node_specs:
         _add_link(f'    {spec["node_id"]} -->|"{spec["policy"]["nat_rule_count"]} NAT / {spec["policy"]["app_rule_count"]} App rules"| {_get_node_id({"name": spec["firewall_name"], "rg": spec["resource_group"]})}', "orange")
 
-    # Internet → Bastions with public IPs (cyan — bastion with public IP is internet-accessible)
+    # Internet → Bastions (Azure Bastion always requires a public IP by design)
     if shown_entry:
         for item in shown_entry:
             if "bastionhost" not in (item.get("arm_type") or item.get("type") or "").lower():
@@ -22643,13 +22653,16 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 lookup_key = item.get("bastion_key")
             else:
                 lookup_key = (str(item.get("rg") or "").strip().lower(), str(item.get("name") or "").strip().lower())
-            
+
             public_ips = item.get("public_ips") or resources_with_public_ips.get(lookup_key, [])
-            if not public_ips:
+            # Bastion always requires a public IP by design; fall back to a generic
+            # "Public IP" label when the PIP asset wasn't resolved (e.g. ARM ID
+            # lookup failed or the PIP was harvested in a different query batch).
+            if not public_ips and not item.get("public"):
                 continue
 
             node_id = _get_node_id(item)
-            label_text = _public_ip_label(public_ips)
+            label_text = _public_ip_label(public_ips) if public_ips else "Public IP"
             _add_link(f'    Internet -->|"{label_text}"| {node_id}', "orange")
 
     # Bastion → VNet (private-side hop — makes the admin path visible after ingress)
