@@ -54,7 +54,7 @@ def test_seed_dummy_azure_subscription_populates_cozo(tmp_path):
         assets = conn.execute(
             "SELECT name, resource_group, COALESCE(fqdn, '') AS fqdn FROM provisioned_assets ORDER BY name"
         ).fetchall()
-        assert len(assets) >= 43
+        assert len(assets) >= 44
         names = {row["name"] for row in assets}
         assert {
             "bas-marketlane-core",
@@ -85,6 +85,11 @@ def test_seed_dummy_azure_subscription_populates_cozo(tmp_path):
 
         conn_count = conn.execute("SELECT COUNT(*) FROM resource_connections").fetchone()[0]
         assert conn_count >= 40
+
+        assert conn.execute("SELECT COUNT(*) FROM appgw_routing_rules").fetchone()[0] >= 2
+        assert conn.execute("SELECT COUNT(*) FROM appgw_waf_policies").fetchone()[0] >= 1
+        assert conn.execute("SELECT COUNT(*) FROM apim_api_routes").fetchone()[0] >= 2
+        assert conn.execute("SELECT COUNT(*) FROM apim_api_operations").fetchone()[0] >= 4
 
         text_blobs = " ".join(
             " ".join(str(row[col]) for col in ("name", "resource_group", "fqdn"))

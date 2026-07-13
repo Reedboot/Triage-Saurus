@@ -897,6 +897,22 @@ def _build_assets(brand: str, subscription_id: str | None = None) -> list[AssetS
             },
         ),
         AssetSpec(
+            key="apim_api_orders",
+            name=f"orders-{brand}",
+            resource_group=rg["edge"],
+            arm_type="Microsoft.ApiManagement/service/apis",
+            location="uksouth",
+            is_public=0,
+            tags={"brand": brand, "tier": "edge"},
+            raw_json={
+                "properties": {
+                    "path": "orders",
+                    "protocols": ["https"],
+                    "serviceUrl": f"https://orders.{brand}-retail.azurewebsites.net",
+                }
+            },
+        ),
+        AssetSpec(
             key="apim_api_operation_list",
             name="list-items",
             resource_group=rg["edge"],
@@ -1092,6 +1108,304 @@ def _upsert_connection(conn: sqlite3.Connection, experiment_id: str, source_rowi
     )
 
 
+def _ensure_dummy_route_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS apim_api_routes (
+            id TEXT PRIMARY KEY,
+            subscription_id TEXT NOT NULL,
+            apim_name TEXT NOT NULL,
+            apim_resource_id TEXT,
+            api_name TEXT NOT NULL,
+            api_display_name TEXT,
+            api_path TEXT,
+            api_protocols TEXT,
+            backend_id TEXT,
+            backend_url TEXT,
+            service_url TEXT,
+            requires_subscription INTEGER DEFAULT 1,
+            gateway_hosts TEXT,
+            exposure_level TEXT,
+            last_synced DATETIME
+        );
+        CREATE TABLE IF NOT EXISTS apim_api_operations (
+            id TEXT PRIMARY KEY,
+            subscription_id TEXT NOT NULL,
+            apim_name TEXT NOT NULL,
+            api_name TEXT NOT NULL,
+            api_display_name TEXT,
+            api_path TEXT,
+            backend_url TEXT,
+            operation_id TEXT NOT NULL,
+            display_name TEXT,
+            method TEXT,
+            url_template TEXT,
+            description TEXT,
+            requires_subscription INTEGER DEFAULT 1,
+            policy_summary TEXT,
+            last_synced DATETIME
+        );
+        CREATE TABLE IF NOT EXISTS apim_backends (
+            id TEXT PRIMARY KEY,
+            subscription_id TEXT NOT NULL,
+            apim_name TEXT NOT NULL,
+            backend_id TEXT NOT NULL,
+            title TEXT,
+            description TEXT,
+            url TEXT,
+            protocol TEXT,
+            circuit_breaker TEXT,
+            credentials TEXT,
+            tls_validate_cert INTEGER DEFAULT 1,
+            last_synced DATETIME
+        );
+        """
+    )
+    conn.commit()
+
+
+def _upsert_appgw_route(
+    conn: sqlite3.Connection,
+    subscription_id: str,
+    gateway_name: str,
+    gateway_resource_id: str,
+    resource_group: str,
+    rule_name: str,
+    listener_name: str,
+    hostname: str,
+    protocol: str,
+    url_path: str,
+    backend_pool_name: str,
+    backend_fqdns: list[str],
+    http_settings_name: str,
+    backend_port: int,
+    backend_protocol: str,
+    host_override: str | None,
+    waf_policy_name: str | None,
+    exposure_level: str = "Public",
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO appgw_routing_rules
+            (id, subscription_id, gateway_name, gateway_resource_id, resource_group,
+             rule_name, listener_name, hostname, protocol, url_path, backend_pool_name,
+             backend_fqdns, http_settings_name, backend_port, backend_protocol,
+             host_override, waf_policy_name, exposure_level, last_synced)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            hostname          = excluded.hostname,
+            protocol          = excluded.protocol,
+            backend_pool_name = excluded.backend_pool_name,
+            backend_fqdns     = excluded.backend_fqdns,
+            backend_port      = excluded.backend_port,
+            backend_protocol  = excluded.backend_protocol,
+            host_override     = excluded.host_override,
+            waf_policy_name   = excluded.waf_policy_name,
+            exposure_level    = excluded.exposure_level,
+            last_synced       = excluded.last_synced
+        """,
+        (
+            f"{gateway_name}::{rule_name}::{url_path}",
+            subscription_id,
+            gateway_name,
+            gateway_resource_id,
+            resource_group,
+            rule_name,
+            listener_name,
+            hostname,
+            protocol,
+            url_path,
+            backend_pool_name,
+            json.dumps(backend_fqdns),
+            http_settings_name,
+            backend_port,
+            backend_protocol,
+            host_override,
+            waf_policy_name,
+            exposure_level,
+            _utcnow(),
+        ),
+    )
+
+
+def _upsert_appgw_waf_policy(
+    conn: sqlite3.Connection,
+    subscription_id: str,
+    name: str,
+    resource_group: str,
+    mode: str = "Prevention",
+    state: str = "Enabled",
+    associated_gateways: list[str] | None = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO appgw_waf_policies
+            (id, subscription_id, name, resource_group, mode, state,
+             request_body_check, max_body_kb, managed_rule_sets, custom_rules_count,
+             exclusions_count, associated_gateways, last_synced)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            mode                = excluded.mode,
+            state               = excluded.state,
+            associated_gateways = excluded.associated_gateways,
+            last_synced         = excluded.last_synced
+        """,
+        (
+            f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.Network/ApplicationGatewayWebApplicationFirewallPolicies/{name}",
+            subscription_id,
+            name,
+            resource_group,
+            mode,
+            state,
+            1,
+            128,
+            json.dumps([{"type": "OWASP", "version": "3.2"}]),
+            0,
+            0,
+            json.dumps(associated_gateways or []),
+            _utcnow(),
+        ),
+    )
+
+
+def _upsert_apim_route(
+    conn: sqlite3.Connection,
+    subscription_id: str,
+    apim_name: str,
+    apim_resource_id: str,
+    api_name: str,
+    api_display_name: str,
+    api_path: str,
+    api_protocols: list[str],
+    backend_id: str | None,
+    backend_url: str,
+    service_url: str,
+    requires_subscription: int = 1,
+    exposure_level: str = "Public",
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO apim_api_routes
+            (id, subscription_id, apim_name, apim_resource_id, api_name, api_display_name,
+             api_path, api_protocols, backend_id, backend_url, service_url,
+             requires_subscription, gateway_hosts, exposure_level, last_synced)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            backend_id            = excluded.backend_id,
+            backend_url           = excluded.backend_url,
+            service_url           = excluded.service_url,
+            requires_subscription = excluded.requires_subscription,
+            exposure_level        = excluded.exposure_level,
+            last_synced           = excluded.last_synced
+        """,
+        (
+            f"{apim_name}::{api_name}",
+            subscription_id,
+            apim_name,
+            apim_resource_id,
+            api_name,
+            api_display_name,
+            api_path,
+            json.dumps(api_protocols),
+            backend_id,
+            backend_url,
+            service_url,
+            requires_subscription,
+            json.dumps([f"{apim_name}.azure-api.net"]),
+            exposure_level,
+            _utcnow(),
+        ),
+    )
+
+
+def _upsert_apim_backend(
+    conn: sqlite3.Connection,
+    subscription_id: str,
+    apim_name: str,
+    backend_id: str,
+    title: str,
+    url: str,
+    protocol: str = "http",
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO apim_backends
+            (id, subscription_id, apim_name, backend_id, title, description,
+             url, protocol, circuit_breaker, credentials, tls_validate_cert, last_synced)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            title       = excluded.title,
+            url         = excluded.url,
+            protocol    = excluded.protocol,
+            last_synced = excluded.last_synced
+        """,
+        (
+            f"{apim_name}::{backend_id}",
+            subscription_id,
+            apim_name,
+            backend_id,
+            title,
+            None,
+            url,
+            protocol,
+            json.dumps({"count": 5, "interval": "00:00:30"}),
+            json.dumps({}),
+            1,
+            _utcnow(),
+        ),
+    )
+
+
+def _upsert_apim_operation(
+    conn: sqlite3.Connection,
+    subscription_id: str,
+    apim_name: str,
+    api_name: str,
+    api_display_name: str,
+    api_path: str,
+    backend_url: str,
+    operation_id: str,
+    display_name: str,
+    method: str,
+    url_template: str,
+    description: str = "",
+    requires_subscription: int = 1,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO apim_api_operations
+            (id, subscription_id, apim_name, api_name, api_display_name, api_path,
+             backend_url, operation_id, display_name, method, url_template,
+             description, requires_subscription, last_synced)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            backend_url           = excluded.backend_url,
+            display_name          = excluded.display_name,
+            method                = excluded.method,
+            url_template          = excluded.url_template,
+            description           = excluded.description,
+            requires_subscription = excluded.requires_subscription,
+            last_synced           = excluded.last_synced
+        """,
+        (
+            f"{apim_name}::{api_name}::{operation_id}",
+            subscription_id,
+            apim_name,
+            api_name,
+            api_display_name,
+            api_path,
+            backend_url,
+            operation_id,
+            display_name,
+            method,
+            url_template,
+            description,
+            requires_subscription,
+            _utcnow(),
+        ),
+    )
+
+
 def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: str, tenant_id: str, environment: str, state: str, brand: str) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), timeout=30)
@@ -1099,6 +1413,7 @@ def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: s
     try:
         conn.execute("PRAGMA busy_timeout = 30000")
         _ensure_schema(conn)
+        _ensure_dummy_route_schema(conn)
 
         assets = _build_assets(brand, subscription_id=subscription_id)
         experiment_id = f"dummy-{subscription_id}"
@@ -1125,6 +1440,89 @@ def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: s
             for spec, row in zip(assets, asset_rows, strict=True)
         }
 
+        gateway_id = conn.execute("SELECT id FROM provisioned_assets WHERE name = ?", (f"agw-{brand}-edge",)).fetchone()[0]
+        apim_id = conn.execute("SELECT id FROM provisioned_assets WHERE name = ?", (f"apim-{brand}-edge",)).fetchone()[0]
+        apim_api_catalog_id = conn.execute("SELECT id FROM provisioned_assets WHERE name = ?", (f"catalog-{brand}",)).fetchone()[0]
+        apim_api_orders_id = conn.execute("SELECT id FROM provisioned_assets WHERE name = ?", (f"orders-{brand}",)).fetchone()[0]
+        appgw_rg = f"rg-{brand}-edge"
+        apim_rg = f"rg-{brand}-edge"
+
+        _upsert_appgw_waf_policy(conn, subscription_id, f"waf-{brand}-edge", appgw_rg, associated_gateways=[f"agw-{brand}-edge"])
+        _upsert_appgw_route(
+            conn,
+            subscription_id,
+            f"agw-{brand}-edge",
+            gateway_id,
+            appgw_rg,
+            f"rule-{brand}-web",
+            f"listener-{brand}-web",
+            f"shop.{brand}-retail.com",
+            "Https",
+            "/*",
+            f"bhs-{brand}-web",
+            [f"store.{brand}-retail.azurewebsites.net"],
+            f"bhs-{brand}-web",
+            443,
+            "Https",
+            None,
+            f"waf-{brand}-edge",
+        )
+        _upsert_appgw_route(
+            conn,
+            subscription_id,
+            f"agw-{brand}-edge",
+            gateway_id,
+            appgw_rg,
+            f"rule-{brand}-api",
+            f"listener-{brand}-api",
+            f"api.{brand}-retail.com",
+            "Https",
+            "/*",
+            f"bhs-{brand}-api",
+            [f"aks-{brand}-platform.hcp.uksouth.azmk8s.io"],
+            f"bhs-{brand}-api",
+            443,
+            "Https",
+            None,
+            f"waf-{brand}-edge",
+        )
+
+        _upsert_apim_backend(conn, subscription_id, f"apim-{brand}-edge", "web-backend", "web-backend", f"https://store.{brand}-retail.azurewebsites.net", "http")
+        _upsert_apim_backend(conn, subscription_id, f"apim-{brand}-edge", "orders-backend", "orders-backend", f"https://orders.{brand}-retail.azurewebsites.net", "http")
+        _upsert_apim_backend(conn, subscription_id, f"apim-{brand}-edge", "aks-backend", "aks-backend", f"https://api.{brand}-retail.com", "http")
+
+        _upsert_apim_route(
+            conn,
+            subscription_id,
+            f"apim-{brand}-edge",
+            apim_id,
+            f"catalog-{brand}",
+            "Catalog API",
+            "catalog",
+            ["https"],
+            "web-backend",
+            f"https://store.{brand}-retail.azurewebsites.net",
+            f"https://store.{brand}-retail.azurewebsites.net",
+        )
+        _upsert_apim_route(
+            conn,
+            subscription_id,
+            f"apim-{brand}-edge",
+            apim_id,
+            f"orders-{brand}",
+            "Orders API",
+            "orders",
+            ["https"],
+            "orders-backend",
+            f"https://orders.{brand}-retail.azurewebsites.net",
+            f"https://orders.{brand}-retail.azurewebsites.net",
+        )
+
+        _upsert_apim_operation(conn, subscription_id, f"apim-{brand}-edge", f"catalog-{brand}", "Catalog API", "catalog", f"https://store.{brand}-retail.azurewebsites.net", "list-items", "List items", "GET", "/items")
+        _upsert_apim_operation(conn, subscription_id, f"apim-{brand}-edge", f"catalog-{brand}", "Catalog API", "catalog", f"https://store.{brand}-retail.azurewebsites.net", "get-item", "Get item", "GET", "/items/{itemId}")
+        _upsert_apim_operation(conn, subscription_id, f"apim-{brand}-edge", f"orders-{brand}", "Orders API", "orders", f"https://orders.{brand}-retail.azurewebsites.net", "create-order", "Create order", "POST", "/orders")
+        _upsert_apim_operation(conn, subscription_id, f"apim-{brand}-edge", f"orders-{brand}", "Orders API", "orders", f"https://orders.{brand}-retail.azurewebsites.net", "cancel-order", "Cancel order", "POST", "/orders/{orderId}/cancel")
+
         notes = "Seeded by Scripts/Harvest/seed_dummy_azure_subscription.py"
         connection_pairs = [
             ("pip_edge", "appgw_edge", "fronts"),
@@ -1149,15 +1547,19 @@ def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: s
             ("load_balancer", "web_store", "routes_to"),
             ("traffic_manager", "appgw_edge", "routes_to"),
             ("apim", "apim_api", "contains"),
+            ("apim", "apim_api_orders", "contains"),
             ("apim", "apim_product", "contains"),
             ("apim", "apim_subscription", "contains"),
             ("apim", "apim_backend", "contains"),
             ("apim", "apim_named_value", "contains"),
             ("apim_api", "apim_api_operation_list", "contains"),
             ("apim_api", "apim_api_operation_checkout", "contains"),
+            ("apim_api_orders", "apim_api_operation_list", "contains"),
+            ("apim_api_orders", "apim_api_operation_checkout", "contains"),
             ("apim_product", "apim_api", "contains"),
             ("apim_subscription", "apim_product", "contains"),
             ("apim_backend", "apim_api", "routes_to"),
+            ("apim_backend", "apim_api_orders", "routes_to"),
             ("apim_named_value", "apim_backend", "configures"),
             ("apim", "web_store", "routes_to"),
             ("apim", "fn_orders", "routes_to"),
