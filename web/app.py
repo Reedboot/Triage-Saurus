@@ -23669,6 +23669,12 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     # and "what this node routes to" without re-parsing the Mermaid source.
     _ingress_map: dict[str, list[dict]] = {}
     _egress_map: dict[str, list[dict]] = {}
+    _html_tag_re = __import__("re").compile(r"<[^>]+>")
+
+    def _plain_label(raw: str) -> str:
+        """Strip Mermaid HTML tags (e.g. <br/>) from a title before using it as plain text."""
+        return _html_tag_re.sub(" ", raw).replace("  ", " ").strip()
+
     _SUBGRAPH_PREFIXES = ("net_", "sub_", "az_backbone")
     for _src, _dst, _lbl in _edge_log:
         if any(_src.startswith(p) for p in _SUBGRAPH_PREFIXES):
@@ -23677,8 +23683,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             continue
         _src_entry = node_drilldown_map.get(_src) or {}
         _dst_entry = node_drilldown_map.get(_dst) or {}
-        _src_label = str(_src_entry.get("title") or _src)
-        _dst_label = str(_dst_entry.get("title") or _dst)
+        _src_label = _plain_label(str(_src_entry.get("title") or _src))
+        _dst_label = _plain_label(str(_dst_entry.get("title") or _dst))
         _egress_item = {"node_id": _dst, "label": _dst_label, "edge_label": _lbl}
         if _egress_item not in _egress_map.setdefault(_src, []):
             _egress_map[_src].append(_egress_item)

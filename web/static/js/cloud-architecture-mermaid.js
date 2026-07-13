@@ -1620,6 +1620,9 @@ function buildTrafficFlowSection(data) {
   const egressItems  = Array.isArray(data?.egress)  ? data.egress  : [];
   if (!ingressItems.length && !egressItems.length) return "";
 
+  // Strip any residual Mermaid HTML tags (e.g. <br/>) from label strings.
+  const plainText = (s) => String(s || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+
   const tableRows = [
     ...ingressItems.map((item) => ({ direction: "ingress", item })),
     ...egressItems.map((item) => ({ direction: "egress", item })),
@@ -1643,8 +1646,8 @@ function buildTrafficFlowSection(data) {
               </thead>
               <tbody>
                 ${tableRows.map(({ direction, item }) => {
-                  const lbl  = escapeHtml(String(item.label || item.node_id || "Unknown"));
-                  const conn = item.edge_label ? escapeHtml(String(item.edge_label)) : "—";
+                  const lbl  = escapeHtml(plainText(item.label || item.node_id || "Unknown"));
+                  const conn = item.edge_label ? escapeHtml(plainText(item.edge_label)) : "—";
                   const dirLabel = direction === "ingress"
                     ? `<span style="color:#60a5fa;">← Ingress</span>`
                     : `<span style="color:#34d399;">→ Egress</span>`;
