@@ -16041,6 +16041,19 @@ def api_cloud_resource_details():
         
         if not asset_row:
             if lookup_name:
+                # Normalize type aliases: some virtual node types in the diagram
+                # map to a different ARM type in the database.
+                _ARM_TYPE_ALIASES: dict[str, list[str]] = {
+                    "microsoft.web/functionapps": ["microsoft.web/sites"],
+                    "microsoft.web/sites":         ["microsoft.web/functionapps"],
+                }
+                lookup_type_lc = lookup_type.lower() if lookup_type else ""
+                db_type_variants = [lookup_type] if lookup_type else []
+                for alias, targets in _ARM_TYPE_ALIASES.items():
+                    if lookup_type_lc == alias:
+                        db_type_variants = [lookup_type] + targets
+                        break
+
                 sql = [
                     """
                     SELECT
@@ -16057,9 +16070,10 @@ def api_cloud_resource_details():
                 if lookup_rg:
                     sql.append("AND LOWER(COALESCE(pa.resource_group, '')) = LOWER(?)")
                     params.append(lookup_rg)
-                if lookup_type:
-                    sql.append("AND LOWER(COALESCE(pa.type, '')) = LOWER(?)")
-                    params.append(lookup_type)
+                if db_type_variants:
+                    placeholders = ", ".join("?" * len(db_type_variants))
+                    sql.append(f"AND LOWER(COALESCE(pa.type, '')) IN ({placeholders})")
+                    params.extend(v.lower() for v in db_type_variants)
                 if resolved_sub_id:
                     sql.append("AND pa.subscription_id = ?")
                     params.append(resolved_sub_id)

@@ -1132,6 +1132,14 @@ function openNodePopup(resourceId, nodeData) {
 function openDrilldownModal(nodeData, subId, fallback = null) {
   if (!modalOverlay || !subId) return;
   const controller = startModalRequest();
+
+  // Carry diagram-level ingress/egress so renderModalContent can append the table.
+  const withTrafficFlow = (data) => ({
+    ingress: Array.isArray(nodeData?.ingress) ? nodeData.ingress : [],
+    egress:  Array.isArray(nodeData?.egress)  ? nodeData.egress  : [],
+    ...data,
+  });
+
   const url = new URL(`/api/subscriptions/${encodeURIComponent(subId)}/drilldown`, window.location.origin);
   fetch(url.toString(), {
     method: "POST",
@@ -1158,9 +1166,9 @@ function openDrilldownModal(nodeData, subId, fallback = null) {
         return;
       }
       if ((data.view_type === "table" || data.view_type === "tree_table") && Array.isArray(data.columns)) {
-        renderTabularModalContent(data);
+        renderTabularModalContent(withTrafficFlow(data));
       } else {
-        renderModalContent(data);
+        renderModalContent(withTrafficFlow(data));
       }
       activeModalRequest = null;
     })
@@ -1223,7 +1231,11 @@ function openModal(resourceId, nodeData, lookup = {}) {
   const controller = startModalRequest();
   const nodeId = String(lookup.nodeId || resourceId || "").trim();
   const nodeChildren = collectChildNodeSummaries(nodeId);
+  // Seed ingress/egress from the diagram's node_drilldown_map so the Traffic
+  // Flow table is always populated even when the API response has no such keys.
   const withNodeContext = (payload = {}) => ({
+    ingress: Array.isArray(nodeData?.ingress) ? nodeData.ingress : [],
+    egress:  Array.isArray(nodeData?.egress)  ? nodeData.egress  : [],
     ...payload,
     __node_id: nodeId,
     __node_children: nodeChildren,
@@ -1599,6 +1611,58 @@ function buildParentResourceFields(parentResource) {
   return fields.join("");
 }
 
+/**
+ * Build the Traffic Flow HTML section (ingress/egress table) from diagram node data.
+ * Returns an empty string when both arrays are empty.
+ */
+function buildTrafficFlowSection(data) {
+  const ingressItems = Array.isArray(data?.ingress) ? data.ingress : [];
+  const egressItems  = Array.isArray(data?.egress)  ? data.egress  : [];
+  if (!ingressItems.length && !egressItems.length) return "";
+
+  const tableRows = [
+    ...ingressItems.map((item) => ({ direction: "ingress", item })),
+    ...egressItems.map((item) => ({ direction: "egress", item })),
+  ];
+  return `
+    <div class="cloud-arch-modal-section">
+      <div class="cloud-arch-modal-section-title">
+        <span class="cloud-arch-modal-section-icon">🔀</span>
+        Traffic Flow
+      </div>
+      <div class="cloud-arch-modal-grid">
+        <div class="cloud-arch-modal-field cloud-arch-modal-field--full">
+          <div style="overflow:auto;border:1px solid var(--border);border-radius:8px;">
+            <table style="width:100%;border-collapse:collapse;font-size:0.84rem;">
+              <thead>
+                <tr>
+                  <th style="padding:8px 10px;text-align:left;background:var(--bg-base);border-bottom:1px solid var(--border);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.03em;color:var(--text-muted);width:90px;">Direction</th>
+                  <th style="padding:8px 10px;text-align:left;background:var(--bg-base);border-bottom:1px solid var(--border);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.03em;color:var(--text-muted);">Node</th>
+                  <th style="padding:8px 10px;text-align:left;background:var(--bg-base);border-bottom:1px solid var(--border);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.03em;color:var(--text-muted);">Connection</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${tableRows.map(({ direction, item }) => {
+                  const lbl  = escapeHtml(String(item.label || item.node_id || "Unknown"));
+                  const conn = item.edge_label ? escapeHtml(String(item.edge_label)) : "—";
+                  const dirLabel = direction === "ingress"
+                    ? `<span style="color:#60a5fa;">← Ingress</span>`
+                    : `<span style="color:#34d399;">→ Egress</span>`;
+                  return `
+                    <tr style="border-bottom:1px solid var(--border);">
+                      <td style="padding:8px 10px;vertical-align:top;white-space:nowrap;">${dirLabel}</td>
+                      <td style="padding:8px 10px;vertical-align:top;"><strong>${lbl}</strong></td>
+                      <td style="padding:8px 10px;vertical-align:top;color:var(--text-muted);">${conn}</td>
+                    </tr>`;
+                }).join("")}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
 function renderTabularModalContent(data) {
   if (!modalOverlay || !modalTitle || !modalBody) return;
   modalOverlay.hidden = false;
@@ -1724,7 +1788,7 @@ function renderTabularModalContent(data) {
           </div>
         `;
       })
-      .join("")}`;
+      .join("")}${buildTrafficFlowSection(data)}`;
     return;
   }
 
@@ -1733,7 +1797,7 @@ function renderTabularModalContent(data) {
     modalBody.innerHTML = `<div class="cloud-arch-modal-empty">${escapeHtml(data.empty_message || "No data available.")}</div>`;
     return;
   }
-  modalBody.innerHTML = `${parentResourceSection}${buildTable(rows)}`;
+  modalBody.innerHTML = `${parentResourceSection}${buildTable(rows)}${buildTrafficFlowSection(data)}`;
 }
 
 function renderModalContent(data) {
@@ -1995,45 +2059,13 @@ function renderModalContent(data) {
   }
 
   // Traffic Flow — ingress (what routes TO this node) and egress (what this node routes TO)
-  const ingressItems = Array.isArray(data.ingress) ? data.ingress : [];
-  const egressItems  = Array.isArray(data.egress)  ? data.egress  : [];
-  if (ingressItems.length > 0 || egressItems.length > 0) {
-    const tableRows = [
-      ...ingressItems.map((item) => ({ direction: "ingress", item })),
-      ...egressItems.map((item) => ({ direction: "egress", item })),
-    ];
-    const flowTable = `
-      <div style="overflow:auto;border:1px solid var(--border);border-radius:8px;">
-        <table style="width:100%;border-collapse:collapse;font-size:0.84rem;">
-          <thead>
-            <tr>
-              <th style="padding:8px 10px;text-align:left;background:var(--bg-base);border-bottom:1px solid var(--border);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.03em;color:var(--text-muted);width:90px;">Direction</th>
-              <th style="padding:8px 10px;text-align:left;background:var(--bg-base);border-bottom:1px solid var(--border);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.03em;color:var(--text-muted);">Node</th>
-              <th style="padding:8px 10px;text-align:left;background:var(--bg-base);border-bottom:1px solid var(--border);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.03em;color:var(--text-muted);">Connection</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${tableRows.map(({ direction, item }) => {
-              const lbl  = escapeHtml(String(item.label || item.node_id || "Unknown"));
-              const conn = item.edge_label ? escapeHtml(String(item.edge_label)) : "—";
-              const isIngress = direction === "ingress";
-              const dirLabel = isIngress
-                ? `<span style="color:#60a5fa;">← Ingress</span>`
-                : `<span style="color:#34d399;">→ Egress</span>`;
-              return `
-                <tr style="border-bottom:1px solid var(--border);">
-                  <td style="padding:8px 10px;vertical-align:top;white-space:nowrap;">${dirLabel}</td>
-                  <td style="padding:8px 10px;vertical-align:top;"><strong>${lbl}</strong></td>
-                  <td style="padding:8px 10px;vertical-align:top;color:var(--text-muted);">${conn}</td>
-                </tr>`;
-            }).join("")}
-          </tbody>
-        </table>
-      </div>`;
+  const trafficFlowHtml = buildTrafficFlowSection(data);
+  if (trafficFlowHtml) {
     sections.push({
-      title: "Traffic Flow",
-      icon: "🔀",
-      fields: [{ label: "", value: flowTable, isHtml: true, fullWidth: true }],
+      title: "",  // rendered directly by buildTrafficFlowSection
+      icon: "",
+      fields: [],
+      __rawHtml: trafficFlowHtml,
     });
   }
 
@@ -2044,7 +2076,9 @@ function renderModalContent(data) {
 
   modalBody.innerHTML = `${parentResourceSection}${sections
     .map(
-      (section) => `
+      (section) => {
+        if (section.__rawHtml) return section.__rawHtml;
+        return `
       <div class="cloud-arch-modal-section">
         ${section.title ? `
         <div class="cloud-arch-modal-section-title">
@@ -2065,6 +2099,7 @@ function renderModalContent(data) {
         </div>
       </div>
     `
+      }
     )
     .join("")}`;
 }
