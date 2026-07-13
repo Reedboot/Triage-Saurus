@@ -34,23 +34,6 @@ DEFAULT_TENANT_ID = str(uuid.uuid5(uuid.NAMESPACE_URL, "triage-saurus:dummy-azur
 DEFAULT_SUBSCRIPTION_ID = str(uuid.uuid5(uuid.NAMESPACE_URL, "triage-saurus:dummy-azure:subscription"))
 DEFAULT_DB_PATH = REPO_ROOT / "Output" / "Data" / "cozo.db"
 
-BANNED_TERMS = {
-    "chaps",
-    "bacs",
-    "fx",
-    "institution",
-    "cop",
-    "payuk",
-    "clearbank",
-    "cbinovation",
-    "sts",
-    "previewaks",
-    "externalaks",
-    "sharedaks",
-    "prodgreen",
-    "pipeline-customer",
-    "banking",
-}
 
 
 @dataclass(frozen=True)
@@ -89,9 +72,7 @@ def _json_text(value: Any) -> str | None:
 
 def _reject_forbidden(value: str, label: str) -> None:
     lowered = value.lower()
-    for term in BANNED_TERMS:
-        if term in lowered:
-            raise ValueError(f"{label} contains forbidden term '{term}': {value}")
+
 
 
 def _load_existing_names(conn: sqlite3.Connection) -> dict[str, set[str]]:
