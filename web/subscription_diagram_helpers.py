@@ -940,7 +940,17 @@ def subscription_apply_plan_hierarchy(assets: list[dict], plan_links: list | Non
                 child_fqdns = [subscription_primary_fqdn(child) for child in children if subscription_primary_fqdn(child)]
                 merged_fqdns = list(dict.fromkeys([*(asset_copy.get("fqdns") or []), *child_fqdns]))
                 asset_copy["fqdns"] = merged_fqdns
-            asset_copy["public"] = bool(asset_copy.get("public") or any(child.get("public") for child in children))
+            asset_copy["public"] = bool(
+                asset_copy.get("public")
+                # For ASEs: inherit public exposure from hosted plans/sites — the ASE
+                # is the container and may represent aggregated exposure in overview.
+                # For regular App Service Plans (serverfarms): do NOT inherit public
+                # from hosted sites.  App Services and Function Apps are always rendered
+                # as individual nodes with their own Internet exposure arrows, so
+                # propagating their public flag to the plan produces a duplicate
+                # Internet → Plan arrow with a spurious HTTP/HTTPS label.
+                or (is_ase and any(child.get("public") for child in children))
+            )
             asset_copy["is_restricted"] = bool(asset_copy.get("is_restricted") or any(child.get("is_restricted") for child in children))
             asset_copy["hosted_site_count"] = len(children)
             child_networks = [child for child in children if child.get("vnet_name") or child.get("parent_vnet_name") or child.get("subnet_name") or child.get("subnet_id")]

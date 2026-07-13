@@ -730,6 +730,10 @@
       gap: 4px;
     }
 
+    .cloud-arch-modal-field--full {
+      grid-column: 1 / -1;
+    }
+
     .cloud-arch-modal-field-label {
       font-size: 0.75rem;
       font-weight: 600;
@@ -987,7 +991,7 @@
     // window.__triageCloudArchLoadMermaid is defined before ReactFlow mounts
     // and calls loadGraph.
     if (needsMermaid) {
-      await import('/static/js/cloud-architecture-mermaid.js?v=14');
+      await import('/static/js/cloud-architecture-mermaid.js?v=15');
     }
     import('/static/js/cloud-architecture-reactflow.js?v=15');
   </script>

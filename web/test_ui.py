@@ -5012,6 +5012,7 @@ class TestCloudPosture:
             conn.commit()
 
             monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+            monkeypatch.setattr(app_module, "_SUBSCRIPTION_DIAGRAM_CACHE", {})
             client = app_module.app.test_client()
             resp = client.get("/api/subscriptions/sub-1/diagram")
         finally:
@@ -5026,6 +5027,184 @@ class TestCloudPosture:
             and "rg_app_prodgreen_shared_uksouth" in line
             for line in mermaid.splitlines()
         ), mermaid
+
+    def test_appgw_pool_resolves_to_site_not_plan_when_fqdn_unresolvable(self, monkeypatch):
+        """When an App Gateway pool FQDN doesn't match the site's registered FQDN,
+        the pool-name fallback must route to the App Service site node (not the
+        App Service Plan).  The site→plan 'Hosts' edge is already drawn separately,
+        so landing on the plan skips the site entirely."""
+        import json
+        import sqlite3
+
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE subscriptions (
+                    id TEXT PRIMARY KEY,
+                    display_name TEXT,
+                    environment TEXT,
+                    state TEXT,
+                    last_synced TEXT
+                );
+                CREATE TABLE provisioned_assets (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    resource_group TEXT,
+                    name TEXT,
+                    type TEXT,
+                    location TEXT,
+                    sku TEXT,
+                    fqdn TEXT,
+                    is_public INTEGER DEFAULT 0,
+                    status TEXT,
+                    pipeline_tag TEXT,
+                    first_detected TEXT,
+                    last_synced TEXT,
+                    raw_json TEXT,
+                    is_restricted INTEGER DEFAULT 0,
+                    waf_mode TEXT
+                );
+                CREATE TABLE appgw_routing_rules (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    gateway_name TEXT,
+                    backend_fqdns TEXT,
+                    backend_pool_name TEXT,
+                    listener_name TEXT,
+                    url_path TEXT,
+                    protocol TEXT,
+                    waf_policy_name TEXT,
+                    resource_group TEXT,
+                    hostname TEXT
+                );
+                """
+            )
+            conn.execute(
+                "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+                ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+            )
+            gw_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/appgw-one"
+            plan_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/serverfarms/my-service-plan"
+            site_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/my-app"
+            conn.executemany(
+                """
+                INSERT INTO provisioned_assets (
+                    id, subscription_id, resource_group, name, type, location, sku,
+                    fqdn, is_public, status, pipeline_tag, first_detected, last_synced,
+                    raw_json, is_restricted, waf_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        gw_id,
+                        "sub-1",
+                        "rg-net",
+                        "appgw-one",
+                        "Microsoft.Network/applicationGateways",
+                        "uksouth",
+                        "WAF_v2",
+                        "appgw-one.example.com",
+                        1,
+                        "active",
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        json.dumps({}),
+                        0,
+                        "WAF_v2",
+                    ),
+                    (
+                        plan_id,
+                        "sub-1",
+                        "rg-app",
+                        "my-service-plan",
+                        "Microsoft.Web/serverfarms",
+                        "uksouth",
+                        "P1v3",
+                        None,
+                        0,
+                        "active",
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        json.dumps({}),
+                        0,
+                        None,
+                    ),
+                    (
+                        site_id,
+                        "sub-1",
+                        "rg-app",
+                        "my-app",
+                        "Microsoft.Web/sites",
+                        "uksouth",
+                        "P1v3",
+                        # The site's registered FQDN is azurewebsites.net, but the
+                        # App Gateway uses a private/custom FQDN that won't match.
+                        "my-app.azurewebsites.net",
+                        0,
+                        "active",
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        json.dumps({"serverFarmId": plan_id}),
+                        0,
+                        None,
+                    ),
+                ],
+            )
+            conn.execute(
+                """
+                INSERT INTO appgw_routing_rules (
+                    id, subscription_id, gateway_name, backend_fqdns, backend_pool_name,
+                    listener_name, url_path, protocol, waf_policy_name, resource_group, hostname
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "appgw-one::route-plan",
+                    "sub-1",
+                    "appgw-one",
+                    # Private FQDN that won't match the site's azurewebsites.net FQDN
+                    json.dumps(["10.0.1.5"]),
+                    # Pool name matches the site name — pool-name fallback should fire
+                    "my-app",
+                    "listener-one",
+                    "/*",
+                    "HTTPS",
+                    None,
+                    "rg-net",
+                    "appgw-one.example.com",
+                ),
+            )
+            conn.commit()
+
+            monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+            monkeypatch.setattr(app_module, "_SUBSCRIPTION_DIAGRAM_CACHE", {})
+            client = app_module.app.test_client()
+            resp = client.get("/api/subscriptions/sub-1/diagram")
+        finally:
+            conn.close()
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        mermaid = resp.get_json()["ingress_diagram"]["mermaid"]
+        site_nid = "rg_app_my_app"
+        plan_nid = "rg_app_my_service_plan"
+        # The pool backend-pool node must exist
+        assert "agpool_rg_net_appgw_one_my_app" in mermaid, mermaid
+        # Arrow must go from the gateway to the SITE (not to the plan)
+        assert any(
+            "rg_net_appgw_one" in line and "-->" in line and site_nid in line
+            for line in mermaid.splitlines()
+        ), f"Expected gateway→site arrow, got:\n{mermaid}"
+        # Arrow must NOT go directly from the gateway to the plan
+        assert not any(
+            "rg_net_appgw_one" in line and "-->" in line and plan_nid in line
+            for line in mermaid.splitlines()
+        ), f"AppGW arrow went to plan (should go to site):\n{mermaid}"
 
     def test_subscription_architecture_payload_keeps_appgw_pool_edge_when_multiple_pools_share_ase_target(self, monkeypatch):
         import json
@@ -5174,6 +5353,7 @@ class TestCloudPosture:
             conn.commit()
 
             monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+            monkeypatch.setattr(app_module, "_SUBSCRIPTION_DIAGRAM_CACHE", {})
             client = app_module.app.test_client()
             resp = client.get("/api/subscriptions/sub-1/diagram")
         finally:

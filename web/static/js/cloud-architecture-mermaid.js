@@ -5,9 +5,9 @@ import {
 import {
   enhancePlaceholderGlyphs,
   applyEmojiIconFallback,
-} from "./diagram-base.js?v=5";
+} from "./diagram-base.js?v=6";
 import { renderMermaidDiagram, postProcessSvg } from "./subscription-diagrams.js?v=5";
-import { autoFitDiagram, applyDiagramScale } from "./diagram-base.js?v=5";
+import { autoFitDiagram, applyDiagramScale } from "./diagram-base.js?v=6";
 import {
   CONFIG,
   PROVIDER_THEMES,
@@ -92,6 +92,7 @@ async function renderFirefoxIconOverlay(svgEl) {
   if (!overlay) {
     overlay = document.createElement("div");
     overlay.className = "cloud-arch-firefox-icon-overlay";
+    overlay.setAttribute("data-diagram-icon-overlay", "");
     overlay.style.cssText = [
       "position:absolute",
       "inset:0",
@@ -1993,6 +1994,49 @@ function renderModalContent(data) {
     });
   }
 
+  // Traffic Flow — ingress (what routes TO this node) and egress (what this node routes TO)
+  const ingressItems = Array.isArray(data.ingress) ? data.ingress : [];
+  const egressItems  = Array.isArray(data.egress)  ? data.egress  : [];
+  if (ingressItems.length > 0 || egressItems.length > 0) {
+    const tableRows = [
+      ...ingressItems.map((item) => ({ direction: "ingress", item })),
+      ...egressItems.map((item) => ({ direction: "egress", item })),
+    ];
+    const flowTable = `
+      <div style="overflow:auto;border:1px solid var(--border);border-radius:8px;">
+        <table style="width:100%;border-collapse:collapse;font-size:0.84rem;">
+          <thead>
+            <tr>
+              <th style="padding:8px 10px;text-align:left;background:var(--bg-base);border-bottom:1px solid var(--border);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.03em;color:var(--text-muted);width:90px;">Direction</th>
+              <th style="padding:8px 10px;text-align:left;background:var(--bg-base);border-bottom:1px solid var(--border);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.03em;color:var(--text-muted);">Node</th>
+              <th style="padding:8px 10px;text-align:left;background:var(--bg-base);border-bottom:1px solid var(--border);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.03em;color:var(--text-muted);">Connection</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tableRows.map(({ direction, item }) => {
+              const lbl  = escapeHtml(String(item.label || item.node_id || "Unknown"));
+              const conn = item.edge_label ? escapeHtml(String(item.edge_label)) : "—";
+              const isIngress = direction === "ingress";
+              const dirLabel = isIngress
+                ? `<span style="color:#60a5fa;">← Ingress</span>`
+                : `<span style="color:#34d399;">→ Egress</span>`;
+              return `
+                <tr style="border-bottom:1px solid var(--border);">
+                  <td style="padding:8px 10px;vertical-align:top;white-space:nowrap;">${dirLabel}</td>
+                  <td style="padding:8px 10px;vertical-align:top;"><strong>${lbl}</strong></td>
+                  <td style="padding:8px 10px;vertical-align:top;color:var(--text-muted);">${conn}</td>
+                </tr>`;
+            }).join("")}
+          </tbody>
+        </table>
+      </div>`;
+    sections.push({
+      title: "Traffic Flow",
+      icon: "🔀",
+      fields: [{ label: "", value: flowTable, isHtml: true, fullWidth: true }],
+    });
+  }
+
   if (!sections.length && !parentResourceSection) {
     modalBody.innerHTML = '<div class="cloud-arch-modal-empty">No core resource details found for this node.</div>';
     return;
@@ -2011,8 +2055,8 @@ function renderModalContent(data) {
           ${(section.fields || [])
             .map(
               (field) => `
-            <div class="cloud-arch-modal-field">
-              <div class="cloud-arch-modal-field-label">${field.label}</div>
+            <div class="cloud-arch-modal-field${field.fullWidth ? " cloud-arch-modal-field--full" : ""}">
+              ${field.label ? `<div class="cloud-arch-modal-field-label">${field.label}</div>` : ""}
               <div class="cloud-arch-modal-field-value">${field.isHtml ? field.value : field.value}</div>
             </div>
           `

@@ -18775,7 +18775,7 @@ _SUBSCRIPTION_DIAGRAM_CACHE: dict[str, tuple[float, str, dict]] = {}
 _SUBSCRIPTION_DIAGRAM_CACHE_TTL = 600  # 10 minutes
 # Bump this whenever diagram rendering logic changes (listener icons, pool icons, edge labels, etc.)
 # so the DB cache is automatically invalidated for all subscriptions.
-_DIAGRAM_CODE_VERSION = "v22"  # bump to invalidate cached subscription diagrams after site subnet co-location fix
+_DIAGRAM_CODE_VERSION = "v26"  # Internal APIM no longer marked public when it has a management-plane PIP
 
 
 def _subscription_diagram_cache_signature(conn, sub_id: str) -> tuple[str | None, tuple[str, str] | None]:
@@ -20934,6 +20934,15 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         if linked:
             item["public_ips"] = linked
         # A resource explicitly linked to one or more Public IP resources is internet-exposed.
+        # Exception: APIM in Internal VNet mode attaches a public IP for management-plane
+        # and outbound connectivity, but the gateway endpoint is VNet-only.  Marking it
+        # public here would produce a spurious Internet → APIM arrow and name the node
+        # "APIM_Public", incorrectly implying internet exposure.
+        if "apimanagement" in type_key:
+            _apim_raw = item.get("raw_json")
+            _apim_parsed = (json.loads(_apim_raw) if isinstance(_apim_raw, str) else _apim_raw) or {}
+            if not _is_apim_publicly_accessible(_apim_parsed):
+                continue  # Internal APIM — linked PIP is management-only, leave public flag as-is
         item["public"] = True
 
     def _bastion_private_target(item: dict) -> dict | None:
@@ -21756,6 +21765,18 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         if "virtualmachinescalesets" in (item.get("arm_type") or item.get("type") or "").lower()
     }
 
+    # App Service Plan node IDs — used so the pool-name fallback can detect
+    # when it would land on a plan and prefer the hosted site instead.
+    # App Gateway routes to the App Service site (the actual backend service),
+    # not to the App Service Plan (hosting infrastructure).  The site→plan
+    # "Hosts" edge is drawn separately, so landing on the plan would skip the
+    # site node entirely and produce an incorrect direct AppGW→Plan arrow.
+    _plan_node_ids: set[str] = {
+        _get_node_id(item)
+        for item in shown_backend
+        if "serverfarms" in (item.get("arm_type") or item.get("type") or "").lower()
+    }
+
     # VNet name look-up keyed by node ID — used to detect cross-VNet edges.
     _node_vnet: dict[str, str] = {}
     for _item in shown_entry + shown_api + shown_backend + shown_data:
@@ -21795,10 +21816,23 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         # APIM resources have NULL routing_targets in provisioned_assets — augment
         # from apim_route_map (built from apim_api_routes) so APIM→backend arrows
         # (including APIM-to-APIM routes like cop-resource-server → another APIM) are drawn.
+        # NOTE: _group_api_services sets api["name"] to the group key (e.g. "APIM_Public"),
+        # not the underlying resource name(s). Look up each resource's real name so grouped
+        # APIM nodes correctly resolve their backend routes.
         if not routing_target_list and apim_route_map:
-            _api_name_key = str(api.get("name") or "").strip().lower()
-            for _be_url in apim_route_map.get(_api_name_key, []):
-                routing_target_list.append({"target": _be_url, "name": _be_url})
+            _apim_res_names: list[str] = [
+                str(_r.get("name") or "").strip().lower()
+                for _r in (api.get("resources") or [])
+                if str(_r.get("name") or "").strip()
+            ]
+            if not _apim_res_names:
+                _apim_res_names = [str(api.get("name") or "").strip().lower()]
+            _seen_be: set[str] = set()
+            for _apim_key in _apim_res_names:
+                for _be_url in apim_route_map.get(_apim_key, []):
+                    if _be_url not in _seen_be:
+                        _seen_be.add(_be_url)
+                        routing_target_list.append({"target": _be_url, "name": _be_url})
 
         for target in routing_target_list:
             target_node_id = _resolve_routing_target(target)
@@ -22257,10 +22291,17 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     # Tracks per-edge style: each entry is either a plain color string ("orange",
     # "#ef4444") for a solid line, or a tuple (color, dasharray) for a dashed line.
     link_styles: list[str | tuple[str, str]] = []
+    # Log every edge as (source_node_id, target_node_id, edge_label) for ingress/egress
+    # connectivity data surfaced in the node modal.
+    _edge_log: list[tuple[str, str, str]] = []
+    _EDGE_RE = __import__("re").compile(r'^\s*(\S+)\s*-->(?:\|"([^"]*)"\|)?\s*(\S+)\s*$')
 
     def _add_link(line: str, color: str, *, dasharray: str | None = None) -> None:
         link_styles.append((color, dasharray) if dasharray else color)
         lines.append(line)
+        _m = _EDGE_RE.match(line)
+        if _m:
+            _edge_log.append((_m.group(1), _m.group(3), _m.group(2) or ""))
 
     for source_id, target_id in api_public_ip_edges:
         _add_link(f"    {source_id} --> {target_id}", "white")
@@ -23120,7 +23161,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                                     _parent_name = _parent_name_candidate
                                     break
                         if _parent_name:
-                            _be_nid = _resolve_routing_target_node_id(
+                            _parent_nid = _resolve_routing_target_node_id(
                                 {"target": _parent_name, "name": _parent_name},
                                 node_by_resource=node_by_resource,
                                 node_by_resource_type=node_by_resource_type,
@@ -23129,6 +23170,25 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                                 node_by_name=node_by_name,
                                 node_by_name_normalized=node_by_name_normalized,
                             )
+                            # When the resolved parent is an App Service Plan, prefer
+                            # the App Service site node over the plan.  App Gateway
+                            # routes to the actual hosted service; the site→plan "Hosts"
+                            # edge already conveys the hosting relationship.  Only fall
+                            # back to the plan when the site node is not in the diagram.
+                            # For ASE parents (not serverfarms) keep existing behaviour.
+                            if _parent_nid and _parent_nid in _plan_node_ids:
+                                _site_nid = _resolve_routing_target_node_id(
+                                    {"target": _pool_name_key, "name": _pool_name_key},
+                                    node_by_resource=node_by_resource,
+                                    node_by_resource_type=node_by_resource_type,
+                                    node_by_fqdn=node_by_fqdn,
+                                    node_by_fqdn_normalized=node_by_fqdn_normalized,
+                                    node_by_name=node_by_name,
+                                    node_by_name_normalized=node_by_name_normalized,
+                                )
+                                _be_nid = _site_nid or _parent_nid
+                            else:
+                                _be_nid = _parent_nid
                 
                 # Fallback for unresolved internal FQDNs (e.g. *.internal.cbinnovation.uk).
                 # These are typically AKS ingress controller endpoints whose cluster
@@ -23150,10 +23210,17 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     if _best_aks_nid:
                         _be_nid = _best_aks_nid
 
+                # Skip App Service Plan nodes — they are hosting containers, not
+                # traffic targets.  The individual App/Function app nodes already
+                # carry their own gateway edges, so an arrow to the plan is noise.
+                if _be_nid and _be_nid in _plan_node_ids:
+                    _be_nid = None
+
                 if _be_nid and _be_nid != _gw_nid:
-                    # Key by (gateway, backend) so multiple pools routing to the
-                    # same destination collapse into one arrow from the gateway.
-                    _conn_key = (_gw_nid, _be_nid)
+                    # Key by (source, backend): pool node when a pool exists, otherwise
+                    # the gateway itself.  This draws pool→backend edges so the routing
+                    # chain (gateway→pool→backend) is complete in the diagram.
+                    _conn_key = (_source_nid, _be_nid)
                     if _conn_key not in _backend_connections:
                         _backend_connections[_conn_key] = {
                             'protocols': set(),
@@ -23170,8 +23237,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                         _backend_connections[_conn_key]['has_waf'] = True
                     _backend_connections[_conn_key]['fqdns'].add(_fqdn_s)
 
-        # Emit ONE arrow per gateway→backend pair (deduplicated across all pools)
-        for (_gw_emit_nid, _be_nid), _conn_info in _backend_connections.items():
+        # Emit ONE arrow per source→backend pair (deduplicated per pool)
+        for (_src_emit_nid, _be_nid), _conn_info in _backend_connections.items():
             # Build simple label: protocol + auth/WAF indicator
             _protocols = sorted(_conn_info['protocols']) if _conn_info['protocols'] else ['HTTPS']
             _protocol_str = "/".join(_protocols)
@@ -23205,7 +23272,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 _metadata_json = _metadata_json[:_max_metadata_len] + '..."}'
             
             _add_link(
-                f'    %% {_metadata_json}\n    {_gw_emit_nid} -->|"{_edge_label}"| {_be_nid}',
+                f'    %% {_metadata_json}\n    {_src_emit_nid} -->|"{_edge_label}"| {_be_nid}',
                 "#f59e0b",
             )
 
@@ -23582,6 +23649,32 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             "resources": pool_resources,
             "can_drill": bool(pool_resources),
         }
+
+    # Build ingress/egress connectivity maps from the edge log and attach to each
+    # node's drilldown entry so the modal can surface "what routes to this node"
+    # and "what this node routes to" without re-parsing the Mermaid source.
+    _ingress_map: dict[str, list[dict]] = {}
+    _egress_map: dict[str, list[dict]] = {}
+    _SUBGRAPH_PREFIXES = ("net_", "sub_", "az_backbone")
+    for _src, _dst, _lbl in _edge_log:
+        if any(_src.startswith(p) for p in _SUBGRAPH_PREFIXES):
+            continue
+        if any(_dst.startswith(p) for p in _SUBGRAPH_PREFIXES):
+            continue
+        _src_entry = node_drilldown_map.get(_src) or {}
+        _dst_entry = node_drilldown_map.get(_dst) or {}
+        _src_label = str(_src_entry.get("title") or _src)
+        _dst_label = str(_dst_entry.get("title") or _dst)
+        _egress_item = {"node_id": _dst, "label": _dst_label, "edge_label": _lbl}
+        if _egress_item not in _egress_map.setdefault(_src, []):
+            _egress_map[_src].append(_egress_item)
+        _ingress_item = {"node_id": _src, "label": _src_label, "edge_label": _lbl}
+        if _ingress_item not in _ingress_map.setdefault(_dst, []):
+            _ingress_map[_dst].append(_ingress_item)
+
+    for _nid, _ndata in node_drilldown_map.items():
+        _ndata["ingress"] = _ingress_map.get(_nid, [])
+        _ndata["egress"] = _egress_map.get(_nid, [])
 
     connectivity_view = {
         "mermaid": "\n".join(lines),

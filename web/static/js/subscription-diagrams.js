@@ -15,7 +15,7 @@ import {
   enhancePlaceholderGlyphs,
   applyEmojiIconFallback,
   exportDiagramPNG,
-} from './diagram-base.js?v=5';
+} from './diagram-base.js?v=6';
 
 import {
   stampSvgDimensions,

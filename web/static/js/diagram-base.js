@@ -291,10 +291,106 @@ function resolveExportScale(bounds) {
   return Math.max(1, Math.min(preferred, sideScale, areaScale));
 }
 
+/**
+ * Collect icons rendered outside the SVG vector tree so they survive PNG export.
+ *
+ * Two sources are checked:
+ *  1. <img class="ni"> elements inside Mermaid <foreignObject> labels – these are
+ *     visible in the browser but silently dropped when the SVG is drawn to canvas
+ *     (browsers refuse to render <foreignObject> for SVGs loaded as images).
+ *  2. Any sibling overlay element marked [data-diagram-icon-overlay] (the Firefox
+ *     HTML overlay that replaces foreignObject icons on that browser).
+ *
+ * For each icon we record its position in SVG coordinate space + a data-URL payload
+ * so it can be injected as a native SVG <image> element in the export clone.
+ */
+async function _collectExportIcons(svgEl) {
+  const icons = [];
+  const ctm = svgEl.getScreenCTM?.();
+  if (!ctm) return icons;
+
+  const invCTM = ctm.inverse();
+  const seenUrls = new Map();
+
+  const fetchDataUrl = async (src) => {
+    if (!src) return null;
+    if (seenUrls.has(src)) return seenUrls.get(src);
+    if (src.startsWith('data:')) { seenUrls.set(src, src); return src; }
+    try {
+      const resp = await fetch(src);
+      if (!resp.ok) return null;
+      const blob = await resp.blob();
+      const dataUrl = await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(/** @type {string} */ (reader.result));
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(blob);
+      });
+      seenUrls.set(src, dataUrl);
+      return dataUrl;
+    } catch { return null; }
+  };
+
+  const toSvgRect = (domRect) => {
+    if (!domRect || domRect.width <= 0 || domRect.height <= 0) return null;
+    const pt = (x, y) => {
+      const p = svgEl.createSVGPoint();
+      p.x = x; p.y = y;
+      return p.matrixTransform(invCTM);
+    };
+    const tl = pt(domRect.left, domRect.top);
+    const br = pt(domRect.right, domRect.bottom);
+    return { x: tl.x, y: tl.y, width: Math.max(1, br.x - tl.x), height: Math.max(1, br.y - tl.y) };
+  };
+
+  // Source 1: img.ni inside <foreignObject> (all browsers; visibility:hidden still
+  // has valid layout, so getBoundingClientRect() returns the correct rect).
+  for (const img of svgEl.querySelectorAll('img.ni')) {
+    const src = img.getAttribute('src') || '';
+    if (!src) continue;
+    const rect = toSvgRect(img.getBoundingClientRect());
+    if (!rect) continue;
+    const href = await fetchDataUrl(src);
+    if (href) icons.push({ href, ...rect });
+  }
+
+  // Source 2: Firefox HTML icon overlay (sibling div carrying visible <img> elements).
+  const overlay = svgEl.parentElement?.querySelector('[data-diagram-icon-overlay]');
+  if (overlay) {
+    for (const img of overlay.querySelectorAll('img')) {
+      const src = img.getAttribute('src') || '';
+      if (!src) continue;
+      const rect = toSvgRect(img.getBoundingClientRect());
+      if (!rect) continue;
+      const href = await fetchDataUrl(src);
+      if (href) icons.push({ href, ...rect });
+    }
+  }
+
+  return icons;
+}
+
+function _injectIconsIntoSvgClone(svgClone, icons) {
+  for (const { href, x, y, width, height } of icons) {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'image');
+    el.setAttribute('href', href);
+    el.setAttribute('x', String(x));
+    el.setAttribute('y', String(y));
+    el.setAttribute('width', String(width));
+    el.setAttribute('height', String(height));
+    el.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    svgClone.appendChild(el);
+  }
+}
+
 export async function exportDiagramPNG(svgEl, diagramName = 'diagram') {
   if (!svgEl) return;
 
   try {
+    // Collect icons from the live DOM before cloning – layout data is only
+    // available while the element is attached and painted.
+    const exportIcons = await _collectExportIcons(svgEl);
+
     const bounds = getSvgExportBounds(svgEl);
     const scale = resolveExportScale(bounds);
     const canvas = document.createElement('canvas');
@@ -333,6 +429,12 @@ export async function exportDiagramPNG(svgEl, diagramName = 'diagram') {
     bg.setAttribute('height', String(bounds.height));
     bg.setAttribute('fill', '#0d1117');
     clone.insertBefore(bg, clone.firstChild);
+
+    // Inject icons that were invisible to the SVG serialiser (foreignObject imgs
+    // and Firefox HTML overlay imgs) as native <image> elements with data URLs.
+    if (exportIcons.length) {
+      _injectIconsIntoSvgClone(clone, exportIcons);
+    }
 
     const serializer = new XMLSerializer();
     const svgString = serializer.serializeToString(clone);
