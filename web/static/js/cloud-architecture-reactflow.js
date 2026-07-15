@@ -798,7 +798,11 @@ function openDrilldownModal(entry, subId, fallback = null) {
   fetch(url.toString(), {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ arm_type: entry.arm_type, resources: entry.resources }),
+    body: JSON.stringify({
+      arm_type: entry.arm_type,
+      resources: entry.resources,
+      node: entry,
+    }),
     signal: controller.signal,
   })
     .then(async (resp) => {
@@ -888,7 +892,7 @@ function renderModalContent(data) {
       modalBody.innerHTML = `<div class="cloud-arch-modal-empty">${escapeHtml(data.empty_message || "No data available.")}</div>`;
       return;
     }
-
+    
     const filterWrap = document.createElement("div");
     filterWrap.style.cssText = "margin-bottom:10px;";
     const filterInput = document.createElement("input");
@@ -1188,7 +1192,13 @@ function renderModalContent(data) {
     const net = data.network;
     const networkFields = [];
     
-    if (net.public_ips && net.public_ips.length > 0) {
+    const outboundPublicIps = Array.isArray(net.outbound_public_ips) ? net.outbound_public_ips : [];
+    if (outboundPublicIps.length > 0) {
+      const ipsHtml = outboundPublicIps.map(ip => 
+        `<span class="cloud-arch-modal-badge cloud-arch-modal-badge--info">🌐 ${ip}</span>`
+      ).join(' ');
+      networkFields.push({ label: "Outbound Public IPs", value: ipsHtml, isHtml: true, fullWidth: true });
+    } else if (net.public_ips && net.public_ips.length > 0) {
       const ipsHtml = net.public_ips.map(ip => 
         `<span class="cloud-arch-modal-badge cloud-arch-modal-badge--info">🌐 ${ip}</span>`
       ).join(' ');
@@ -1221,6 +1231,16 @@ function renderModalContent(data) {
     if (networkFields.length > 0) {
       sections.push({ title: "Network", icon: "🌐", fields: networkFields });
     }
+  }
+
+  const triggerSection = buildTriggersSection(data);
+  if (triggerSection) {
+    sections.push({
+      title: "",
+      icon: "",
+      fields: [],
+      __rawHtml: triggerSection,
+    });
   }
   
   // Identity & Access Section
@@ -1269,6 +1289,7 @@ function renderModalContent(data) {
   
   // Render all sections
   modalBody.innerHTML = sections.map(section => {
+    if (section.__rawHtml) return section.__rawHtml;
     const fieldsHtml = section.fields.map(field => {
       if (field.fullWidth) {
         return `
@@ -1298,6 +1319,80 @@ function renderModalContent(data) {
       </div>
     `;
   }).join('');
+}
+
+function buildTriggersSection(data) {
+  const triggers = Array.isArray(data?.triggers) ? data.triggers.filter(Boolean) : [];
+  if (!triggers.length) return "";
+
+  const rows = triggers.map((trigger) => {
+    const kind = firstNonEmpty(trigger?.kind, trigger?.trigger_type, trigger?.type, "Trigger");
+    const kindLower = kind.toLowerCase();
+    const functionName = firstNonEmpty(trigger?.function_name, trigger?.functionName, trigger?.name, "—");
+    const binding = kindLower.includes("http")
+      ? firstNonEmpty(trigger?.binding, trigger?.route, trigger?.endpoint, "—")
+      : firstNonEmpty(
+          trigger?.binding,
+          trigger?.entity_name,
+          trigger?.entityName,
+          trigger?.subscription_name,
+          trigger?.subscriptionName,
+          "—"
+        );
+    const details = [];
+
+    if (kindLower.includes("http")) {
+      const methods = Array.isArray(trigger?.methods)
+        ? trigger.methods.map((method) => String(method || "").trim()).filter(Boolean)
+        : typeof trigger?.methods === "string" && trigger.methods.trim()
+          ? [trigger.methods.trim()]
+          : [];
+      if (trigger?.auth_level) details.push(`auth: ${trigger.auth_level}`);
+      if (methods.length) details.push(`methods: ${methods.join(", ")}`);
+      if (trigger?.endpoint) details.push(`endpoint: ${trigger.endpoint}`);
+    } else {
+      if (trigger?.entity_type) details.push(`entity: ${trigger.entity_type}`);
+      if (trigger?.subscription_name) details.push(`subscription: ${trigger.subscription_name}`);
+      if (trigger?.connection) details.push(`connection: ${trigger.connection}`);
+    }
+
+    return {
+      kind,
+      functionName,
+      binding,
+      details: details.length ? details.join("; ") : "—",
+    };
+  });
+
+  return `
+    <div class="cloud-arch-modal-section">
+      <div class="cloud-arch-modal-section-title">
+        <span class="cloud-arch-modal-section-icon">⚡</span>
+        Triggers
+      </div>
+      <div style="overflow:auto;border:1px solid var(--border);border-radius:8px;">
+        <table style="width:100%;border-collapse:collapse;font-size:0.84rem;">
+          <thead>
+            <tr>
+              ${["Type", "Function", "Binding", "Details"].map(
+                (col) => `<th style="padding:8px 10px;text-align:left;background:var(--bg-base);border-bottom:1px solid var(--border);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.03em;color:var(--text-muted);">${escapeHtml(col)}</th>`
+              ).join("")}
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((row) => `
+              <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:8px 10px;vertical-align:top;"><strong>${escapeHtml(row.kind)}</strong></td>
+                <td style="padding:8px 10px;vertical-align:top;">${escapeHtml(row.functionName)}</td>
+                <td style="padding:8px 10px;vertical-align:top;"><code>${escapeHtml(row.binding)}</code></td>
+                <td style="padding:8px 10px;vertical-align:top;">${escapeHtml(row.details)}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
 }
 
 function normalizeResourceTypeKey(value) {

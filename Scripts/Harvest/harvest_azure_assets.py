@@ -824,8 +824,8 @@ def harvest_subscription(
         except Exception as exc:
             print(f"  [APIM Backend Links] FAILED ({exc})")
 
-        # Function App HTTP triggers
-        print(f"  [Function App Triggers] harvesting HTTP trigger routes...", flush=True)
+        # Function App triggers
+        print(f"  [Function App Triggers] harvesting trigger bindings...", flush=True)
         try:
             trigger_count = function_apps.harvest_http_triggers(sub_id, conn, dry_run=dry_run)
             action = "would write" if dry_run else "written"

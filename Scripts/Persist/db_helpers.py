@@ -729,6 +729,25 @@ _BASE_TABLES_SQL = """
     CREATE INDEX IF NOT EXISTS idx_func_triggers_app  ON function_app_http_triggers(function_app_name);
     CREATE INDEX IF NOT EXISTS idx_func_triggers_auth ON function_app_http_triggers(auth_level);
 
+    -- Function App Service Bus trigger bindings (populated by function_apps.harvest_http_triggers)
+    CREATE TABLE IF NOT EXISTS function_app_servicebus_triggers (
+        id              TEXT PRIMARY KEY,   -- {function_app_id}::{function_name}::servicebus::{entity_type}::{entity_name}
+        subscription_id TEXT NOT NULL,
+        function_app_id TEXT NOT NULL,
+        function_app_name TEXT NOT NULL,
+        resource_group  TEXT,
+        function_name   TEXT NOT NULL,
+        trigger_type    TEXT,               -- servicebustrigger | queuetrigger | topictrigger
+        entity_type     TEXT,               -- topic | queue
+        entity_name     TEXT,               -- topic or queue name
+        subscription_name TEXT,             -- topic subscription when available
+        connection      TEXT,
+        last_synced     DATETIME
+    );
+    CREATE INDEX IF NOT EXISTS idx_func_sb_triggers_sub  ON function_app_servicebus_triggers(subscription_id);
+    CREATE INDEX IF NOT EXISTS idx_func_sb_triggers_app  ON function_app_servicebus_triggers(function_app_name);
+    CREATE INDEX IF NOT EXISTS idx_func_sb_triggers_entity ON function_app_servicebus_triggers(entity_name);
+
     -- Azure Front Door routing rules (populated by front_door.harvest_routes)
     CREATE TABLE IF NOT EXISTS front_door_routes (
         id              TEXT PRIMARY KEY,   -- {profile_name}::{endpoint_name}::{route_name}

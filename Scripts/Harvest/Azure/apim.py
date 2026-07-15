@@ -65,7 +65,10 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     max_workers = min(8, len(raw))
     print(f"    [apim] harvesting {len(raw)} service(s) with up to {max_workers} worker(s)", flush=True)
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_build_service_asset, svc, subscription_id): svc for svc in raw}
+        futures = {
+            pool.submit(_build_service_asset, _fetch_service_details(svc, subscription_id), subscription_id): svc
+            for svc in raw
+        }
         completed = 0
         for future in as_completed(futures):
             completed += 1
@@ -84,6 +87,24 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
 
     print(f"    [apim] completed in {_format_elapsed(time.perf_counter() - started)}", flush=True)
     return results
+
+
+def _fetch_service_details(svc: dict[str, Any], subscription_id: str) -> dict[str, Any]:
+    name = safe_str(svc.get("name"))
+    resource_group = safe_str(svc.get("resourceGroup"))
+    if not name or not resource_group:
+        return svc
+
+    details = az(["apim", "show", "--service-name", name, "--resource-group", resource_group], subscription_id)
+    if not isinstance(details, dict):
+        return svc
+
+    merged = dict(svc)
+    merged.update(details)
+    svc_props = svc.get("properties") if isinstance(svc.get("properties"), dict) else {}
+    detail_props = details.get("properties") if isinstance(details.get("properties"), dict) else {}
+    merged["properties"] = {**svc_props, **detail_props}
+    return merged
 
 
 def _extract_fqdn(gateway_url: str | None) -> str | None:
@@ -166,6 +187,7 @@ def _build_service_asset(svc: dict[str, Any], subscription_id: str) -> dict[str,
     fqdn = gateway_hosts[0] if gateway_hosts else _extract_fqdn(gateway_url)
     exposure_level = _get_apim_exposure_level(svc)
     vnet_type = props.get("virtualNetworkType", "None")
+    outbound_public_ips = _extract_outbound_public_ips(svc)
 
     is_public, is_restricted = _classify_exposure(svc)
     endpoints = build_endpoints([(fqdn, 443, "https")] if fqdn else [])
@@ -178,6 +200,7 @@ def _build_service_asset(svc: dict[str, Any], subscription_id: str) -> dict[str,
         "virtual_network_type": vnet_type,
         "gateway_hosts": gateway_hosts,
         "exposure_level": exposure_level,
+        "outbound_public_ips": outbound_public_ips,
     }
 
     return {
@@ -198,6 +221,26 @@ def _build_service_asset(svc: dict[str, Any], subscription_id: str) -> dict[str,
         "pipeline_tag": None,
         "raw_json": json.dumps({**svc, "_extra": extra}),
     }
+
+
+def _extract_outbound_public_ips(svc: dict[str, Any]) -> list[str]:
+    props = svc.get("properties") or {}
+    values = props.get("publicIPAddresses") or props.get("publicIpAddresses") or props.get("publicIpAddress")
+    if values is None:
+        return []
+    candidates = values if isinstance(values, list) else [values]
+    seen: set[str] = set()
+    ips: list[str] = []
+    for candidate in candidates:
+        if isinstance(candidate, dict):
+            value = safe_str(candidate.get("ipAddress") or candidate.get("address"))
+        else:
+            value = safe_str(candidate)
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        ips.append(value)
+    return ips
 
 
 def _get_api_count(service_name: str | None, subscription_id: str, rg: str | None) -> int:
@@ -327,6 +370,7 @@ def _ensure_apim_schema(conn: sqlite3.Connection) -> None:
             api_name TEXT NOT NULL,
             api_display_name TEXT,
             api_path TEXT,
+            backend_id TEXT,
             backend_url TEXT,
             operation_id TEXT NOT NULL,
             display_name TEXT,
@@ -335,19 +379,49 @@ def _ensure_apim_schema(conn: sqlite3.Connection) -> None:
             description TEXT,
             requires_subscription INTEGER DEFAULT 1,
             policy_summary TEXT,
+            sf_service_instance_name TEXT,
+            sf_resolve_condition TEXT,
+            last_synced DATETIME
+        );
+        CREATE TABLE IF NOT EXISTS apim_api_routes (
+            id TEXT PRIMARY KEY,
+            subscription_id TEXT NOT NULL,
+            apim_name TEXT NOT NULL,
+            apim_resource_id TEXT,
+            api_name TEXT NOT NULL,
+            api_display_name TEXT,
+            api_path TEXT,
+            api_protocols TEXT,
+            backend_id TEXT,
+            backend_url TEXT,
+            service_url TEXT,
+            requires_subscription INTEGER DEFAULT 1,
+            gateway_hosts TEXT,
+            exposure_level TEXT,
+            policy_summary TEXT,
+            sf_service_instance_name TEXT,
+            sf_resolve_condition TEXT,
             last_synced DATETIME
         );
         CREATE INDEX IF NOT EXISTS idx_apim_ops_sub  ON apim_api_operations(subscription_id);
         CREATE INDEX IF NOT EXISTS idx_apim_ops_apim ON apim_api_operations(apim_name);
         CREATE INDEX IF NOT EXISTS idx_apim_ops_api  ON apim_api_operations(api_name);
+        CREATE INDEX IF NOT EXISTS idx_apim_routes_sub  ON apim_api_routes(subscription_id);
+        CREATE INDEX IF NOT EXISTS idx_apim_routes_apim ON apim_api_routes(apim_name);
+        CREATE INDEX IF NOT EXISTS idx_apim_routes_api  ON apim_api_routes(api_name);
         """
     )
-    columns = {
-        row[1]
-        for row in conn.execute("PRAGMA table_info(apim_api_operations)").fetchall()
-    }
-    if "policy_summary" not in columns:
-        conn.execute("ALTER TABLE apim_api_operations ADD COLUMN policy_summary TEXT")
+    for table_name, columns in {
+        "apim_api_operations": ("backend_id", "policy_summary", "sf_service_instance_name", "sf_resolve_condition"),
+        "apim_api_routes": ("policy_summary", "sf_service_instance_name", "sf_resolve_condition"),
+    }.items():
+        existing = {
+            row[1]
+            for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+        for column in columns:
+            if column not in existing:
+                conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column} TEXT")
     conn.commit()
 
 
@@ -356,6 +430,22 @@ def _policy_value(policy_xml: str | None, tag: str) -> list[str]:
         return []
     pattern = rf"<{tag}\b[^>]*\b(?:base-url|baseUrl)=\"([^\"]+)\""
     return re.findall(pattern, policy_xml, flags=re.IGNORECASE)
+
+
+def _policy_set_backend_attrs(policy_xml: str | None) -> list[dict[str, str]]:
+    if not policy_xml:
+        return []
+    attrs_list: list[dict[str, str]] = []
+    for match in re.finditer(r"<set-backend-service\b(.*?)(?:/?>)", policy_xml, flags=re.IGNORECASE | re.DOTALL):
+        attrs = match.group(1) or ""
+        attr_map: dict[str, str] = {}
+        for key in ("backend-id", "base-url", "baseUrl", "sf-service-instance-name", "sf-resolve-condition"):
+            value_match = re.search(rf"\b{re.escape(key)}=\"([^\"]+)\"", attrs, flags=re.IGNORECASE)
+            if value_match:
+                attr_map[key.lower()] = value_match.group(1)
+        if attr_map:
+            attrs_list.append(attr_map)
+    return attrs_list
 
 
 def _policy_flags(policy_xml: str | None) -> dict[str, Any]:
@@ -369,12 +459,28 @@ def _policy_flags(policy_xml: str | None) -> dict[str, Any]:
             "has_authentication_managed_identity": False,
             "backend_urls": [],
             "backend_ids": [],
+            "sf_service_instance_names": [],
+            "sf_resolve_conditions": [],
         }
 
     text = policy_xml.lower()
-    backend_urls = _policy_value(policy_xml, "set-backend-service")
-    backend_ids = []
-    backend_ids.extend(re.findall(r'<set-backend-service\b[^>]*\bbackend-id="([^"]+)"', policy_xml, flags=re.IGNORECASE))
+    backend_urls: list[str] = []
+    backend_ids: list[str] = []
+    sf_service_instance_names: list[str] = []
+    sf_resolve_conditions: list[str] = []
+    for attrs in _policy_set_backend_attrs(policy_xml):
+        base_url = safe_str(attrs.get("base-url") or attrs.get("baseurl"))
+        backend_id = safe_str(attrs.get("backend-id"))
+        sf_name = safe_str(attrs.get("sf-service-instance-name"))
+        sf_resolve = safe_str(attrs.get("sf-resolve-condition"))
+        if base_url:
+            backend_urls.append(base_url)
+        if backend_id:
+            backend_ids.append(backend_id)
+        if sf_name:
+            sf_service_instance_names.append(sf_name)
+        if sf_resolve:
+            sf_resolve_conditions.append(sf_resolve)
     return {
         "has_policy": True,
         "has_validate_jwt": "validate-jwt" in text,
@@ -382,8 +488,10 @@ def _policy_flags(policy_xml: str | None) -> dict[str, Any]:
         "has_check_header": "check-header" in text,
         "has_subscription_key_check": "subscription-key" in text or "subscription required" in text,
         "has_authentication_managed_identity": "authentication-managed-identity" in text,
-        "backend_urls": backend_urls,
-        "backend_ids": backend_ids,
+        "backend_urls": _dedupe_strs(backend_urls),
+        "backend_ids": _dedupe_strs(backend_ids),
+        "sf_service_instance_names": _dedupe_strs(sf_service_instance_names),
+        "sf_resolve_conditions": _dedupe_strs(sf_resolve_conditions),
     }
 
 
@@ -394,7 +502,11 @@ def _normalize_backend_key(value: str | None) -> str | None:
 
 def _backend_url_from_row(backend: dict[str, Any]) -> str | None:
     props = backend.get("properties") or {}
-    return safe_str(backend.get("url") or props.get("url"))
+    sf_cluster = props.get("serviceFabricCluster") or {}
+    management_endpoints = sf_cluster.get("managementEndpoints") or []
+    if management_endpoints:
+        return safe_str(management_endpoints[0])
+    return safe_str(backend.get("url") or props.get("url") or props.get("resourceId"))
 
 
 def _build_backend_lookup(backends: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
@@ -415,11 +527,7 @@ def _resolve_backend_reference(
     service_url: str | None,
     backend_lookup: dict[str, dict[str, Any]],
 ) -> tuple[str | None, str | None]:
-    if backend_urls:
-        backend_url = safe_str(backend_urls[0])
-        if backend_url:
-            return None, backend_url
-
+    resolved_backend_id = safe_str(backend_ids[0]) if backend_ids else None
     for backend_id in backend_ids:
         lookup_key = _normalize_backend_key(backend_id)
         if not lookup_key:
@@ -430,11 +538,23 @@ def _resolve_backend_reference(
             backend_url = _backend_url_from_row(backend)
             if backend_url:
                 return resolved_id or backend_id, backend_url
+            if backend_urls:
+                fallback_url = safe_str(backend_urls[0])
+                if fallback_url:
+                    return resolved_id or backend_id, fallback_url
+            if service_url:
+                return resolved_id or backend_id, safe_str(service_url)
+            return resolved_id or backend_id, None
+
+    if backend_urls:
+        backend_url = safe_str(backend_urls[0])
+        if backend_url:
+            return resolved_backend_id, backend_url
 
     backend_url = safe_str(service_url)
     if backend_url:
-        return None, backend_url
-    return None, None
+        return resolved_backend_id, backend_url
+    return resolved_backend_id, None
 
 
 def _fetch_api_bundle(
@@ -473,7 +593,7 @@ def _fetch_api_bundle(
         service_url,
         backend_lookup,
     )
-    if not api_backend_url:
+    if not api_backend_url and not backend_id:
         return None, []
 
     api_display = safe_str(props.get("displayName") or api.get("displayName") or api_name)
@@ -494,6 +614,8 @@ def _fetch_api_bundle(
         "requires_subscription": requires_subscription,
         "gateway_hosts": json.dumps(_get_gateway_hosts(service)),
         "exposure_level": _get_apim_exposure_level(service),
+        "sf_service_instance_name": api_policy_flags["sf_service_instance_names"][0] if api_policy_flags["sf_service_instance_names"] else None,
+        "sf_resolve_condition": api_policy_flags["sf_resolve_conditions"][0] if api_policy_flags["sf_resolve_conditions"] else None,
         "normalized_api_path": normalize_route_path(api_path),
         "api_policy_flags": api_policy_flags,
         "last_synced": now,
@@ -515,6 +637,7 @@ def _fetch_api_bundle(
                     "api_name": api_name,
                     "api_display_name": api_display,
                     "api_path": api_path,
+                    "backend_id": backend_id,
                     "backend_url": api_backend_url,
                     "operation_id": op_id,
                     "display_name": safe_str(op.get("displayName") or op_id),
@@ -524,6 +647,9 @@ def _fetch_api_bundle(
                     "description": safe_str(op.get("description") or ""),
                     "requires_subscription": requires_subscription,
                     "api_policy_flags": api_policy_flags,
+                    "backend_lookup": backend_lookup,
+                    "sf_service_instance_name": api_policy_flags["sf_service_instance_names"][0] if api_policy_flags["sf_service_instance_names"] else None,
+                    "sf_resolve_condition": api_policy_flags["sf_resolve_conditions"][0] if api_policy_flags["sf_resolve_conditions"] else None,
                     "last_synced": now,
                 }
             )
@@ -532,6 +658,7 @@ def _fetch_api_bundle(
 
 
 def _materialize_operation_row(op_spec: dict[str, Any]) -> dict[str, Any] | None:
+    backend_lookup = op_spec.get("backend_lookup") or {}
     op_policy = _az_show_policy(
         "operation",
         op_spec["apim_name"],
@@ -541,10 +668,21 @@ def _materialize_operation_row(op_spec: dict[str, Any]) -> dict[str, Any] | None
         operation_id=op_spec["operation_id"],
     )
     op_flags = _policy_flags(op_policy)
-    backend_url = op_flags["backend_urls"][0] if op_flags["backend_urls"] else op_spec["backend_url"]
+    if op_flags["backend_ids"] or op_flags["backend_urls"]:
+        backend_id, backend_url = _resolve_backend_reference(
+            op_flags["backend_ids"],
+            op_flags["backend_urls"],
+            op_spec["backend_url"],
+            backend_lookup,
+        )
+    else:
+        backend_id = op_spec.get("backend_id")
+        backend_url = op_spec["backend_url"]
     merged_flags = {
         "api_policy": op_spec["api_policy_flags"],
         "operation_policy": op_flags,
+        "sf_service_instance_name": op_flags["sf_service_instance_names"][0] if op_flags["sf_service_instance_names"] else op_spec.get("sf_service_instance_name"),
+        "sf_resolve_condition": op_flags["sf_resolve_conditions"][0] if op_flags["sf_resolve_conditions"] else op_spec.get("sf_resolve_condition"),
     }
     return {
         "id": op_spec["id"],
@@ -553,6 +691,7 @@ def _materialize_operation_row(op_spec: dict[str, Any]) -> dict[str, Any] | None
         "api_name": op_spec["api_name"],
         "api_display_name": op_spec["api_display_name"],
         "api_path": op_spec["api_path"],
+        "backend_id": backend_id,
         "backend_url": backend_url,
         "operation_id": op_spec["operation_id"],
         "display_name": op_spec["display_name"],
@@ -561,6 +700,8 @@ def _materialize_operation_row(op_spec: dict[str, Any]) -> dict[str, Any] | None
         "description": op_spec["description"],
         "requires_subscription": op_spec["requires_subscription"],
         "policy_summary": json.dumps(merged_flags),
+        "sf_service_instance_name": merged_flags["sf_service_instance_name"],
+        "sf_resolve_condition": merged_flags["sf_resolve_condition"],
         "last_synced": op_spec["last_synced"],
     }
 
@@ -586,6 +727,7 @@ def _build_operation_specs_for_api(api_spec: dict[str, Any]) -> list[dict[str, A
                 "api_name": api_spec["api_name"],
                 "api_display_name": api_spec["api_display_name"],
                 "api_path": api_spec["api_path"],
+                "backend_id": api_spec.get("backend_id"),
                 "backend_url": api_spec["backend_url"],
                 "operation_id": op_id,
                 "display_name": safe_str(op.get("displayName") or op_id),
@@ -595,6 +737,7 @@ def _build_operation_specs_for_api(api_spec: dict[str, Any]) -> list[dict[str, A
                 "description": safe_str(op.get("description") or ""),
                 "requires_subscription": api_spec["requires_subscription"],
                 "api_policy_flags": api_spec["api_policy_flags"],
+                "backend_lookup": api_spec.get("backend_lookup") or {},
                 "last_synced": api_spec["last_synced"],
             }
         )
@@ -682,9 +825,11 @@ def _harvest_service_route_bundle(
                                 "api_name": route["api_name"],
                                 "api_display_name": route["api_display_name"],
                                 "api_path": route["api_path"],
+                                "backend_id": route["backend_id"],
                                 "backend_url": route["backend_url"],
                                 "requires_subscription": route["requires_subscription"],
                                 "api_policy_flags": route["api_policy_flags"],
+                                "backend_lookup": backend_lookup,
                                 "last_synced": now,
                             }
                         )
@@ -874,8 +1019,9 @@ def harvest_routes(
                             id, subscription_id, apim_name, apim_resource_id,
                             api_name, api_display_name, api_path, api_protocols,
                             backend_id, backend_url, service_url, requires_subscription,
-                            gateway_hosts, exposure_level, last_synced
-                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                            gateway_hosts, exposure_level, policy_summary,
+                            sf_service_instance_name, sf_resolve_condition, last_synced
+                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                         ON CONFLICT(id) DO UPDATE SET
                             subscription_id       = excluded.subscription_id,
                             apim_resource_id      = excluded.apim_resource_id,
@@ -888,6 +1034,9 @@ def harvest_routes(
                             requires_subscription = excluded.requires_subscription,
                             gateway_hosts         = excluded.gateway_hosts,
                             exposure_level        = excluded.exposure_level,
+                            policy_summary        = excluded.policy_summary,
+                            sf_service_instance_name = excluded.sf_service_instance_name,
+                            sf_resolve_condition  = excluded.sf_resolve_condition,
                             last_synced           = excluded.last_synced
                         """,
                         (
@@ -905,6 +1054,9 @@ def harvest_routes(
                             route["requires_subscription"],
                             route["gateway_hosts"],
                             route["exposure_level"],
+                            json.dumps(route["api_policy_flags"]),
+                            route["sf_service_instance_name"],
+                            route["sf_resolve_condition"],
                             route["last_synced"],
                         ),
                     )
@@ -917,13 +1069,14 @@ def harvest_routes(
                         """
                         INSERT INTO apim_api_operations (
                             id, subscription_id, apim_name, api_name, api_display_name,
-                            api_path, backend_url, operation_id, display_name,
+                            api_path, backend_id, backend_url, operation_id, display_name,
                             method, url_template, description, requires_subscription,
-                            policy_summary, last_synced
-                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                            policy_summary, sf_service_instance_name, sf_resolve_condition, last_synced
+                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                         ON CONFLICT(id) DO UPDATE SET
                             api_display_name      = excluded.api_display_name,
                             api_path              = excluded.api_path,
+                            backend_id            = excluded.backend_id,
                             backend_url           = excluded.backend_url,
                             display_name          = excluded.display_name,
                             method                = excluded.method,
@@ -931,6 +1084,8 @@ def harvest_routes(
                             description           = excluded.description,
                             requires_subscription = excluded.requires_subscription,
                             policy_summary        = excluded.policy_summary,
+                            sf_service_instance_name = excluded.sf_service_instance_name,
+                            sf_resolve_condition  = excluded.sf_resolve_condition,
                             last_synced           = excluded.last_synced
                         """,
                         (
@@ -940,6 +1095,7 @@ def harvest_routes(
                             row["api_name"],
                             row["api_display_name"],
                             row["api_path"],
+                            row["backend_id"],
                             row["backend_url"],
                             row["operation_id"],
                             row["display_name"],
@@ -948,6 +1104,8 @@ def harvest_routes(
                             row["description"],
                             row["requires_subscription"],
                             row["policy_summary"],
+                            row["sf_service_instance_name"],
+                            row["sf_resolve_condition"],
                             row["last_synced"],
                         ),
                     )

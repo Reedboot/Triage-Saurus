@@ -2145,6 +2145,7 @@ class TestIngressDiagramGeneration:
                 "orders-ingress",
                 "aks.example.com",
                 "/*",
+                "Public",
                 "orders-api",
                 80,
                 "orders-api",
@@ -2156,9 +2157,73 @@ class TestIngressDiagramGeneration:
 
         result = self._call(rows=rows, aks_route_rows=aks_route_rows)
         mermaid = result.get("mermaid", "")
-        assert "Kubernetes Ingress" in mermaid, mermaid
-        assert "aks-prod" in mermaid, mermaid
-        assert "Routing" in mermaid, mermaid
+        assert any('["orders-api' in line for line in mermaid.splitlines()), mermaid
+        assert "rg_aks_aks_prod" in mermaid, mermaid
+        assert any("orders_api" in line and "rg_aks_aks_prod" in line for line in mermaid.splitlines()), mermaid
+
+    def test_aks_ingress_routes_show_the_ingress_hostname(self):
+        """AKS ingress routes should preserve the hostname hop before the cluster."""
+        import json
+
+        rows = [
+            (
+                "portalui",
+                "Microsoft.Web/sites",
+                "rg-aks",
+                "portalui.azurewebsites.net",
+                0,
+                "Standard",
+                "portalui-id",
+                0,
+                None,
+                0,
+                None,
+                json.dumps([
+                    {"target": "prodgreen-authentication-totp.internal.cbinnovation.uk", "name": "prodgreen-authentication-totp.internal.cbinnovation.uk"}
+                ]),
+                json.dumps({}),
+                None,
+                None,
+            ),
+            (
+                "cbuk-core-prodgreen-shared-aks-uksouth",
+                "Microsoft.ContainerService/managedClusters",
+                "rg-aks",
+                "",
+                0,
+                "Standard",
+                "aks-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({}),
+                None,
+                None,
+            ),
+        ]
+        aks_route_rows = [
+            (
+                "cbuk-core-prodgreen-shared-aks-uksouth",
+                "default",
+                "authentication-totp-ingress",
+                "prodgreen-authentication-totp.internal.cbinnovation.uk",
+                "/*",
+                "Internal",
+                "authentication-totp",
+                80,
+                "authentication-totp",
+                "git@example.com/totp",
+                "rg-aks",
+                json.dumps({"app.kubernetes.io/component": "api"}),
+            )
+        ]
+
+        result = self._call(rows=rows, aks_route_rows=aks_route_rows)
+        mermaid = result.get("mermaid", "")
+        assert "Internet -->" not in mermaid, mermaid
+        assert "prodgreen-authentication-totp.internal.cbinnovation.uk" in mermaid, mermaid
 
     def test_apim_public_ip_is_rendered_on_apim_details(self):
         """APIM-linked Public IPs should appear on the APIM drilldown, not as a separate node."""
@@ -2216,6 +2281,41 @@ class TestIngressDiagramGeneration:
         mermaid = result.get("mermaid", "")
         assert "grp_APIM_Public --> rg_api_apim_public" not in mermaid, mermaid
         assert 'rg_api_apim_public["' not in mermaid, mermaid
+
+    def test_internal_apim_does_not_render_internet_ingress(self):
+        """Internal APIM should not get an Internet ingress arrow even with outbound public IPs."""
+        import json
+
+        rows = [
+            (
+                "apim-prod",
+                "Microsoft.ApiManagement/service",
+                "rg-api",
+                "apim-prod.azure-api.net",
+                0,
+                "Developer",
+                "apim-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({
+                    "properties": {
+                        "virtualNetworkType": "Internal",
+                        "publicNetworkAccess": "Enabled",
+                        "publicIPAddresses": ["20.90.204.14"],
+                    }
+                }),
+                None,
+                None,
+            ),
+        ]
+
+        result = self._call(rows=rows)
+        mermaid = result.get("mermaid", "")
+        assert "Internet -->" not in mermaid, mermaid
+        assert "apim-prod" in mermaid, mermaid
 
     def test_apim_with_vnet_and_subnet_is_nested_in_network_boundary(self):
         """APIM nodes with subnet metadata should render inside the network subgraph."""
@@ -2838,6 +2938,188 @@ class TestIngressDiagramGeneration:
         assert by_namespace["orders"] == "API", result["rows"]
         assert by_namespace["batch"] == "Job", result["rows"]
 
+    def test_aks_service_drilldown_shows_ingress_namespace_and_port(self):
+        """AKS service drilldown should surface ingress host, namespace, and port."""
+        import sqlite3
+
+        from web.app import _build_child_table
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute(
+                """
+                CREATE TABLE aks_routes (
+                    subscription_id TEXT,
+                    cluster_name TEXT,
+                    resource_group TEXT,
+                    namespace TEXT,
+                    ingress_name TEXT,
+                    host TEXT,
+                    path TEXT,
+                    service_name TEXT,
+                    service_port TEXT,
+                    deployment_name TEXT,
+                    git_repository TEXT,
+                    pod_template_labels TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO aks_routes (
+                    subscription_id, cluster_name, resource_group, namespace, ingress_name, host, path,
+                    service_name, service_port, deployment_name, git_repository, pod_template_labels
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "sub-1",
+                    "aks-one",
+                    "rg-app",
+                    "orders",
+                    "orders-ingress",
+                    "orders.example.com",
+                    "/api/orders",
+                    "orders-svc",
+                    "443",
+                    "orders-api",
+                    "https://example/repo-a",
+                    '{"app.kubernetes.io/component":"api"}',
+                ),
+            )
+
+            result = _build_child_table(
+                conn,
+                "sub-1",
+                "microsoft.kubernetes/services",
+                [{"rg": "rg-app", "name": "orders-svc"}],
+                node={
+                    "arm_type": "microsoft.kubernetes/services",
+                    "source_cluster_name": "aks-one",
+                    "source_cluster_rg": "rg-app",
+                    "source_namespace": "orders",
+                    "source_service": "orders-svc",
+                    "source_service_port": "443",
+                    "source_deployment": "orders-api",
+                    "label": "orders-svc",
+                    "short_name": "orders-svc",
+                    "name": "orders-svc",
+                },
+            )
+        finally:
+            conn.close()
+
+        assert result["view_type"] == "table", result
+        assert result["columns"] == [
+            "Namespace",
+            "Ingress / FQDN",
+            "Port",
+            "Path",
+            "Service",
+            "Deployment",
+            "Cluster",
+            "Resource Group",
+        ], result["columns"]
+        assert result["rows"] == [[
+            "orders",
+            "orders.example.com",
+            "443",
+            "/api/orders",
+            "orders-svc",
+            "orders-api",
+            "aks-one",
+            "rg-app",
+        ]], result["rows"]
+
+    def test_cloud_resource_details_resolves_synthetic_aks_service(self, monkeypatch):
+        """Synthetic Kubernetes Service IDs should resolve to AKS route details."""
+        import sqlite3
+
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute(
+                """
+                CREATE TABLE subscriptions (
+                    id TEXT,
+                    display_name TEXT,
+                    environment TEXT,
+                    state TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE aks_routes (
+                    subscription_id TEXT,
+                    cluster_name TEXT,
+                    resource_group TEXT,
+                    namespace TEXT,
+                    ingress_name TEXT,
+                    host TEXT,
+                    path TEXT,
+                    service_name TEXT,
+                    service_port TEXT,
+                    deployment_name TEXT,
+                    git_repository TEXT,
+                    pod_template_labels TEXT
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+                ("sub-1", "Test Subscription", "production", "Enabled"),
+            )
+            conn.execute(
+                """
+                INSERT INTO aks_routes (
+                    subscription_id, cluster_name, resource_group, namespace, ingress_name, host, path,
+                    service_name, service_port, deployment_name, git_repository, pod_template_labels
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "sub-1",
+                    "aks-one",
+                    "rg-app",
+                    "orders",
+                    "orders-ingress",
+                    "orders.example.com",
+                    "/api/orders",
+                    "orders-svc",
+                    "443",
+                    "orders-api",
+                    "https://example/repo-a",
+                    '{"app.kubernetes.io/component":"api"}',
+                ),
+            )
+
+            monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+            client = app_module.app.test_client()
+            resource_id = "cbuk_core_prodgreen_shared_aks_uksouth_cbuk_core_prodgreen_shared_aks_uksouth_prodgreen_account_products_isa_tisa_orchestrator_api_service_80"
+            resp = client.get(
+                "/api/cloud/resource-details",
+                query_string={
+                    "id": resource_id,
+                    "name": "cbuk-core-prodgreen-shared-aks-uksouth-prodgreen-account-products-isa-tisa-orchestrator-api-service-80",
+                    "resource_group": "rg-app",
+                    "type": "Kubernetes Service",
+                    "sub": "sub-1",
+                },
+            )
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        payload = resp.get_json()
+        assert payload["type_label"] == "Kubernetes Service", payload
+        assert payload["configuration"]["namespace"] == "orders", payload
+        assert payload["configuration"]["ingress_fqdn"] == "orders.example.com", payload
+        assert payload["configuration"]["port"] == "443", payload
+
     def test_aks_drilldown_repo_links_to_scanned_repo(self):
         """AKS repo column should link to a matching scanned repository when available."""
         import sqlite3
@@ -3236,6 +3518,75 @@ class TestIngressDiagramGeneration:
         assert result["rows"][0][0] == "functions_windows-staging", result["rows"]
         assert result["rows"][0][4] == "Function App Slot", result["rows"]
 
+    def test_function_app_deployment_slots_use_function_app_title(self):
+        """Function app drill-down should not use the generic App Service title."""
+        import json
+        import sqlite3
+
+        try:
+            from web.app import _build_child_table
+        except ModuleNotFoundError:
+            from app import _build_child_table
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE subscriptions (
+                    id TEXT PRIMARY KEY,
+                    display_name TEXT,
+                    environment TEXT,
+                    state TEXT
+                );
+                CREATE TABLE provisioned_assets (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    resource_group TEXT,
+                    name TEXT,
+                    type TEXT,
+                    fqdn TEXT,
+                    is_public INTEGER DEFAULT 0,
+                    is_restricted INTEGER DEFAULT 0,
+                    raw_json TEXT
+                );
+                """
+            )
+            conn.execute(
+                "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+                ("sub-1", "Test Subscription", "production", "Enabled"),
+            )
+            conn.execute(
+                """
+                INSERT INTO provisioned_assets (
+                    id, subscription_id, resource_group, name, type, fqdn,
+                    is_public, is_restricted, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "fn-1",
+                    "sub-1",
+                    "rg-app",
+                    "cbuk-core-prodgreen-fi-api-uksouth",
+                    "Microsoft.Web/sites",
+                    "cbuk-core-prodgreen-fi-api-uksouth.azurewebsites.net",
+                    1,
+                    0,
+                    json.dumps({"kind": "functionapp,linux"}),
+                ),
+            )
+
+            result = _build_child_table(
+                conn,
+                "sub-1",
+                "Microsoft.Web/sites",
+                [{"rg": "rg-app", "name": "cbuk-core-prodgreen-fi-api-uksouth"}],
+            )
+        finally:
+            conn.close()
+
+        assert result["title"] == "Function App — Deployment Slots", result
+
     def test_gateway_waf_mode_marks_entry_edges_protected(self):
         """Gateway-wide WAF should label entry edges as WAF instead of FQDN/protocol."""
         rows = [
@@ -3410,6 +3761,174 @@ class TestIngressDiagramGeneration:
         assert 'agpool_rg_app_cop_resource_server_apim_backend_pool -->|"HTTPS"| grp_APIM_Public' in mermaid, mermaid
         assert "cbuk-core-prodgreen-api-uksouth.azure-api.net" in mermaid, mermaid
 
+    def test_apim_does_not_infer_untargeted_backend_edges(self):
+        """APIM should only render confirmed backend routes, not heuristic fanout edges."""
+        import json
+
+        rows = [
+            (
+                "cbuk-core-prodgreen-api-uksouth",
+                "Microsoft.ApiManagement/service",
+                "rg-api",
+                "cbuk-core-prodgreen-api-uksouth.azure-api.net",
+                1,
+                "Developer",
+                "apim-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                "{}",
+            ),
+            (
+                "cbuk-core-prodgreen-internal-transfers-fn-uksouth",
+                "Microsoft.Web/sites",
+                "cbuk-core-prodgreen-internal-transfers-fn-uksouth",
+                "cbuk-core-prodgreen-internal-transfers-fn-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                1,
+                "Y1",
+                "fn-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({"kind": "functionapp"}),
+            ),
+        ]
+        result = self._call(rows=rows)
+        mermaid = result.get("mermaid", "")
+        mermaid = result.get("mermaid", "")
+        assert "grp_APIM_Public -->" not in mermaid, mermaid
+
+    def test_appgw_appserviceenvironment_backend_urls_route_to_backend_site(self):
+        """App Gateway backend URLs should resolve to ASE-hosted backend sites."""
+        import json
+
+        rows = [
+            (
+                "cop-resource-server-apim",
+                "Microsoft.Network/applicationGateways",
+                "rg-app",
+                "cop-resource-server-apim.example.com",
+                1,
+                "WAF_v2",
+                "appgw-id",
+                0,
+                "HTTPS:443",
+            ),
+            (
+                "cards-management-web",
+                "Microsoft.Web/sites",
+                "rg-backend",
+                "cards-management-web.azurewebsites.net",
+                1,
+                "B1",
+                "site-id",
+                0,
+                None,
+            ),
+            (
+                "institution-portal-crm",
+                "Microsoft.Web/sites",
+                "rg-backend",
+                "institution-portal-crm.azurewebsites.net",
+                1,
+                "B1",
+                "site-id-2",
+                0,
+                None,
+            ),
+        ]
+        appgw_routes = [
+            (
+                "cop-resource-server-apim",
+                "cop-resource-server-apim.example.com",
+                json.dumps([
+                    "https://cbuk-core-prodgreen-cards-management-web-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net/",
+                    "https://cbuk-core-prodgreen-institution-portal-crm-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net/",
+                ]),
+                "backend-pool",
+                "listener-one",
+                "/*",
+                "HTTPS",
+                None,
+            ),
+        ]
+
+        result = self._call(rows=rows, appgw_routes=appgw_routes)
+        mermaid = result.get("mermaid", "")
+        assert 'agpool_rg_app_cop_resource_server_apim_backend_pool -->|"HTTPS"| rg_backend_cards_management_web' in mermaid, mermaid
+        assert 'agpool_rg_app_cop_resource_server_apim_backend_pool -->|"HTTPS"| rg_backend_institution_portal_crm' in mermaid, mermaid
+
+    def test_appgw_appserviceenvironment_backend_urls_route_to_multiple_backend_sites(self):
+        """App Gateway backend URLs should resolve to all matching ASE-hosted backend sites."""
+        import json
+
+        rows = [
+            (
+                "cop-resource-server-apim",
+                "Microsoft.Network/applicationGateways",
+                "rg-app",
+                "cop-resource-server-apim.example.com",
+                1,
+                "WAF_v2",
+                "appgw-id",
+                0,
+                "HTTPS:443",
+            ),
+            (
+                "institution-portal-internal",
+                "Microsoft.Web/sites",
+                "rg-backend",
+                "institution-portal-internal.azurewebsites.net",
+                1,
+                "B1",
+                "site-id-3",
+                0,
+                None,
+            ),
+            (
+                "transactionnotifications",
+                "Microsoft.Web/sites",
+                "rg-backend",
+                "transactionnotifications.azurewebsites.net",
+                1,
+                "B1",
+                "site-id-4",
+                0,
+                None,
+            ),
+        ]
+        appgw_routes = [
+            (
+                "cop-resource-server-apim",
+                "cop-resource-server-apim.example.com",
+                json.dumps(["https://cbuk-core-prodgreen-institution-portal-internal-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net/"]),
+                "institution-portal-internal",
+                "listener-one",
+                "/*",
+                "HTTPS",
+                None,
+            ),
+            (
+                "cop-resource-server-apim",
+                "cop-resource-server-apim.example.com",
+                json.dumps(["https://cbuk-core-prodgreen-transaction-notifications-f-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net/"]),
+                "transactionnotifications",
+                "listener-two",
+                "/*",
+                "HTTPS",
+                None,
+            ),
+        ]
+
+        result = self._call(rows=rows, appgw_routes=appgw_routes)
+        mermaid = result.get("mermaid", "")
+        assert 'agpool_rg_app_cop_resource_server_apim_institution_portal_internal -->|"HTTPS"| rg_backend_institution_portal_internal' in mermaid, mermaid
+        assert 'agpool_rg_app_cop_resource_server_apim_transactionnotifications -->|"HTTPS"| rg_backend_transactionnotifications' in mermaid, mermaid
+
 
 class TestSubscriptionResourceGroupDiagrams:
     """Unit tests for per-resource-group subscription diagrams."""
@@ -3541,6 +4060,7 @@ class TestSubscriptionResourceGroupDiagrams:
                 "orders-ingress",
                 "orders.example.com",
                 "/api/*",
+                "Internal",
                 "orders-service",
                 "8080",
                 "orders-deploy",
@@ -3590,6 +4110,7 @@ class TestSubscriptionResourceGroupDiagrams:
         assert "orders-ingress" in mermaid, mermaid
         assert "orders-service" in mermaid, mermaid
         assert "routes to" in mermaid, mermaid
+        assert "orders_ingress" in mermaid and "orders_service" in mermaid, mermaid
 
     def test_rg_connectivity_does_not_self_route_aks_ingress_nodes(self):
         import sys
@@ -3624,6 +4145,7 @@ class TestSubscriptionResourceGroupDiagrams:
                 "orders-ingress",
                 "orders.example.com",
                 "/*",
+                "Internal",
                 "orders-service",
                 "8080",
                 "orders-deploy",
@@ -4850,12 +5372,12 @@ class TestCloudPosture:
 
             monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
             client = app_module.app.test_client()
-            resp = client.get("/api/cloud/architecture?sub=sub-1&view=connectivity")
+            resp = client.get("/api/subscriptions/sub-1/diagram")
         finally:
             conn.close()
 
         assert resp.status_code == 200, resp.get_data(as_text=True)
-        mermaid = resp.get_json()["views"]["connectivity"]["mermaid"]
+        mermaid = resp.get_json()["ingress_diagram"]["mermaid"]
         assert 'prodgreen_shared_uksouth["' in mermaid, mermaid
         assert "appserviceenvironment.net" not in mermaid, mermaid
         assert any(
@@ -5025,6 +5547,592 @@ class TestCloudPosture:
         assert any(
             line.startswith("    agpool_rg_net_appgw_one_institution_portal -->")
             and "rg_app_prodgreen_shared_uksouth" in line
+            for line in mermaid.splitlines()
+        ), mermaid
+
+    def test_subscription_diagram_renders_apim_backend_pool_chain(self, monkeypatch):
+        """APIM routes should render as APIM → backend pool → destination service."""
+        import json
+        import os
+        import sqlite3
+        import sys
+        import tempfile
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        conn = sqlite3.connect(tmp.name)
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT,
+                last_synced TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            CREATE TABLE apim_backends (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                apim_name TEXT,
+                backend_id TEXT,
+                title TEXT,
+                description TEXT,
+                url TEXT,
+                protocol TEXT,
+                circuit_breaker TEXT,
+                credentials TEXT,
+                tls_validate_cert INTEGER,
+                last_synced TEXT
+            );
+            CREATE TABLE apim_api_routes (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                apim_name TEXT,
+                apim_resource_id TEXT,
+                api_name TEXT,
+                api_display_name TEXT,
+                api_path TEXT,
+                api_protocols TEXT,
+                backend_id TEXT,
+                backend_url TEXT,
+                service_url TEXT,
+                requires_subscription INTEGER,
+                gateway_hosts TEXT,
+                exposure_level TEXT,
+                policy_summary TEXT,
+                sf_service_instance_name TEXT,
+                sf_resolve_condition TEXT,
+                last_synced TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+        )
+        conn.executemany(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/cbuk-core-prodgreen-api-uksouth",
+                    "sub-1",
+                    "rg-api",
+                    "cbuk-core-prodgreen-api-uksouth",
+                    "Microsoft.ApiManagement/service",
+                    "uksouth",
+                    "Developer",
+                    "cbuk-core-prodgreen-api-uksouth.azure-api.net",
+                    1,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({"properties": {}}),
+                    0,
+                    None,
+                ),
+                (
+                    "/subscriptions/sub-1/resourceGroups/rg-backend/providers/Microsoft.Web/sites/cbuk-core-prodgreen-internal-transfers-fn-uksouth",
+                    "sub-1",
+                    "rg-backend",
+                    "cbuk-core-prodgreen-internal-transfers-fn-uksouth",
+                    "Microsoft.Web/sites",
+                    "uksouth",
+                    "Y1",
+                    "cbuk-core-prodgreen-internal-transfers-fn-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({"kind": "functionapp"}),
+                    0,
+                    None,
+                ),
+            ],
+        )
+        conn.execute(
+            """
+            INSERT INTO apim_backends (
+                id, subscription_id, apim_name, backend_id, title, description, url,
+                protocol, circuit_breaker, credentials, tls_validate_cert, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "cbuk-core-prodgreen-api-uksouth::internal-transfers",
+                "sub-1",
+                "cbuk-core-prodgreen-api-uksouth",
+                "internal-transfers",
+                "internal-transfers",
+                None,
+                "https://cbuk-core-prodgreen-internal-transfers-fn-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                "http",
+                None,
+                None,
+                1,
+                "2026-06-01T00:00:00Z",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO apim_api_routes (
+                id, subscription_id, apim_name, apim_resource_id, api_name, api_display_name,
+                api_path, api_protocols, backend_id, backend_url, service_url,
+                requires_subscription, gateway_hosts, exposure_level, policy_summary,
+                sf_service_instance_name, sf_resolve_condition, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "cbuk-core-prodgreen-api-uksouth::internal-transfers",
+                "sub-1",
+                "cbuk-core-prodgreen-api-uksouth",
+                "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/cbuk-core-prodgreen-api-uksouth",
+                "internal-transfers",
+                "Internal Transfers",
+                "/internal-transfers",
+                json.dumps(["HTTPS"]),
+                "internal-transfers",
+                "https://cbuk-core-prodgreen-internal-transfers-fn-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                "https://cbuk-core-prodgreen-api-uksouth.azure-api.net",
+                1,
+                json.dumps([]),
+                "Public",
+                None,
+                None,
+                None,
+                "2026-06-01T00:00:00Z",
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        monkeypatch.setattr(app_module, "_SUBSCRIPTION_DIAGRAM_CACHE", {})
+        client = app_module.app.test_client()
+        resp = client.get("/api/subscriptions/sub-1/diagram")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        mermaid = resp.get_json()["ingress_diagram"]["mermaid"]
+        assert "rg_api_internal_transfers" in mermaid, mermaid
+        assert "class rg_api_internal_transfers apimBackendPool;" in mermaid, mermaid
+        assert "internal-transfers 🔒" in mermaid, mermaid
+        assert any(
+            "grp_APIM_Public -->" in line and "internal_transfers" in line
+            for line in mermaid.splitlines()
+        ), mermaid
+        assert any(
+            "internal_transfers" in line and "cbuk_core_prodgreen_internal_transfers_fn_uksouth" in line
+            for line in mermaid.splitlines()
+        ), mermaid
+        os.unlink(tmp.name)
+
+    def test_subscription_diagram_renders_apim_backend_pool_chain_with_private_ase_alias(self, monkeypatch):
+        """APIM backend pools should still connect when the backend URL is a private ASE alias."""
+        import json
+        import os
+        import sqlite3
+        import sys
+        import tempfile
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        conn = sqlite3.connect(tmp.name)
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT,
+                last_synced TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            CREATE TABLE apim_backends (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                apim_name TEXT,
+                backend_id TEXT,
+                title TEXT,
+                description TEXT,
+                url TEXT,
+                protocol TEXT,
+                circuit_breaker TEXT,
+                credentials TEXT,
+                tls_validate_cert INTEGER,
+                last_synced TEXT
+            );
+            CREATE TABLE apim_api_routes (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                apim_name TEXT,
+                apim_resource_id TEXT,
+                api_name TEXT,
+                api_display_name TEXT,
+                api_path TEXT,
+                api_protocols TEXT,
+                backend_id TEXT,
+                backend_url TEXT,
+                service_url TEXT,
+                requires_subscription INTEGER,
+                gateway_hosts TEXT,
+                exposure_level TEXT,
+                policy_summary TEXT,
+                sf_service_instance_name TEXT,
+                sf_resolve_condition TEXT,
+                last_synced TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+        )
+        apim_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/cbuk-core-prodgreen-api-uksouth"
+        backend_site_id = "/subscriptions/sub-1/resourceGroups/rg-backend/providers/Microsoft.Web/sites/transactionnotifications"
+        conn.executemany(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku,
+                fqdn, is_public, status, pipeline_tag, first_detected, last_synced,
+                raw_json, is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    apim_id,
+                    "sub-1",
+                    "rg-api",
+                    "cbuk-core-prodgreen-api-uksouth",
+                    "Microsoft.ApiManagement/service",
+                    "uksouth",
+                    "Developer",
+                    "cbuk-core-prodgreen-api-uksouth.azure-api.net",
+                    1,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({"properties": {}}),
+                    0,
+                    None,
+                ),
+                (
+                    backend_site_id,
+                    "sub-1",
+                    "rg-backend",
+                    "transactionnotifications",
+                    "Microsoft.Web/sites",
+                    "uksouth",
+                    "P1v3",
+                    "transactionnotifications.azurewebsites.net",
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({"kind": "app"}),
+                    0,
+                    None,
+                ),
+            ],
+        )
+        conn.execute(
+            """
+            INSERT INTO apim_backends (
+                id, subscription_id, apim_name, backend_id, title, description, url,
+                protocol, circuit_breaker, credentials, tls_validate_cert, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "cbuk-core-prodgreen-api-uksouth::transactionnotifications",
+                "sub-1",
+                "cbuk-core-prodgreen-api-uksouth",
+                "transactionnotifications",
+                "transactionnotifications",
+                None,
+                "https://cbuk-core-prodgreen-transaction-notifications-f-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                "http",
+                None,
+                None,
+                1,
+                "2026-06-01T00:00:00Z",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO apim_api_routes (
+                id, subscription_id, apim_name, apim_resource_id, api_name, api_display_name,
+                api_path, api_protocols, backend_id, backend_url, service_url,
+                requires_subscription, gateway_hosts, exposure_level, policy_summary,
+                sf_service_instance_name, sf_resolve_condition, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "cbuk-core-prodgreen-api-uksouth::transactionnotifications",
+                "sub-1",
+                "cbuk-core-prodgreen-api-uksouth",
+                apim_id,
+                "transactionnotifications",
+                "transactionnotifications",
+                "/transactionnotifications",
+                json.dumps(["HTTPS"]),
+                "transactionnotifications",
+                "https://cbuk-core-prodgreen-transaction-notifications-f-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                "https://cbuk-core-prodgreen-api-uksouth.azure-api.net",
+                1,
+                json.dumps([]),
+                "Internal",
+                None,
+                None,
+                None,
+                "2026-06-01T00:00:00Z",
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        monkeypatch.setattr(app_module, "_SUBSCRIPTION_DIAGRAM_CACHE", {})
+        client = app_module.app.test_client()
+        resp = client.get("/api/subscriptions/sub-1/diagram")
+        try:
+            assert resp.status_code == 200, resp.get_data(as_text=True)
+            mermaid = resp.get_json()["ingress_diagram"]["mermaid"]
+        finally:
+            conn.close()
+            os.unlink(tmp.name)
+
+        assert any(
+            "grp_APIM_Public -->" in line and "transactionnotifications" in line
+            for line in mermaid.splitlines()
+        ), mermaid
+        assert any(
+            "transactionnotifications" in line
+            and "rg_backend_transactionnotifications" in line
+            for line in mermaid.splitlines()
+        ), mermaid
+
+    def test_subscription_diagram_renders_servicebus_trigger_edge_to_function_app(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+        import tempfile
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        conn = sqlite3.connect(tmp.name)
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT,
+                last_synced TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            CREATE TABLE function_app_servicebus_triggers (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                function_app_id TEXT,
+                function_app_name TEXT,
+                resource_group TEXT,
+                function_name TEXT,
+                trigger_type TEXT,
+                entity_type TEXT,
+                entity_name TEXT,
+                subscription_name TEXT,
+                connection TEXT,
+                last_synced TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+        )
+        topic_name = "clearbank.bacs.events.payments.bacsdirectcreditrecalledevent"
+        fn_name = "cbuk-core-prodgreen-bacs-dcr-webhook-uksouth"
+        ns_name = "cbuk-core-prodgreen-servicebus-uksouth"
+        ns_id = "/subscriptions/sub-1/resourceGroups/rg-msg/providers/Microsoft.ServiceBus/namespaces/" + ns_name
+        topic_id = "/subscriptions/sub-1/resourceGroups/rg-msg/providers/Microsoft.ServiceBus/namespaces/cbuk-core-prodgreen-servicebus-uksouth/topics/" + topic_name
+        fn_id = "/subscriptions/sub-1/resourceGroups/rg-fn/providers/Microsoft.Web/sites/" + fn_name
+        conn.executemany(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku,
+                fqdn, is_public, status, pipeline_tag, first_detected, last_synced,
+                raw_json, is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    ns_id,
+                    "sub-1",
+                    "rg-msg",
+                    ns_name,
+                    "Microsoft.ServiceBus/namespaces",
+                    "uksouth",
+                    "Standard",
+                    "cbuk-core-prodgreen-servicebus-uksouth.servicebus.windows.net",
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({}),
+                    0,
+                    None,
+                ),
+                (
+                    topic_id,
+                    "sub-1",
+                    "rg-msg",
+                    topic_name,
+                    "Microsoft.ServiceBus/namespaces/topics",
+                    "uksouth",
+                    "Standard",
+                    None,
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({}),
+                    0,
+                    None,
+                ),
+                (
+                    fn_id,
+                    "sub-1",
+                    "rg-fn",
+                    fn_name,
+                    "Microsoft.Web/sites",
+                    "uksouth",
+                    "Y1",
+                    fn_name + ".prodgreen-shared-uksouth.appserviceenvironment.net",
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({"kind": "functionapp"}),
+                    0,
+                    None,
+                ),
+            ],
+        )
+        conn.execute(
+            """
+            INSERT INTO function_app_servicebus_triggers (
+                id, subscription_id, function_app_id, function_app_name, resource_group,
+                function_name, trigger_type, entity_type, entity_name, subscription_name,
+                connection, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                fn_id + "::DirectCreditRecalled::servicebus::topic::" + topic_name,
+                "sub-1",
+                fn_id,
+                fn_name,
+                "rg-fn",
+                "DirectCreditRecalled",
+                "servicebustrigger",
+                "topic",
+                topic_name,
+                "bacs_direct_credit_recalled_event_topic_subscription",
+                "ServiceBusConnection",
+                "2026-06-01T00:00:00Z",
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        monkeypatch.setattr(app_module, "_SUBSCRIPTION_DIAGRAM_CACHE", {})
+        client = app_module.app.test_client()
+        resp = client.get("/api/subscriptions/sub-1/diagram")
+        try:
+            assert resp.status_code == 200, resp.get_data(as_text=True)
+            mermaid = resp.get_json()["ingress_diagram"]["mermaid"]
+        finally:
+            conn.close()
+            os.unlink(tmp.name)
+
+        ns_nid = app_module._sanitise_node_id("rg-msg_" + ns_name)
+        fn_nid = app_module._sanitise_node_id("rg-fn_" + fn_name)
+        assert any(
+            ns_nid in line and fn_nid in line and "AMQP" in line
             for line in mermaid.splitlines()
         ), mermaid
 
@@ -5205,6 +6313,335 @@ class TestCloudPosture:
             "rg_net_appgw_one" in line and "-->" in line and plan_nid in line
             for line in mermaid.splitlines()
         ), f"AppGW arrow went to plan (should go to site):\n{mermaid}"
+
+    def test_appgw_shared_backend_pool_renders_one_main_arrow_per_pool(self, monkeypatch):
+        import json
+        import sqlite3
+
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE subscriptions (
+                    id TEXT PRIMARY KEY,
+                    display_name TEXT,
+                    environment TEXT,
+                    state TEXT,
+                    last_synced TEXT
+                );
+                CREATE TABLE provisioned_assets (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    resource_group TEXT,
+                    name TEXT,
+                    type TEXT,
+                    location TEXT,
+                    sku TEXT,
+                    fqdn TEXT,
+                    is_public INTEGER DEFAULT 0,
+                    status TEXT,
+                    pipeline_tag TEXT,
+                    first_detected TEXT,
+                    last_synced TEXT,
+                    raw_json TEXT,
+                    is_restricted INTEGER DEFAULT 0,
+                    waf_mode TEXT
+                );
+                CREATE TABLE appgw_routing_rules (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    gateway_name TEXT,
+                    backend_fqdns TEXT,
+                    backend_pool_name TEXT,
+                    listener_name TEXT,
+                    hostname TEXT,
+                    url_path TEXT,
+                    protocol TEXT,
+                    waf_policy_name TEXT,
+                    resource_group TEXT
+                );
+                """
+            )
+            conn.execute(
+                "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+                ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+            )
+            gw_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/AppGatewayShared"
+            conn.execute(
+                """
+                INSERT INTO provisioned_assets (
+                    id, subscription_id, resource_group, name, type, location, sku,
+                    fqdn, is_public, status, pipeline_tag, first_detected, last_synced,
+                    raw_json, is_restricted, waf_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    gw_id,
+                    "sub-1",
+                    "rg-net",
+                    "AppGatewayShared",
+                    "Microsoft.Network/applicationGateways",
+                    "eastus",
+                    "WAF_v2",
+                    "appgatewayshared.example.com",
+                    1,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({}),
+                    0,
+                    "WAF_v2",
+                ),
+            )
+            route_rows = [
+                ("route-1", "listener-a", "listener-a.example.com", "HTTPS", "transactionnotification", json.dumps(["transactionnotification.contoso.internal"])),
+                ("route-2", "listener-a", "listener-a.example.com", "HTTP", "transactionnotification", json.dumps(["transactionnotification.contoso.internal"])),
+                ("route-3", "listener-b", "listener-b.example.com", "HTTPS", "transactionnotification", json.dumps(["transactionnotification.contoso.internal"])),
+                ("route-4", "listener-b", "listener-b.example.com", "HTTP", "transactionnotification", json.dumps(["transactionnotification.contoso.internal"])),
+            ]
+            conn.executemany(
+                """
+                INSERT INTO appgw_routing_rules (
+                    id, subscription_id, gateway_name, backend_fqdns, backend_pool_name,
+                    listener_name, hostname, url_path, protocol, waf_policy_name, resource_group
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        row_id,
+                        "sub-1",
+                        "AppGatewayShared",
+                        backend_fqdns,
+                        pool_name,
+                        listener_name,
+                        hostname,
+                        "/*",
+                        protocol,
+                        None,
+                        "rg-net",
+                    )
+                    for row_id, listener_name, hostname, protocol, pool_name, backend_fqdns in route_rows
+                ],
+            )
+            conn.commit()
+
+            monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+            client = app_module.app.test_client()
+            resp = client.get("/api/subscriptions/sub-1/diagram")
+        finally:
+            conn.close()
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        mermaid = resp.get_json()["ingress_diagram"]["mermaid"]
+        gw_nid = app_module._sanitise_node_id("rg-net_AppGatewayShared")
+        pool_nid = app_module._sanitise_node_id(f"agpool_{gw_nid}_transactionnotification")
+        pool_edges = [
+            line for line in mermaid.splitlines()
+            if line.startswith(f"    {gw_nid} -->") and pool_nid in line
+        ]
+        assert len(pool_edges) == 1, mermaid
+
+    def test_api_cloud_architecture_connectivity_renders_apim_backend_pool_chain(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT,
+                last_synced TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            CREATE TABLE apim_backends (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                apim_name TEXT,
+                backend_id TEXT,
+                title TEXT,
+                description TEXT,
+                url TEXT,
+                protocol TEXT,
+                circuit_breaker TEXT,
+                credentials TEXT,
+                tls_validate_cert INTEGER,
+                last_synced TEXT
+            );
+            CREATE TABLE apim_api_routes (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                apim_name TEXT,
+                apim_resource_id TEXT,
+                api_name TEXT,
+                api_display_name TEXT,
+                api_path TEXT,
+                api_protocols TEXT,
+                backend_id TEXT,
+                backend_url TEXT,
+                service_url TEXT,
+                requires_subscription INTEGER,
+                gateway_hosts TEXT,
+                exposure_level TEXT,
+                policy_summary TEXT,
+                sf_service_instance_name TEXT,
+                sf_resolve_condition TEXT,
+                last_synced TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+        )
+        apim_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/cbuk-core-prodgreen-api-uksouth"
+        backend_site_id = "/subscriptions/sub-1/resourceGroups/rg-backend/providers/Microsoft.Web/sites/transactionnotifications"
+        conn.executemany(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku,
+                fqdn, is_public, status, pipeline_tag, first_detected, last_synced,
+                raw_json, is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    apim_id,
+                    "sub-1",
+                    "rg-api",
+                    "cbuk-core-prodgreen-api-uksouth",
+                    "Microsoft.ApiManagement/service",
+                    "uksouth",
+                    "Developer",
+                    "cbuk-core-prodgreen-api-uksouth.azure-api.net",
+                    1,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({"properties": {}}),
+                    0,
+                    None,
+                ),
+                (
+                    backend_site_id,
+                    "sub-1",
+                    "rg-backend",
+                    "transactionnotifications",
+                    "Microsoft.Web/sites",
+                    "uksouth",
+                    "P1v3",
+                    "transactionnotifications.azurewebsites.net",
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({"kind": "app"}),
+                    0,
+                    None,
+                ),
+            ],
+        )
+        conn.execute(
+            """
+            INSERT INTO apim_backends (
+                id, subscription_id, apim_name, backend_id, title, description, url,
+                protocol, circuit_breaker, credentials, tls_validate_cert, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "cbuk-core-prodgreen-api-uksouth::transactionnotifications",
+                "sub-1",
+                "cbuk-core-prodgreen-api-uksouth",
+                "transactionnotifications",
+                "transactionnotifications",
+                None,
+                "https://cbuk-core-prodgreen-transaction-notifications-f-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                "http",
+                None,
+                None,
+                1,
+                "2026-06-01T00:00:00Z",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO apim_api_routes (
+                id, subscription_id, apim_name, apim_resource_id, api_name, api_display_name,
+                api_path, api_protocols, backend_id, backend_url, service_url,
+                requires_subscription, gateway_hosts, exposure_level, policy_summary,
+                sf_service_instance_name, sf_resolve_condition, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "cbuk-core-prodgreen-api-uksouth::transactionnotifications",
+                "sub-1",
+                "cbuk-core-prodgreen-api-uksouth",
+                apim_id,
+                "transactionnotifications",
+                "transactionnotifications",
+                "/transactionnotifications",
+                json.dumps(["HTTPS"]),
+                "transactionnotifications",
+                "https://cbuk-core-prodgreen-transaction-notifications-f-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                "https://cbuk-core-prodgreen-api-uksouth.azure-api.net",
+                1,
+                json.dumps([]),
+                "Internal",
+                None,
+                None,
+                None,
+                "2026-06-01T00:00:00Z",
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/architecture?sub=sub-1&view=connectivity")
+        try:
+            assert resp.status_code == 200, resp.get_data(as_text=True)
+            mermaid = resp.get_json()["views"]["connectivity"]["mermaid"]
+        finally:
+            conn.close()
+
+        assert "class rg_api_cbuk_core_prodgreen_api_uksouth__transactionnotifications apimBackendPool;" in mermaid, mermaid
+        assert any(
+            "rg_api_cbuk_core_prodgreen_api_uksouth__transactionnotifications -->" in line
+            and "rg_backend_transactionnotifications" in line
+            for line in mermaid.splitlines()
+        ), mermaid
 
     def test_subscription_architecture_payload_keeps_appgw_pool_edge_when_multiple_pools_share_ase_target(self, monkeypatch):
         import json
@@ -5408,6 +6845,35 @@ class TestCloudPosture:
                     is_restricted INTEGER DEFAULT 0,
                     waf_mode TEXT
                 );
+                CREATE TABLE function_app_http_triggers (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT NOT NULL,
+                    function_app_id TEXT NOT NULL,
+                    function_app_name TEXT NOT NULL,
+                    resource_group TEXT,
+                    function_name TEXT NOT NULL,
+                    route TEXT,
+                    auth_level TEXT,
+                    methods TEXT,
+                    fqdn TEXT,
+                    full_url TEXT,
+                    is_public INTEGER DEFAULT 0,
+                    last_synced TEXT
+                );
+                CREATE TABLE function_app_servicebus_triggers (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT NOT NULL,
+                    function_app_id TEXT NOT NULL,
+                    function_app_name TEXT NOT NULL,
+                    resource_group TEXT,
+                    function_name TEXT NOT NULL,
+                    trigger_type TEXT,
+                    entity_type TEXT,
+                    entity_name TEXT,
+                    subscription_name TEXT,
+                    connection TEXT,
+                    last_synced TEXT
+                );
                 """
             )
             conn.execute(
@@ -5474,9 +6940,16 @@ class TestCloudPosture:
 
     def test_subscription_architecture_payload_infers_service_fabric_network_from_vmss_children(self):
         import json
+        import os
         import sqlite3
+        import sys
 
         from web.app import _build_subscription_architecture_payload
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+        original_get_db = app_module._get_db_with_schema
 
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
@@ -5507,6 +6980,35 @@ class TestCloudPosture:
                     raw_json TEXT,
                     is_restricted INTEGER DEFAULT 0,
                     waf_mode TEXT
+                );
+                CREATE TABLE function_app_http_triggers (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT NOT NULL,
+                    function_app_id TEXT NOT NULL,
+                    function_app_name TEXT NOT NULL,
+                    resource_group TEXT,
+                    function_name TEXT NOT NULL,
+                    route TEXT,
+                    auth_level TEXT,
+                    methods TEXT,
+                    fqdn TEXT,
+                    full_url TEXT,
+                    is_public INTEGER DEFAULT 0,
+                    last_synced TEXT
+                );
+                CREATE TABLE function_app_servicebus_triggers (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT NOT NULL,
+                    function_app_id TEXT NOT NULL,
+                    function_app_name TEXT NOT NULL,
+                    resource_group TEXT,
+                    function_name TEXT NOT NULL,
+                    trigger_type TEXT,
+                    entity_type TEXT,
+                    entity_name TEXT,
+                    subscription_name TEXT,
+                    connection TEXT,
+                    last_synced TEXT
                 );
                 """
             )
@@ -5586,12 +7088,344 @@ class TestCloudPosture:
             )
 
             payload = _build_subscription_architecture_payload(conn, "sub-1", view_mode="full")
+            app_module._get_db_with_schema = lambda: conn
+            graph_resp = app_module.app.test_client().get("/api/cloud/architecture?sub=sub-1&view=connectivity")
+            assert graph_resp.status_code == 200, graph_resp.get_data(as_text=True)
+            graph = graph_resp.get_json()
+            mermaid = graph["views"]["connectivity"]["mermaid"]
+            cluster_node_id = app_module._sanitise_node_id("cbuk-core-prodgreen-sf-uksouth_cbuk-core-prodgreen-sf")
+            vmss_node_id = app_module._sanitise_node_id("cbuk-core-prodgreen-sf-uksouth_sharedz1")
+            assert f'{cluster_node_id} -->|"contains"| {vmss_node_id}' in mermaid, mermaid
         finally:
+            app_module._get_db_with_schema = original_get_db
             conn.close()
 
         cluster_node = next(node for node in payload["nodes"] if node["id"] == cluster_id)
         assert cluster_node["data"].get("vnetName") == "prodgreen", cluster_node
         assert cluster_node["data"].get("subnetName") == "service_fabric_zonal", cluster_node
+
+    def test_subscription_architecture_payload_links_service_fabric_vmss_across_resource_groups(self):
+        import json
+        import os
+        import sqlite3
+        import sys
+
+        from web.app import _build_subscription_architecture_payload
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+        original_get_db = app_module._get_db_with_schema
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE subscriptions (
+                    id TEXT PRIMARY KEY,
+                    display_name TEXT,
+                    environment TEXT,
+                    state TEXT,
+                    last_synced TEXT
+                );
+                CREATE TABLE provisioned_assets (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    resource_group TEXT,
+                    name TEXT,
+                    type TEXT,
+                    location TEXT,
+                    sku TEXT,
+                    fqdn TEXT,
+                    is_public INTEGER DEFAULT 0,
+                    status TEXT,
+                    pipeline_tag TEXT,
+                    first_detected TEXT,
+                    last_synced TEXT,
+                    raw_json TEXT,
+                    is_restricted INTEGER DEFAULT 0,
+                    waf_mode TEXT
+                );
+                CREATE TABLE function_app_http_triggers (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT NOT NULL,
+                    function_app_id TEXT NOT NULL,
+                    function_app_name TEXT NOT NULL,
+                    resource_group TEXT,
+                    function_name TEXT NOT NULL,
+                    route TEXT,
+                    auth_level TEXT,
+                    methods TEXT,
+                    fqdn TEXT,
+                    full_url TEXT,
+                    is_public INTEGER DEFAULT 0,
+                    last_synced TEXT
+                );
+                CREATE TABLE function_app_servicebus_triggers (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT NOT NULL,
+                    function_app_id TEXT NOT NULL,
+                    function_app_name TEXT NOT NULL,
+                    resource_group TEXT,
+                    function_name TEXT NOT NULL,
+                    trigger_type TEXT,
+                    entity_type TEXT,
+                    entity_name TEXT,
+                    subscription_name TEXT,
+                    connection TEXT,
+                    last_synced TEXT
+                );
+                """
+            )
+            conn.execute(
+                "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+                ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+            )
+            cluster_id = "/subscriptions/sub-1/resourceGroups/cbuk-core-prodgreen-sf-uksouth/providers/Microsoft.ServiceFabric/clusters/cbuk-core-prodgreen-sf"
+            vmss_id = "/subscriptions/sub-1/resourceGroups/cbuk-core-prodgreen-compute-uksouth/providers/Microsoft.Compute/virtualMachineScaleSets/sharedz1"
+            subnet_id = "/subscriptions/sub-1/resourceGroups/cbuk-core-prodgreen-network-uksouth/providers/Microsoft.Network/virtualNetworks/prodgreen/subnets/service_fabric_zonal"
+            conn.executemany(
+                """
+                INSERT INTO provisioned_assets (
+                    id, subscription_id, resource_group, name, type, location, sku,
+                    fqdn, is_public, status, pipeline_tag, first_detected, last_synced,
+                    raw_json, is_restricted, waf_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        cluster_id,
+                        "sub-1",
+                        "cbuk-core-prodgreen-sf-uksouth",
+                        "cbuk-core-prodgreen-sf",
+                        "Microsoft.ServiceFabric/clusters",
+                        "uksouth",
+                        "Standard",
+                        None,
+                        0,
+                        "active",
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        json.dumps({"_extra": {"node_types": [{"name": "sharedz1"}]}}),
+                        0,
+                        None,
+                    ),
+                    (
+                        vmss_id,
+                        "sub-1",
+                        "cbuk-core-prodgreen-compute-uksouth",
+                        "sharedz1",
+                        "Microsoft.Compute/virtualMachineScaleSets",
+                        "uksouth",
+                        "Standard",
+                        None,
+                        0,
+                        "active",
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        json.dumps({
+                            "properties": {
+                                "virtualMachineProfile": {
+                                    "networkProfile": {
+                                        "networkInterfaceConfigurations": [
+                                            {
+                                                "properties": {
+                                                    "ipConfigurations": [
+                                                        {
+                                                            "properties": {
+                                                                "subnet": {"id": subnet_id}
+                                                            }
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }),
+                        0,
+                        None,
+                    ),
+                ],
+            )
+
+            app_module._get_db_with_schema = lambda: conn
+            graph_resp = app_module.app.test_client().get("/api/cloud/architecture?sub=sub-1&view=connectivity")
+            assert graph_resp.status_code == 200, graph_resp.get_data(as_text=True)
+            graph = graph_resp.get_json()
+            mermaid = graph["views"]["connectivity"]["mermaid"]
+            cluster_node_id = app_module._sanitise_node_id("cbuk-core-prodgreen-sf-uksouth_cbuk-core-prodgreen-sf")
+            vmss_node_id = app_module._sanitise_node_id("cbuk-core-prodgreen-compute-uksouth_sharedz1")
+            assert f'{cluster_node_id} -->|"contains"| {vmss_node_id}' in mermaid, mermaid
+        finally:
+            app_module._get_db_with_schema = original_get_db
+            conn.close()
+
+    def test_service_fabric_cluster_drilldown_lists_vmss(self):
+        import json
+        import sqlite3
+
+        from web.app import _build_child_table
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE subscriptions (
+                    id TEXT PRIMARY KEY,
+                    display_name TEXT,
+                    environment TEXT,
+                    state TEXT,
+                    last_synced TEXT
+                );
+                CREATE TABLE provisioned_assets (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    resource_group TEXT,
+                    name TEXT,
+                    type TEXT,
+                    location TEXT,
+                    sku TEXT,
+                    fqdn TEXT,
+                    is_public INTEGER DEFAULT 0,
+                    status TEXT,
+                    pipeline_tag TEXT,
+                    first_detected TEXT,
+                    last_synced TEXT,
+                    raw_json TEXT,
+                    is_restricted INTEGER DEFAULT 0,
+                    waf_mode TEXT
+                );
+                CREATE TABLE function_app_http_triggers (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT NOT NULL,
+                    function_app_id TEXT NOT NULL,
+                    function_app_name TEXT NOT NULL,
+                    resource_group TEXT,
+                    function_name TEXT NOT NULL,
+                    route TEXT,
+                    auth_level TEXT,
+                    methods TEXT,
+                    fqdn TEXT,
+                    full_url TEXT,
+                    is_public INTEGER DEFAULT 0,
+                    last_synced TEXT
+                );
+                CREATE TABLE function_app_servicebus_triggers (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT NOT NULL,
+                    function_app_id TEXT NOT NULL,
+                    function_app_name TEXT NOT NULL,
+                    resource_group TEXT,
+                    function_name TEXT NOT NULL,
+                    trigger_type TEXT,
+                    entity_type TEXT,
+                    entity_name TEXT,
+                    subscription_name TEXT,
+                    connection TEXT,
+                    last_synced TEXT
+                );
+                """
+            )
+            conn.execute(
+                "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+                ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+            )
+            cluster_id = "/subscriptions/sub-1/resourceGroups/rg-sf/providers/Microsoft.ServiceFabric/clusters/sf-prod"
+            vmss_id = "/subscriptions/sub-1/resourceGroups/rg-sf/providers/Microsoft.Compute/virtualMachineScaleSets/sharedz1"
+            conn.executemany(
+                """
+                INSERT INTO provisioned_assets (
+                    id, subscription_id, resource_group, name, type, location, sku,
+                    fqdn, is_public, status, pipeline_tag, first_detected, last_synced,
+                    raw_json, is_restricted, waf_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        cluster_id,
+                        "sub-1",
+                        "rg-sf",
+                        "sf-prod",
+                        "Microsoft.ServiceFabric/clusters",
+                        "uksouth",
+                        "Standard",
+                        None,
+                        0,
+                        "active",
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        json.dumps({
+                            "_extra": {
+                                "node_types": [{"name": "sharedz1"}],
+                                "subnet_id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/prodgreen/subnets/service_fabric",
+                            }
+                        }),
+                        0,
+                        None,
+                    ),
+                    (
+                        vmss_id,
+                        "sub-1",
+                        "rg-sf",
+                        "sharedz1",
+                        "Microsoft.Compute/virtualMachineScaleSets",
+                        "uksouth",
+                        "Standard",
+                        "sharedz1.eastus.cloudapp.azure.com",
+                        0,
+                        "active",
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        json.dumps({
+                            "sku": {"capacity": 5},
+                            "properties": {
+                                "virtualMachineProfile": {
+                                    "networkProfile": {
+                                        "networkInterfaceConfigurations": [
+                                            {
+                                                "properties": {
+                                                    "ipConfigurations": [
+                                                        {
+                                                            "properties": {
+                                                                "subnet": {"id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/prodgreen/subnets/service_fabric"}
+                                                            }
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }),
+                        0,
+                        None,
+                    ),
+                ],
+            )
+
+            result = _build_child_table(
+                conn,
+                "sub-1",
+                "Microsoft.ServiceFabric/clusters",
+                [{"rg": "rg-sf", "name": "sf-prod"}],
+            )
+        finally:
+            conn.close()
+
+        assert result["view_type"] == "table", result
+        assert result["title"] == "Service Fabric Cluster — VM Scale Sets", result
+        assert result["rows"], result
+        assert any(row[1] == "sharedz1" for row in result["rows"]), result["rows"]
+        assert all(len(row) == 7 for row in result["rows"]), result["rows"]
 
     def test_cloud_architecture_page_labels_tabs_mermaid_and_react_flow(self, monkeypatch):
         import os
@@ -5702,6 +7536,56 @@ class TestCloudPosture:
                 "active",
                 0,
             ),
+        )
+        conn.executemany(
+            """
+            INSERT INTO function_app_http_triggers (
+                id, subscription_id, function_app_id, function_app_name, resource_group,
+                function_name, route, auth_level, methods, fqdn, full_url, is_public, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    fn_id + "::HttpPing",
+                    "sub-1",
+                    fn_id,
+                    "fn-one",
+                    "rg-app",
+                    "HttpPing",
+                    "ping",
+                    "function",
+                    json.dumps(["GET"]),
+                    "fn-one.azurewebsites.net",
+                    "https://fn-one.azurewebsites.net/api/ping",
+                    1,
+                    "2026-06-01T00:00:00Z",
+                ),
+            ],
+        )
+        conn.executemany(
+            """
+            INSERT INTO function_app_servicebus_triggers (
+                id, subscription_id, function_app_id, function_app_name, resource_group,
+                function_name, trigger_type, entity_type, entity_name, subscription_name,
+                connection, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    fn_id + "::DirectCredit",
+                    "sub-1",
+                    fn_id,
+                    "fn-one",
+                    "rg-app",
+                    "DirectCredit",
+                    "servicebustrigger",
+                    "topic",
+                    "clearbank.bacs.events.payments.bacsdirectcreditrecalledevent",
+                    "sb-subscription",
+                    "servicebus-connection",
+                    "2026-06-01T00:00:00Z",
+                ),
+            ],
         )
         conn.commit()
 
@@ -5883,6 +7767,35 @@ class TestCloudPosture:
                 is_restricted INTEGER DEFAULT 0,
                 waf_mode TEXT
             );
+            CREATE TABLE function_app_http_triggers (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT NOT NULL,
+                function_app_id TEXT NOT NULL,
+                function_app_name TEXT NOT NULL,
+                resource_group TEXT,
+                function_name TEXT NOT NULL,
+                route TEXT,
+                auth_level TEXT,
+                methods TEXT,
+                fqdn TEXT,
+                full_url TEXT,
+                is_public INTEGER DEFAULT 0,
+                last_synced TEXT
+            );
+            CREATE TABLE function_app_servicebus_triggers (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT NOT NULL,
+                function_app_id TEXT NOT NULL,
+                function_app_name TEXT NOT NULL,
+                resource_group TEXT,
+                function_name TEXT NOT NULL,
+                trigger_type TEXT,
+                entity_type TEXT,
+                entity_name TEXT,
+                subscription_name TEXT,
+                connection TEXT,
+                last_synced TEXT
+            );
             """
         )
         conn.execute(
@@ -5917,6 +7830,33 @@ class TestCloudPosture:
                     None,
                 ),
             )
+            conn.execute(
+                """
+                INSERT INTO provisioned_assets (
+                    id, subscription_id, resource_group, name, type, location, sku,
+                    fqdn, is_public, status, pipeline_tag, first_detected, last_synced,
+                    raw_json, is_restricted, waf_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/apim-shared",
+                    "sub-1",
+                    "rg-api",
+                    "apim-shared",
+                    "Microsoft.ApiManagement/service",
+                    "eastus",
+                    "Developer",
+                    "apim-shared.azure-api.net",
+                    1,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({}),
+                    0,
+                    None,
+                ),
+            )
         conn.commit()
 
         monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
@@ -5927,11 +7867,148 @@ class TestCloudPosture:
         data = resp.get_json()
         summary = data["summary"]
         assert summary["resource_count"] == 4
-        assert summary["displayed_resource_count"] == 3
-        assert summary["omitted_resource_count"] == 1
-        assert summary["missing_asset_count"] == 1
-        assert summary["missing_assets"][0]["name"] == "zeta-gateway"
-        assert "Ingress" in summary["missing_assets"][0]["reason"]
+        assert summary["displayed_resource_count"] == 4
+        assert summary["omitted_resource_count"] == 0
+        assert summary["missing_asset_count"] == 0
+        assert summary["missing_assets"] == []
+
+    def test_api_cloud_architecture_overview_keeps_backend_type_diversity(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT,
+                last_synced TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            CREATE TABLE function_app_http_triggers (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT NOT NULL,
+                function_app_id TEXT NOT NULL,
+                function_app_name TEXT NOT NULL,
+                resource_group TEXT,
+                function_name TEXT NOT NULL,
+                route TEXT,
+                auth_level TEXT,
+                methods TEXT,
+                fqdn TEXT,
+                full_url TEXT,
+                is_public INTEGER DEFAULT 0,
+                last_synced TEXT
+            );
+            CREATE TABLE function_app_servicebus_triggers (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT NOT NULL,
+                function_app_id TEXT NOT NULL,
+                function_app_name TEXT NOT NULL,
+                resource_group TEXT,
+                function_name TEXT NOT NULL,
+                trigger_type TEXT,
+                entity_type TEXT,
+                entity_name TEXT,
+                subscription_name TEXT,
+                connection TEXT,
+                last_synced TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+        )
+
+        backend_rows = [
+            ("aks-1", "rg-backend", "aks-one", "Microsoft.ContainerService/managedClusters", "aks-one.azurecr.io"),
+            ("app-1", "rg-backend", "app-one", "Microsoft.Web/sites", "app-one.azurewebsites.net"),
+            ("fn-1", "rg-backend", "fn-one", "Microsoft.Web/sites", "fn-one.azurewebsites.net"),
+            ("ase-1", "rg-backend", "ase-one", "Microsoft.Web/hostingEnvironments", "ase-one.appserviceenvironment.net"),
+            ("acr-1", "rg-backend", "acr-one", "Microsoft.ContainerRegistry/registries", "acr-one.azurecr.io"),
+            ("df-1", "rg-backend", "df-one", "Microsoft.DataFactory/factories", "df-one.adf.azure.com"),
+            ("sf-1", "rg-backend", "sf-one", "Microsoft.ServiceFabric/clusters", "sf-one.eastus.cloudapp.azure.com"),
+            ("kv-1", "rg-backend", "kv-one", "Microsoft.KeyVault/vaults", "kv-one.vault.azure.net"),
+        ]
+        data_rows = [
+            (f"sql-{idx}", "rg-data", f"sql-{idx}", "Microsoft.Sql/servers", f"sql-{idx}.database.windows.net")
+            for idx in range(1, 14)
+        ]
+        for row_id, rg, name, resource_type, fqdn in backend_rows + data_rows:
+            conn.execute(
+                """
+                INSERT INTO provisioned_assets (
+                    id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                    is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                    is_restricted, waf_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row_id,
+                    "sub-1",
+                    rg,
+                    name,
+                    resource_type,
+                    "westeurope",
+                    "Standard",
+                    fqdn,
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({}),
+                    0,
+                    None,
+                ),
+            )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/architecture?sub=sub-1&view=overview")
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        mermaid = data["mermaid"]
+        expected_icons = {
+            "kubernetes-service.svg",
+            "app-service.svg",
+            "app-service-environment.svg",
+            "container-registries.svg",
+            "data-factories.svg",
+            "service-fabric-clusters.svg",
+            "key-vault.svg",
+        }
+        assert expected_icons.issubset(set(part for part in expected_icons if part in mermaid)), mermaid
+        assert "SQL" in mermaid, mermaid
 
     def test_api_cloud_architecture_mermaid_mode_returns_full_payload(self, monkeypatch):
         import json
@@ -5971,6 +8048,35 @@ class TestCloudPosture:
                 raw_json TEXT,
                 is_restricted INTEGER DEFAULT 0,
                 waf_mode TEXT
+            );
+            CREATE TABLE function_app_http_triggers (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT NOT NULL,
+                function_app_id TEXT NOT NULL,
+                function_app_name TEXT NOT NULL,
+                resource_group TEXT,
+                function_name TEXT NOT NULL,
+                route TEXT,
+                auth_level TEXT,
+                methods TEXT,
+                fqdn TEXT,
+                full_url TEXT,
+                is_public INTEGER DEFAULT 0,
+                last_synced TEXT
+            );
+            CREATE TABLE function_app_servicebus_triggers (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT NOT NULL,
+                function_app_id TEXT NOT NULL,
+                function_app_name TEXT NOT NULL,
+                resource_group TEXT,
+                function_name TEXT NOT NULL,
+                trigger_type TEXT,
+                entity_type TEXT,
+                entity_name TEXT,
+                subscription_name TEXT,
+                connection TEXT,
+                last_synced TEXT
             );
             """
         )
@@ -6062,6 +8168,102 @@ class TestCloudPosture:
                     None,
                 ),
             ],
+        )
+        conn.executemany(
+            """
+            INSERT INTO function_app_http_triggers (
+                id, subscription_id, function_app_id, function_app_name, resource_group,
+                function_name, route, auth_level, methods, fqdn, full_url, is_public, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    fn_id + "::HttpPing",
+                    "sub-1",
+                    fn_id,
+                    "fn-one",
+                    "rg-app",
+                    "HttpPing",
+                    "ping",
+                    "function",
+                    json.dumps(["GET"]),
+                    "fn-one.azurewebsites.net",
+                    "https://fn-one.azurewebsites.net/api/ping",
+                    1,
+                    "2026-06-01T00:00:00Z",
+                ),
+            ],
+        )
+        conn.executemany(
+            """
+            INSERT INTO function_app_servicebus_triggers (
+                id, subscription_id, function_app_id, function_app_name, resource_group,
+                function_name, trigger_type, entity_type, entity_name, subscription_name,
+                connection, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    fn_id + "::DirectCredit",
+                    "sub-1",
+                    fn_id,
+                    "fn-one",
+                    "rg-app",
+                    "DirectCredit",
+                    "servicebustrigger",
+                    "topic",
+                    "clearbank.bacs.events.payments.bacsdirectcreditrecalledevent",
+                    "sb-subscription",
+                    "servicebus-connection",
+                    "2026-06-01T00:00:00Z",
+                ),
+            ],
+        )
+        conn.execute(
+            """
+            INSERT INTO function_app_http_triggers (
+                id, subscription_id, function_app_id, function_app_name, resource_group,
+                function_name, route, auth_level, methods, fqdn, full_url, is_public, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                fn_id + "::HttpPing",
+                "sub-1",
+                fn_id,
+                "fn-one",
+                "rg-app",
+                "HttpPing",
+                "ping",
+                "function",
+                json.dumps(["GET"]),
+                "fn-one.azurewebsites.net",
+                "https://fn-one.azurewebsites.net/api/ping",
+                1,
+                "2026-06-01T00:00:00Z",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO function_app_servicebus_triggers (
+                id, subscription_id, function_app_id, function_app_name, resource_group,
+                function_name, trigger_type, entity_type, entity_name, subscription_name,
+                connection, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                fn_id + "::DirectCredit",
+                "sub-1",
+                fn_id,
+                "fn-one",
+                "rg-app",
+                "DirectCredit",
+                "servicebustrigger",
+                "topic",
+                "clearbank.bacs.events.payments.bacsdirectcreditrecalledevent",
+                "sb-subscription",
+                "servicebus-connection",
+                "2026-06-01T00:00:00Z",
+            ),
         )
         conn.commit()
 
@@ -6381,6 +8583,52 @@ class TestCloudPosture:
                 ),
             ],
         )
+        conn.execute(
+            """
+            INSERT INTO function_app_http_triggers (
+                id, subscription_id, function_app_id, function_app_name, resource_group,
+                function_name, route, auth_level, methods, fqdn, full_url, is_public, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                fn_id + "::HttpPing",
+                "sub-1",
+                fn_id,
+                "fn-one",
+                "rg-app",
+                "HttpPing",
+                "ping",
+                "function",
+                json.dumps(["GET"]),
+                "fn-one.azurewebsites.net",
+                "https://fn-one.azurewebsites.net/api/ping",
+                1,
+                "2026-06-01T00:00:00Z",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO function_app_servicebus_triggers (
+                id, subscription_id, function_app_id, function_app_name, resource_group,
+                function_name, trigger_type, entity_type, entity_name, subscription_name,
+                connection, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                fn_id + "::DirectCredit",
+                "sub-1",
+                fn_id,
+                "fn-one",
+                "rg-app",
+                "DirectCredit",
+                "servicebustrigger",
+                "topic",
+                "clearbank.bacs.events.payments.bacsdirectcreditrecalledevent",
+                "sb-subscription",
+                "servicebus-connection",
+                "2026-06-01T00:00:00Z",
+            ),
+        )
         conn.commit()
 
         monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
@@ -6444,6 +8692,35 @@ class TestCloudPosture:
                 raw_json TEXT,
                 is_restricted INTEGER DEFAULT 0,
                 waf_mode TEXT
+            );
+            CREATE TABLE function_app_http_triggers (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT NOT NULL,
+                function_app_id TEXT NOT NULL,
+                function_app_name TEXT NOT NULL,
+                resource_group TEXT,
+                function_name TEXT NOT NULL,
+                route TEXT,
+                auth_level TEXT,
+                methods TEXT,
+                fqdn TEXT,
+                full_url TEXT,
+                is_public INTEGER DEFAULT 0,
+                last_synced TEXT
+            );
+            CREATE TABLE function_app_servicebus_triggers (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT NOT NULL,
+                function_app_id TEXT NOT NULL,
+                function_app_name TEXT NOT NULL,
+                resource_group TEXT,
+                function_name TEXT NOT NULL,
+                trigger_type TEXT,
+                entity_type TEXT,
+                entity_name TEXT,
+                subscription_name TEXT,
+                connection TEXT,
+                last_synced TEXT
             );
             """
         )
@@ -6544,6 +8821,52 @@ class TestCloudPosture:
                     None,
                 ),
             ],
+        )
+        conn.execute(
+            """
+            INSERT INTO function_app_http_triggers (
+                id, subscription_id, function_app_id, function_app_name, resource_group,
+                function_name, route, auth_level, methods, fqdn, full_url, is_public, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                fn_id + "::HttpPing",
+                "sub-1",
+                fn_id,
+                "fn-one",
+                "rg-app",
+                "HttpPing",
+                "ping",
+                "function",
+                json.dumps(["GET"]),
+                "fn-one.azurewebsites.net",
+                "https://fn-one.azurewebsites.net/api/ping",
+                1,
+                "2026-06-01T00:00:00Z",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO function_app_servicebus_triggers (
+                id, subscription_id, function_app_id, function_app_name, resource_group,
+                function_name, trigger_type, entity_type, entity_name, subscription_name,
+                connection, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                fn_id + "::DirectCredit",
+                "sub-1",
+                fn_id,
+                "fn-one",
+                "rg-app",
+                "DirectCredit",
+                "servicebustrigger",
+                "topic",
+                "clearbank.bacs.events.payments.bacsdirectcreditrecalledevent",
+                "sb-subscription",
+                "servicebus-connection",
+                "2026-06-01T00:00:00Z",
+            ),
         )
         conn.commit()
 
@@ -6773,6 +9096,433 @@ class TestCloudPosture:
         assert data["security"]["is_public"] is True
         assert data["security"]["public_network_access"] == "Enabled"
         assert data["network"]["virtual_network_type"] == "External"
+
+    def test_api_cloud_resource_details_surfaces_apim_outbound_public_ip(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+        apim_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/apim-prod"
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                apim_id,
+                "sub-1",
+                "rg-api",
+                "apim-prod",
+                "Microsoft.ApiManagement/service",
+                "uksouth",
+                "Premium",
+                "apim-prod.azure-api.net",
+                0,
+                "active",
+                None,
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+                json.dumps({
+                    "properties": {
+                        "publicNetworkAccess": "Enabled",
+                        "virtualNetworkType": "Internal",
+                        "publicIPAddresses": ["20.90.204.14"],
+                    }
+                }),
+                0,
+                None,
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/resource-details", query_string={"id": apim_id})
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        assert data["security"]["is_public"] is False
+        assert data["network"]["virtual_network_type"] == "Internal"
+        assert data["network"]["outbound_public_ips"] == ["20.90.204.14"]
+        assert data["network"]["public_ips"] == ["20.90.204.14"]
+
+    def test_api_cloud_resource_details_infers_appgw_parent_from_backend_route(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            CREATE TABLE appgw_routing_rules (
+                id TEXT,
+                subscription_id TEXT,
+                gateway_name TEXT,
+                backend_fqdns TEXT,
+                backend_pool_name TEXT,
+                listener_name TEXT,
+                hostname TEXT,
+                url_path TEXT,
+                protocol TEXT,
+                waf_policy_name TEXT,
+                resource_group TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+        gw_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Network/applicationGateways/cop-resource-server-apim"
+        plan_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/serverfarms/cards-plan"
+        site_id = "/subscriptions/sub-1/resourceGroups/rg-backend/providers/Microsoft.Web/sites/cards-management-web"
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                plan_id,
+                "sub-1",
+                "rg-app",
+                "cards-plan",
+                "Microsoft.Web/serverfarms",
+                "uksouth",
+                "P1v3",
+                None,
+                0,
+                "active",
+                None,
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+                json.dumps({}),
+                0,
+                None,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                gw_id,
+                "sub-1",
+                "rg-app",
+                "cop-resource-server-apim",
+                "Microsoft.Network/applicationGateways",
+                "uksouth",
+                "WAF_v2",
+                "cop-resource-server-apim.example.com",
+                1,
+                "active",
+                None,
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+                json.dumps({}),
+                0,
+                None,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                site_id,
+                "sub-1",
+                "rg-backend",
+                "cards-management-web",
+                "Microsoft.Web/sites",
+                "uksouth",
+                "B1",
+                "cards-management-web.azurewebsites.net",
+                1,
+                "active",
+                None,
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+                json.dumps({"serverFarmId": plan_id}),
+                0,
+                None,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO appgw_routing_rules (
+                id, subscription_id, gateway_name, backend_fqdns, backend_pool_name,
+                listener_name, hostname, url_path, protocol, waf_policy_name, resource_group
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "gw-1::listener-1",
+                "sub-1",
+                "cop-resource-server-apim",
+                json.dumps([
+                    "https://cbuk-core-prodgreen-cards-management-web-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net/"
+                ]),
+                "backend-pool",
+                "listener-1",
+                "cop-resource-server-apim.example.com",
+                "/*",
+                "HTTPS",
+                None,
+                "rg-app",
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/resource-details", query_string={"id": site_id})
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        assert data["name"] == "cards-management-web"
+        assert data["type_label"] == "App Service"
+        assert data["parent_resource"]["name"] == "cards-plan"
+        assert data["parent_resource"]["type_label"] == "App Service Plan"
+
+    def test_api_cloud_resource_details_infers_ase_parent_for_internal_backend_site(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            CREATE TABLE appgw_routing_rules (
+                id TEXT,
+                subscription_id TEXT,
+                gateway_name TEXT,
+                backend_fqdns TEXT,
+                backend_pool_name TEXT,
+                listener_name TEXT,
+                hostname TEXT,
+                url_path TEXT,
+                protocol TEXT,
+                waf_policy_name TEXT,
+                resource_group TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+        ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/prodgreen-shared-uksouth"
+        gw_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Network/applicationGateways/cop-resource-server-apim"
+        site_id = "/subscriptions/sub-1/resourceGroups/rg-backend/providers/Microsoft.Web/sites/institution-portal-internal"
+        conn.executemany(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    ase_id,
+                    "sub-1",
+                    "rg-app",
+                    "prodgreen-shared-uksouth",
+                    "Microsoft.Web/hostingEnvironments",
+                    "uksouth",
+                    "ASEv3",
+                    "prodgreen-shared-uksouth.appserviceenvironment.net",
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({}),
+                    0,
+                    None,
+                ),
+                (
+                    gw_id,
+                    "sub-1",
+                    "rg-app",
+                    "cop-resource-server-apim",
+                    "Microsoft.Network/applicationGateways",
+                    "uksouth",
+                    "WAF_v2",
+                    "cop-resource-server-apim.example.com",
+                    1,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({}),
+                    0,
+                    None,
+                ),
+                (
+                    site_id,
+                    "sub-1",
+                    "rg-backend",
+                    "institution-portal-internal",
+                    "Microsoft.Web/sites",
+                    "uksouth",
+                    "B1",
+                    "institution-portal-internal.azurewebsites.net",
+                    1,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({"hostingEnvironmentProfile": {"id": ase_id}}),
+                    0,
+                    None,
+                ),
+            ],
+        )
+        conn.execute(
+            """
+            INSERT INTO appgw_routing_rules (
+                id, subscription_id, gateway_name, backend_fqdns, backend_pool_name,
+                listener_name, hostname, url_path, protocol, waf_policy_name, resource_group
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "gw-1::listener-1",
+                "sub-1",
+                "cop-resource-server-apim",
+                json.dumps([
+                    "https://cbuk-core-prodgreen-institution-portal-internal-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net/"
+                ]),
+                "backend-pool",
+                "listener-1",
+                "cop-resource-server-apim.example.com",
+                "/*",
+                "HTTPS",
+                None,
+                "rg-app",
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/resource-details", query_string={"id": site_id})
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        assert data["parent_resource"]["name"] == "prodgreen-shared-uksouth"
+        assert data["parent_resource"]["type_label"] == "App Service Environment"
 
     def test_api_cloud_apim_child_apis_returns_table_payload(self, monkeypatch):
         import json
@@ -8280,8 +11030,8 @@ class TestCloudPosture:
         assert resp.status_code == 200, resp.get_data(as_text=True)
         data = resp.get_json()
         labels = [str((node.get("data") or {}).get("label", "")) for node in data.get("nodes", [])]
-        assert any("orders-ingress" in label and "aks.example.com" in label for label in labels), labels
-        assert any(edge.get("source", "").startswith("aks-ingress::") and edge.get("target") == aks_id for edge in data.get("edges", [])), data.get("edges", [])
+        assert any(label == "orders-api" or label.startswith("orders-api ") for label in labels), labels
+        assert any(edge.get("source", "").startswith("aks-ingress::") and edge.get("target") != aks_id for edge in data.get("edges", [])), data.get("edges", [])
 
         os.unlink(tmp.name)
 
@@ -8539,6 +11289,35 @@ class TestCloudPosture:
                 is_restricted INTEGER DEFAULT 0,
                 waf_mode TEXT
             );
+            CREATE TABLE function_app_http_triggers (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT NOT NULL,
+                function_app_id TEXT NOT NULL,
+                function_app_name TEXT NOT NULL,
+                resource_group TEXT,
+                function_name TEXT NOT NULL,
+                route TEXT,
+                auth_level TEXT,
+                methods TEXT,
+                fqdn TEXT,
+                full_url TEXT,
+                is_public INTEGER DEFAULT 0,
+                last_synced TEXT
+            );
+            CREATE TABLE function_app_servicebus_triggers (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT NOT NULL,
+                function_app_id TEXT NOT NULL,
+                function_app_name TEXT NOT NULL,
+                resource_group TEXT,
+                function_name TEXT NOT NULL,
+                trigger_type TEXT,
+                entity_type TEXT,
+                entity_name TEXT,
+                subscription_name TEXT,
+                connection TEXT,
+                last_synced TEXT
+            );
             """
         )
         conn.execute(
@@ -8594,6 +11373,52 @@ class TestCloudPosture:
                 ),
             ],
         )
+        conn.execute(
+            """
+            INSERT INTO function_app_http_triggers (
+                id, subscription_id, function_app_id, function_app_name, resource_group,
+                function_name, route, auth_level, methods, fqdn, full_url, is_public, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                fn_id + "::HttpPing",
+                "sub-1",
+                fn_id,
+                "fn-one",
+                "rg-app",
+                "HttpPing",
+                "ping",
+                "function",
+                json.dumps(["GET"]),
+                "fn-one.azurewebsites.net",
+                "https://fn-one.azurewebsites.net/api/ping",
+                1,
+                "2026-06-01T00:00:00Z",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO function_app_servicebus_triggers (
+                id, subscription_id, function_app_id, function_app_name, resource_group,
+                function_name, trigger_type, entity_type, entity_name, subscription_name,
+                connection, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                fn_id + "::DirectCredit",
+                "sub-1",
+                fn_id,
+                "fn-one",
+                "rg-app",
+                "DirectCredit",
+                "servicebustrigger",
+                "topic",
+                "clearbank.bacs.events.payments.bacsdirectcreditrecalledevent",
+                "sb-subscription",
+                "servicebus-connection",
+                "2026-06-01T00:00:00Z",
+            ),
+        )
         conn.commit()
 
         monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
@@ -8602,6 +11427,8 @@ class TestCloudPosture:
         assert resp.status_code == 200, resp.get_data(as_text=True)
         details = resp.get_json()
         assert details["configuration"]["operating_system"] == "Linux"
+        assert details["parent_resource"]["name"] == "plan-one", details
+        assert details["parent_resource"]["type_label"] == "App Service Plan", details
 
         os.unlink(tmp.name)
 
@@ -9303,6 +12130,7 @@ def _cloud_assets_payload():
     ase_app_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/ase-app"
     ase_fn_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/ase-fn"
     gw_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/gw-one"
+    apim_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/cbuk-core-prodgreen-api-uksouth"
     storage_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one"
     container_id = f"{storage_id}/blobServices/default/containers/logs"
     sql_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Sql/servers/sql-one"
@@ -9852,6 +12680,7 @@ class TestCloudAssetsApi:
         ase_app_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/ase-app"
         ase_fn_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/ase-fn"
         gw_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/gw-one"
+        apim_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/cbuk-core-prodgreen-api-uksouth"
         storage_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one"
         container_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one/blobServices/default/containers/logs"
         acr_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.ContainerRegistry/registries/acr-one"
@@ -9900,6 +12729,8 @@ class TestCloudAssetsApi:
                  }), now, now, "active"),
                 (gw_id, "sub-1", "rg-net", "gw-one", "Microsoft.Network/applicationGateways", "westus", "WAF_v2",
                  None, 1, "gw.example.com", None, json.dumps({}), now, now, "active"),
+                (apim_id, "sub-1", "rg-api", "cbuk-core-prodgreen-api-uksouth", "Microsoft.ApiManagement/service", "uksouth", "Premium",
+                 None, 1, "cbuk-core-prodgreen-api-uksouth.azure-api.net", None, json.dumps({}), now, now, "active"),
                 (storage_id, "sub-1", "rg-data", "sa-one", "Microsoft.Storage/storageAccounts", "westus", "Standard_LRS",
                  None, 1, "sa-one.blob.core.windows.net", None, json.dumps({
                      "kind": "StorageV2",
@@ -9963,6 +12794,7 @@ class TestCloudAssetsApi:
         ase_app = assets["/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/ase-app"]
         ase_fn = assets["/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/ase-fn"]
         gw = assets["/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/gw-one"]
+        apim = assets["/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/cbuk-core-prodgreen-api-uksouth"]
         listener = assets["listener::gw-one::https::gw.example.com"]
 
         storage = assets["/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one"]
@@ -9982,13 +12814,15 @@ class TestCloudAssetsApi:
         assert ase_fn["display_type_label"] == "Function App"
         assert ase_fn["parent_id"] == ase["id"]
         assert gw["children_count"] == 1
+        assert apim["parent_id"] is None
+        assert apim["parent_name"] is None
+        assert apim["children_count"] == 0
         assert listener["parent_id"] == gw["id"]
         assert listener["is_child"] is True
         assert storage["display_type_label"] == "Storage Account"
         assert storage["children_count"] == 1
         assert acr["display_type_label"] == "ACR"
         assert container["parent_id"] == storage["id"]
-        assert container["parent_type_label"] == "Storage Account"
         assert container["children_count"] == 1
         assert blob["parent_id"] == container["id"]
         assert blob["display_type_label"] == "Blob"

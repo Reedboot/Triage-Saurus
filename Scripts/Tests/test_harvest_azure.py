@@ -961,14 +961,30 @@ class TestBuildRouteModel:
         service = self._make_service("api-svc", {"app": "api"})
         deploy = self._make_deployment({"app": "api", "team": "platform"})  # no git_repository
         routes = _build_route_model(self._make_cluster(), [ingress], [service], [deploy])
-        assert routes == []
+        assert len(routes) == 1
+        assert routes[0]["deployment_name"] == "deploy1"
+        assert routes[0]["git_repository"] is None
+        assert routes[0]["team"] == "platform"
 
     def test_missing_team_excluded(self):
         ingress = self._make_ingress("api.example.com", "/v1", "api-svc")
         service = self._make_service("api-svc", {"app": "api"})
         deploy = self._make_deployment({"app": "api", "git_repository": "my-repo"})  # no team
         routes = _build_route_model(self._make_cluster(), [ingress], [service], [deploy])
-        assert routes == []
+        assert len(routes) == 1
+        assert routes[0]["deployment_name"] == "deploy1"
+        assert routes[0]["git_repository"] == "my-repo"
+        assert routes[0]["team"] is None
+
+    def test_missing_deployment_still_emits_route(self):
+        ingress = self._make_ingress("api.example.com", "/v1", "api-svc")
+        service = self._make_service("api-svc", {"app": "api"})
+        routes = _build_route_model(self._make_cluster(), [ingress], [service], [])
+        assert len(routes) == 1
+        assert routes[0]["service_name"] == "api-svc"
+        assert routes[0]["deployment_name"] is None
+        assert routes[0]["git_repository"] is None
+        assert routes[0]["team"] is None
 
     def test_no_matching_service_excluded(self):
         ingress = self._make_ingress("api.example.com", "/v1", "missing-svc")
@@ -1090,6 +1106,45 @@ class TestApimExposureLevel:
 
     def test_public_otherwise(self):
         assert _get_apim_exposure_level({"properties": {"virtualNetworkType": "External"}}) == "Public"
+
+
+class TestApimHarvest:
+    def test_harvest_uses_show_details_for_internal_apim_and_outbound_ips(self, monkeypatch):
+        svc_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/apim-prod"
+        list_row = {
+            "id": svc_id,
+            "name": "apim-prod",
+            "resourceGroup": "rg-api",
+            "type": "Microsoft.ApiManagement/service",
+            "location": "uksouth",
+            "sku": {"name": "Premium"},
+            "properties": {},
+        }
+        show_row = {
+            **list_row,
+            "properties": {
+                "virtualNetworkType": "Internal",
+                "publicNetworkAccess": "Enabled",
+                "publicIPAddresses": ["20.90.204.14"],
+            },
+        }
+
+        def fake_az(args, subscription_id):
+            if args == ["apim", "list"]:
+                return [list_row]
+            if args == ["apim", "show", "--service-name", "apim-prod", "--resource-group", "rg-api"]:
+                return show_row
+            raise AssertionError(f"Unexpected az call: {args}")
+
+        monkeypatch.setattr(apim, "az", fake_az)
+
+        rows = apim.harvest("sub-1")
+        assert len(rows) == 1
+        row = rows[0]
+        raw = json.loads(row["raw_json"])
+        assert row["is_public"] == 0
+        assert raw["properties"]["virtualNetworkType"] == "Internal"
+        assert raw["_extra"]["outbound_public_ips"] == ["20.90.204.14"]
 
 
 class TestAppGatewayPublicIpDetection:
@@ -1505,7 +1560,7 @@ class TestApimRouteHarvestConcurrency:
         assert len(staged.core_rows) == 2
         assert len(staged.backfill_jobs) == 2
 
-        op_rows = [job.future.result() for job in staged.backfill_jobs]
+        op_rows = [row for job in staged.backfill_jobs for row in job.future.result()]
         ids = {row["id"] for row in op_rows}
 
         assert ids == {
@@ -2320,6 +2375,101 @@ class TestAppGatewayRewriteHarvest:
         assert route["backend_id"] == "account-identification-api-backend-aks"
         assert route["backend_url"] == "https://prodgreen-account-identification.internal.cbinnovation.uk"
         assert route["service_url"] is None
+
+    def test_apim_operation_policy_resolves_non_sf_backend_id_to_url(self, monkeypatch):
+        backend = {
+            "name": "account-identification-api-backend-aks",
+            "url": "https://prodgreen-account-identification.internal.cbinnovation.uk",
+        }
+
+        monkeypatch.setattr(
+            apim,
+            "_az_show_policy",
+            lambda *args, **kwargs: '<policies><inbound><base /><set-backend-service backend-id="account-identification-api-backend-aks" /></inbound></policies>',
+        )
+
+        row = apim._materialize_operation_row(
+            {
+                "id": "cbuk-core-prodgreen-api-uksouth::account_identification::account_identification-get",
+                "subscription_id": "sub-1",
+                "apim_name": "cbuk-core-prodgreen-api-uksouth",
+                "resource_group": "cbuk-core-prodgreen-api-uksouth",
+                "api_name": "account_identification",
+                "api_display_name": "account_identification",
+                "api_path": "accountIdentification",
+                "backend_id": None,
+                "backend_url": "https://api.contoso.test/v1",
+                "operation_id": "account_identification-get",
+                "display_name": "Get account_identification",
+                "method": "get",
+                "url_template": "/",
+                "description": "",
+                "requires_subscription": 1,
+                "api_policy_flags": {
+                    "backend_ids": [],
+                    "backend_urls": [],
+                    "sf_service_instance_names": [],
+                    "sf_resolve_conditions": [],
+                },
+                "backend_lookup": apim._build_backend_lookup([backend]),
+                "last_synced": "2026-06-01T00:00:00Z",
+            }
+        )
+
+        assert row is not None
+        assert row["backend_id"] == "account-identification-api-backend-aks"
+        assert row["backend_url"] == "https://prodgreen-account-identification.internal.cbinnovation.uk"
+
+    def test_apim_route_bundle_extracts_service_fabric_policy_attrs(self, monkeypatch):
+        service = {
+            "name": "cbuk-core-prodgreen-api-uksouth",
+            "resourceGroup": "cbuk-core-prodgreen-api-uksouth",
+            "id": "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.ApiManagement/service/cbuk-core-prodgreen-api-uksouth",
+        }
+        api = {
+            "name": "fscs",
+            "properties": {
+                "displayName": "fscs",
+                "path": "fscs",
+                "serviceUrl": "",
+                "subscriptionRequired": True,
+                "protocols": ["https"],
+            },
+        }
+        backend = {
+            "name": "cbuk-core-prodgreen-sf",
+            "url": "fabric:/fake/service",
+            "properties": {
+                "serviceFabricCluster": {
+                    "managementEndpoints": ["https://192.168.118.61:19080"],
+                }
+            },
+        }
+
+        monkeypatch.setattr(
+            apim,
+            "_az_show_policy",
+            lambda *args, **kwargs: '<policies><inbound><base /><set-backend-service backend-id="cbuk-core-prodgreen-sf" sf-resolve-condition="{{sf-resolve-condition}}" sf-service-instance-name="fabric:/ClearBank.FSCS.ServiceFabric/ClearBank.FSCS.Api" /></inbound></policies>',
+        )
+        monkeypatch.setattr(apim, "_az_list_operations", lambda *args, **kwargs: [])
+
+        route, operations = apim._fetch_api_bundle(
+            service,
+            api,
+            "sub-1",
+            "2026-06-01T00:00:00Z",
+            apim._build_backend_lookup([backend]),
+        )
+
+        assert operations == []
+        assert route is not None
+        assert route["backend_id"] == "cbuk-core-prodgreen-sf"
+        assert route["backend_url"] == "https://192.168.118.61:19080"
+        assert route["sf_service_instance_name"] == "fabric:/ClearBank.FSCS.ServiceFabric/ClearBank.FSCS.Api"
+        assert route["sf_resolve_condition"] == "{{sf-resolve-condition}}"
+        assert route["api_policy_flags"]["sf_service_instance_names"] == [
+            "fabric:/ClearBank.FSCS.ServiceFabric/ClearBank.FSCS.Api"
+        ]
 
     def test_invokes_apim_backend_links_harvest(self, monkeypatch):
         calls = []

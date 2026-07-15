@@ -230,6 +230,44 @@ def _extract_http_triggers(functions: list[dict[str, Any]]) -> list[dict[str, An
     return triggers
 
 
+def _extract_servicebus_triggers(functions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Extract Service Bus trigger bindings from Azure Function metadata."""
+    triggers: list[dict[str, Any]] = []
+    for function_item in functions:
+        props = function_item.get("properties") or {}
+        config = props.get("config") or function_item.get("config") or {}
+        bindings = config.get("bindings") or []
+        function_name = _extract_function_name(function_item)
+        if not function_name or not bindings:
+            continue
+
+        for binding in bindings:
+            if not isinstance(binding, dict):
+                continue
+            binding_type = safe_str(binding.get("type")).lower()
+            if binding_type not in {"servicebustrigger", "queuetrigger", "topictrigger"}:
+                continue
+
+            entity_name = safe_str(
+                binding.get("topicName")
+                or binding.get("queueName")
+                or binding.get("name")
+            )
+            if not entity_name:
+                continue
+
+            entity_type = "topic" if safe_str(binding.get("topicName")) or binding_type == "topictrigger" else "queue"
+            triggers.append({
+                "function_name": function_name,
+                "trigger_type": binding_type,
+                "entity_type": entity_type,
+                "entity_name": entity_name,
+                "subscription_name": safe_str(binding.get("subscriptionName")),
+                "connection": safe_str(binding.get("connection")),
+            })
+    return triggers
+
+
 def _derive_trigger_auth_methods(triggers: list[dict[str, Any]]) -> list[str]:
     """Return auth posture markers inferred from HTTP trigger auth levels."""
     levels = {
@@ -373,13 +411,14 @@ def harvest_http_triggers(
     conn: sqlite3.Connection,
     dry_run: bool = False,
 ) -> int:
-    """Harvest HTTP trigger routes from Function Apps."""
+    """Harvest HTTP and Service Bus trigger bindings from Function Apps."""
     apps = az(["functionapp", "list"], subscription_id)
     if not apps:
         return 0
 
     now = datetime.now(timezone.utc).isoformat()
     total = 0
+    servicebus_total = 0
 
     for app in apps:
         function_app_id = safe_str(app.get("id"))
@@ -392,6 +431,7 @@ def harvest_http_triggers(
         try:
             functions = _az_list_functions(function_app_name, resource_group, subscription_id)
             triggers = _extract_http_triggers(functions)
+            servicebus_triggers = _extract_servicebus_triggers(functions)
             trigger_auth_methods = _derive_trigger_auth_methods(triggers)
             fqdn = safe_str(app.get("defaultHostName")) or infer_fqdn(app)
             props = app.get("properties") or {}
@@ -414,6 +454,23 @@ def harvest_http_triggers(
                     "fqdn": fqdn,
                     "full_url": full_url,
                     "is_public": 1 if app_is_public and trigger["auth_level"] == "anonymous" else 0,
+                    "last_synced": now,
+                })
+
+            sb_rows = []
+            for trigger in servicebus_triggers:
+                sb_rows.append({
+                    "id": f"{function_app_id}::{trigger['function_name']}::servicebus::{trigger['entity_type']}::{trigger['entity_name']}",
+                    "subscription_id": subscription_id,
+                    "function_app_id": function_app_id,
+                    "function_app_name": function_app_name,
+                    "resource_group": resource_group,
+                    "function_name": trigger["function_name"],
+                    "trigger_type": trigger["trigger_type"],
+                    "entity_type": trigger["entity_type"],
+                    "entity_name": trigger["entity_name"],
+                    "subscription_name": trigger["subscription_name"],
+                    "connection": trigger["connection"],
                     "last_synced": now,
                 })
 
@@ -458,6 +515,46 @@ def harvest_http_triggers(
                             row["last_synced"],
                         ),
                     )
+                if sb_rows:
+                    conn.execute(
+                        "DELETE FROM function_app_servicebus_triggers WHERE subscription_id = ? AND function_app_id = ?",
+                        (subscription_id, function_app_id),
+                    )
+                    for row in sb_rows:
+                        conn.execute(
+                            """
+                            INSERT INTO function_app_servicebus_triggers (
+                                id, subscription_id, function_app_id, function_app_name,
+                                resource_group, function_name, trigger_type, entity_type,
+                                entity_name, subscription_name, connection, last_synced
+                            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                            ON CONFLICT(id) DO UPDATE SET
+                                subscription_id   = excluded.subscription_id,
+                                function_app_name = excluded.function_app_name,
+                                resource_group    = excluded.resource_group,
+                                function_name     = excluded.function_name,
+                                trigger_type      = excluded.trigger_type,
+                                entity_type       = excluded.entity_type,
+                                entity_name       = excluded.entity_name,
+                                subscription_name = excluded.subscription_name,
+                                connection        = excluded.connection,
+                                last_synced       = excluded.last_synced
+                            """,
+                            (
+                                row["id"],
+                                row["subscription_id"],
+                                row["function_app_id"],
+                                row["function_app_name"],
+                                row["resource_group"],
+                                row["function_name"],
+                                row["trigger_type"],
+                                row["entity_type"],
+                                row["entity_name"],
+                                row["subscription_name"],
+                                row["connection"],
+                                row["last_synced"],
+                            ),
+                        )
                 _update_function_app_auth_methods(
                     conn=conn,
                     subscription_id=subscription_id,
@@ -467,8 +564,9 @@ def harvest_http_triggers(
                 conn.commit()
 
             total += len(rows)
-            print(f"{len(rows)} triggers")
+            servicebus_total += len(sb_rows)
+            print(f"{len(rows)} HTTP triggers, {len(sb_rows)} Service Bus triggers")
         except Exception as exc:
             print(f"SKIPPED ({exc})")
 
-    return total
+    return total + servicebus_total

@@ -1144,7 +1144,11 @@ function openDrilldownModal(nodeData, subId, fallback = null) {
   fetch(url.toString(), {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ arm_type: nodeData?.arm_type || nodeData?.type || "", resources: nodeData?.resources || [] }),
+    body: JSON.stringify({
+      arm_type: nodeData?.arm_type || nodeData?.type || "",
+      resources: nodeData?.resources || [],
+      node: nodeData || null,
+    }),
     signal: controller.signal,
   })
     .then(async (resp) => {
@@ -1181,9 +1185,26 @@ function openDrilldownModal(nodeData, subId, fallback = null) {
 
 function renderGroupedResourcesModal(nodeData) {
   if (!modalOverlay || !modalTitle || !modalBody) return;
-  const resources = Array.isArray(nodeData?.resources) ? nodeData.resources.filter(Boolean) : [];
+  const resources = [
+    ...(Array.isArray(nodeData?.resources) ? nodeData.resources : []),
+    ...(Array.isArray(nodeData?.items) ? nodeData.items : []),
+    ...(Array.isArray(nodeData?.members) ? nodeData.members : []),
+    ...(Array.isArray(nodeData?.children) ? nodeData.children : []),
+  ].filter(Boolean);
   const title = firstNonEmpty(nodeData?.title, nodeData?.label, "Grouped resources");
   const typeLabel = firstNonEmpty(nodeData?.typeLabel, nodeData?.arm_type, nodeData?.type);
+  const resourceLabel = (resource) =>
+    firstNonEmpty(
+      resource?.name,
+      resource?.label,
+      resource?.title,
+      resource?.resource_name,
+      resource?.resourceName,
+      resource?.display_name,
+      resource?.displayName,
+      resource?.id,
+      "unnamed"
+    );
 
   modalOverlay.hidden = false;
   modalTitle.textContent = title;
@@ -1213,9 +1234,11 @@ function renderGroupedResourcesModal(nodeData) {
       <ul class="cloud-arch-modal-list">
         ${sorted
           .map((resource) => {
-            const name = escapeHtml(String(resource?.name || "unnamed"));
+            const name = escapeHtml(String(resourceLabel(resource)));
             const rg = escapeHtml(String(resource?.rg || ""));
-            return `<li class="cloud-arch-modal-list-item"><strong>${name}</strong>${rg ? ` <span style="color: var(--text-muted);">(${rg})</span>` : ""}</li>`;
+            const kind = escapeHtml(String(resource?.type_label || resource?.type || resource?.arm_type || ""));
+            const suffix = [rg ? `<span style="color: var(--text-muted);">(${rg})</span>` : "", kind ? `<span style="color: var(--text-faint); margin-left: 8px;">${kind}</span>` : ""].filter(Boolean).join("");
+            return `<li class="cloud-arch-modal-list-item"><strong>${name}</strong>${suffix}</li>`;
           })
           .join("")}
       </ul>
@@ -1463,6 +1486,33 @@ function collectRoutingTargets(data) {
   return values;
 }
 
+function collectRoutingTargetDetails(data) {
+  const candidates = [
+    ...(Array.isArray(data?.routing_targets) ? data.routing_targets : []),
+    ...(Array.isArray(data?.network?.routing_targets) ? data.network.routing_targets : []),
+  ];
+  const seen = new Set();
+  const values = [];
+  for (const item of candidates) {
+    if (!item || typeof item !== "object") continue;
+    const target = firstNonEmpty(item.target, item.name, item.target_resource_id);
+    if (!target) continue;
+    const backendPool = firstNonEmpty(item.backend_pool_name, item.backend_pool);
+    const listenerName = firstNonEmpty(item.listener_name, item.listener);
+    const urlPath = firstNonEmpty(item.url_path, item.path);
+    const suffixParts = [];
+    if (backendPool) suffixParts.push(`pool: ${backendPool}`);
+    if (listenerName) suffixParts.push(`listener: ${listenerName}`);
+    if (urlPath && urlPath !== "/*") suffixParts.push(`path: ${urlPath}`);
+    const display = suffixParts.length ? `${target} (${suffixParts.join(", ")})` : target;
+    const marker = display.toLowerCase();
+    if (seen.has(marker)) continue;
+    seen.add(marker);
+    values.push(display);
+  }
+  return values;
+}
+
 function isAppGatewayDetails(data) {
   const typeLabel = String(firstNonEmpty(data?.type_label, data?.type, data?.resourceType, "")).toLowerCase();
   const resourceType = String(firstNonEmpty(data?.arm_type, data?.type, data?.resourceType, "")).toLowerCase();
@@ -1606,9 +1656,83 @@ function buildParentResourceFields(parentResource) {
   if (parentNetworkType) fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Inherited Virtual Network Type</div><div class="cloud-arch-modal-field-value">${escapeHtml(parentNetworkType)}</div></div>`);
   const parentDnsNames = collectFqdns(parentResource);
   if (parentDnsNames.length > 0) {
-    fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">${parentDnsNames.length > 1 ? "DNS Names" : "DNS Name"}</div><div class="cloud-arch-modal-field-value">${parentDnsNames.map((fqdn) => `<code>${escapeHtml(String(fqdn))}</code>`).join("<br/>")}</div></div>`);
+    fields.push(`<div class="cloud-arch-modal-field cloud-arch-modal-field--full"><div class="cloud-arch-modal-field-label">${parentDnsNames.length > 1 ? "DNS Names" : "DNS Name"}</div><div class="cloud-arch-modal-field-value">${parentDnsNames.map((fqdn) => `<code>${escapeHtml(String(fqdn))}</code>`).join("<br/>")}</div></div>`);
   }
   return fields.join("");
+}
+
+function buildTriggersSection(data) {
+  const triggers = Array.isArray(data?.triggers) ? data.triggers.filter(Boolean) : [];
+  if (!triggers.length) return "";
+
+  const rows = triggers.map((trigger) => {
+    const kind = firstNonEmpty(trigger?.kind, trigger?.trigger_type, trigger?.type, "Trigger");
+    const kindLower = kind.toLowerCase();
+    const functionName = firstNonEmpty(trigger?.function_name, trigger?.functionName, trigger?.name, "—");
+    const binding = kindLower.includes("http")
+      ? firstNonEmpty(trigger?.binding, trigger?.route, trigger?.endpoint, "—")
+      : firstNonEmpty(
+          trigger?.binding,
+          trigger?.entity_name,
+          trigger?.entityName,
+          trigger?.subscription_name,
+          trigger?.subscriptionName,
+          "—"
+        );
+    const details = [];
+
+    if (kindLower.includes("http")) {
+      const methods = Array.isArray(trigger?.methods)
+        ? trigger.methods.map((method) => String(method || "").trim()).filter(Boolean)
+        : typeof trigger?.methods === "string" && trigger.methods.trim()
+          ? [trigger.methods.trim()]
+          : [];
+      if (trigger?.auth_level) details.push(`auth: ${trigger.auth_level}`);
+      if (methods.length) details.push(`methods: ${methods.join(", ")}`);
+      if (trigger?.endpoint) details.push(`endpoint: ${trigger.endpoint}`);
+    } else {
+      if (trigger?.entity_type) details.push(`entity: ${trigger.entity_type}`);
+      if (trigger?.subscription_name) details.push(`subscription: ${trigger.subscription_name}`);
+      if (trigger?.connection) details.push(`connection: ${trigger.connection}`);
+    }
+
+    return {
+      kind,
+      functionName,
+      binding,
+      details: details.length ? details.join("; ") : "—",
+    };
+  });
+
+  return `
+    <div class="cloud-arch-modal-section">
+      <div class="cloud-arch-modal-section-title">
+        <span class="cloud-arch-modal-section-icon">⚡</span>
+        Triggers
+      </div>
+      <div style="overflow:auto;border:1px solid var(--border);border-radius:8px;">
+        <table style="width:100%;border-collapse:collapse;font-size:0.84rem;">
+          <thead>
+            <tr>
+              ${["Type", "Function", "Binding", "Details"].map(
+                (col) => `<th style="padding:8px 10px;text-align:left;background:var(--bg-base);border-bottom:1px solid var(--border);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.03em;color:var(--text-muted);">${escapeHtml(col)}</th>`
+              ).join("")}
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((row) => `
+              <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:8px 10px;vertical-align:top;"><strong>${escapeHtml(row.kind)}</strong></td>
+                <td style="padding:8px 10px;vertical-align:top;">${escapeHtml(row.functionName)}</td>
+                <td style="padding:8px 10px;vertical-align:top;"><code>${escapeHtml(row.binding)}</code></td>
+                <td style="padding:8px 10px;vertical-align:top;">${escapeHtml(row.details)}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
 }
 
 /**
@@ -1925,6 +2049,7 @@ function renderModalContent(data) {
   const fqdns = collectFqdns(data);
   const publicIps = collectPublicIps(data);
   const routingTargets = collectRoutingTargets(data);
+  const routingTargetDetails = collectRoutingTargetDetails(data);
   const vnet = collectVnet(data);
   const subnet = collectSubnet(data);
   const virtualNetworkType = collectVirtualNetworkType(data);
@@ -2009,11 +2134,11 @@ function renderModalContent(data) {
       isHtml: true,
     });
   }
-  if (routingTargets.length > 0) {
+  if (routingTargetDetails.length > 0) {
     if (!isAppGatewayDetails(data)) {
       networkFields.push({
         label: "Routes To",
-        value: routingTargets.map((target) => `<code>${escapeHtml(target)}</code>`).join("<br/>"),
+        value: routingTargetDetails.map((target) => `<code>${escapeHtml(target)}</code>`).join("<br/>"),
         isHtml: true,
       });
     }
@@ -2036,6 +2161,16 @@ function renderModalContent(data) {
           isHtml: true,
         },
       ],
+    });
+  }
+
+  const triggerSection = buildTriggersSection(data);
+  if (triggerSection) {
+    sections.push({
+      title: "",
+      icon: "",
+      fields: [],
+      __rawHtml: triggerSection,
     });
   }
 

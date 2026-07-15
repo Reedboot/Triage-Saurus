@@ -1001,6 +1001,25 @@ def subscription_primary_fqdn(asset: dict) -> str:
     return ""
 
 
+def _aks_ingress_is_public(exposure_level: object, fqdn: object, harvest_is_public: object | None = None) -> bool:
+    """Return True only when an AKS ingress should be treated as Internet-facing."""
+    if harvest_is_public is False:
+        return False
+
+    host = str(fqdn or "").strip().lower()
+    if host and (
+        ".internal." in host
+        or ".privatelink." in host
+        or host.endswith(".local")
+        or host.endswith(".cluster.local")
+        or host.endswith(".svc")
+        or host.endswith(".appserviceenvironment.net")
+    ):
+        return False
+
+    return str(exposure_level or "").strip().lower() == "public"
+
+
 def subscription_is_secret_store(arm_type: str) -> bool:
     type_key = (arm_type or "").lower()
     return "keyvault" in type_key or "appconfiguration" in type_key
@@ -1077,6 +1096,13 @@ def subscription_asset_label(asset: dict, include_badges: bool = False, include_
         asset.get("friendly_type") or asset.get("arm_type") or "resource",
         asset.get("short_name") or asset.get("name") or "resource",
     ]
+    if asset.get("node_variant") == "aks_ingress":
+        host = str(asset.get("ingress_host") or asset.get("host") or "").strip()
+        path = str(asset.get("path") or "").strip()
+        if host:
+            parts.append(host if len(host) <= 42 else host[:40] + "...")
+        if path and path not in ("/*", "*"):
+            parts.append(path)
     type_key = (asset.get("arm_type") or "").lower()
     if asset.get("parent_vnet_name") and any(token in type_key for token in ("subnet", "hostingenvironment", "serverfarms", "servicefabric")):
         parts.append(f"vnet: {asset.get('parent_vnet_name')}")
@@ -1090,7 +1116,7 @@ def subscription_asset_label(asset: dict, include_badges: bool = False, include_
         if delegations:
             parts.append(f"delegated: {', '.join(str(d) for d in delegations[:2])}")
     fqdn = subscription_primary_fqdn(asset)
-    if include_fqdn and fqdn:
+    if include_fqdn and fqdn and asset.get("node_variant") != "aks_ingress":
         parts.append(fqdn if len(fqdn) <= 42 else fqdn[:40] + "...")
     public_ip = str(asset.get("public_ip") or "").strip()
     if public_ip and "publicipaddress" in (asset.get("arm_type") or "").lower():
@@ -1418,7 +1444,11 @@ def build_subscription_diagrams_by_rg(
 
         for row in aks_route_rows:
             try:
-                cluster_name, namespace, ingress_name, host, path, service_name, service_port, deployment_name, git_repository, resource_group, pod_template_labels = row[:11]
+                if len(row) >= 12:
+                    cluster_name, namespace, ingress_name, host, path, exposure_level, service_name, service_port, deployment_name, git_repository, resource_group, pod_template_labels = row[:12]
+                else:
+                    cluster_name, namespace, ingress_name, host, path, service_name, service_port, deployment_name, git_repository, resource_group, pod_template_labels = row[:11]
+                    exposure_level = None
             except Exception:
                 continue
 
@@ -1428,7 +1458,6 @@ def build_subscription_diagrams_by_rg(
                 continue
 
             ingress_label = str(ingress_name or host or f"{cluster_name}-ingress").strip()
-            service_label = str(service_name or deployment_name or f"{cluster_name}-service").strip()
             route_key = "::".join([
                 cluster_key[0],
                 cluster_key[1],
@@ -1436,46 +1465,55 @@ def build_subscription_diagrams_by_rg(
                 ingress_label.lower(),
                 str(host or "").strip().lower(),
                 str(path or "").strip().lower(),
-                service_label.lower(),
+                str(service_name or deployment_name or "").strip().lower(),
                 str(service_port or "").strip().lower(),
             ])
             if route_key in seen_route_keys:
                 continue
             seen_route_keys.add(route_key)
 
+            ingress_display = str(host or "").strip() or ingress_label
             ingress_asset = {
                 "name": f"{cluster_name}-{namespace}-{ingress_label}-{str(host or path or 'route').replace('/', '_')}-ingress",
                 "node_variant": "aks_ingress",
                 "arm_type": "kubernetes_ingress",
                 "rg": cluster_rg or "default",
                 "fqdn": str(host or "").strip(),
-                "public": bool(str(host or "").strip()),
+                "host": str(host or "").strip(),
+                "ingress_host": str(host or "").strip(),
+                "path": str(path or "").strip(),
+                "public": _aks_ingress_is_public(exposure_level, host),
                 "sku": None,
                 "id": f"aks-ingress::{route_key}",
                 "has_waf": False,
                 "waf_mode": None,
                 "listeners": None,
-                "routing_targets": [{"target": service_label, "name": service_label, "type": "Kubernetes Service"}],
+                "routing_targets": [{"target": cluster_name, "name": cluster_name, "type": "Kubernetes Cluster"}],
                 "is_restricted": False,
                 "tier": "api",
                 "friendly_type": friendly_type("kubernetes_ingress"),
-                "short_name": ingress_label,
+                "short_name": ingress_display,
+                "label": ingress_display,
                 "auth_methods": [],
                 "resources": [],
                 "source_cluster_rg": cluster_rg,
                 "source_cluster_name": cluster_name,
                 "source_namespace": namespace,
-                "source_service": service_label,
+                "exposure_level": exposure_level,
+                "source_service": service_name,
                 "source_deployment": deployment_name,
                 "source_repo": git_repository,
                 "source_labels": pod_template_labels,
             }
+
+            groups[cluster_rg or "default"].append(ingress_asset)
+
             service_asset = {
-                "name": f"{cluster_name}-{namespace}-{service_label}-{str(service_port or 'svc').replace('/', '_')}-service",
+                "name": f"{cluster_name}-{namespace}-{service_name or deployment_name or 'service'}-{str(service_port or 'svc').replace('/', '_')}",
                 "node_variant": "aks_service",
                 "arm_type": "kubernetes_service",
                 "rg": cluster_rg or "default",
-                "fqdn": "",
+                "fqdn": None,
                 "public": False,
                 "sku": None,
                 "id": f"aks-service::{route_key}",
@@ -1485,20 +1523,21 @@ def build_subscription_diagrams_by_rg(
                 "routing_targets": [],
                 "is_restricted": False,
                 "tier": "backend",
-                "friendly_type": friendly_type("kubernetes_service"),
-                "short_name": service_label,
+                "friendly_type": "Kubernetes Service",
+                "short_name": str(service_name or deployment_name or "Kubernetes Service").strip(),
+                "label": str(service_name or deployment_name or "Kubernetes Service").strip(),
                 "auth_methods": [],
                 "resources": [],
                 "source_cluster_rg": cluster_rg,
                 "source_cluster_name": cluster_name,
                 "source_namespace": namespace,
-                "source_ingress": ingress_label,
+                "source_service": service_name,
+                "source_service_port": service_port,
                 "source_deployment": deployment_name,
                 "source_repo": git_repository,
                 "source_labels": pod_template_labels,
             }
 
-            groups[cluster_rg or "default"].append(ingress_asset)
             groups[cluster_rg or "default"].append(service_asset)
 
     diagrams = []
@@ -1541,6 +1580,8 @@ def build_subscription_diagrams_by_rg(
             )
         ]
         route_nodes_by_cluster: dict[tuple[str, str], list[dict]] = defaultdict(list)
+        route_nodes_by_host: dict[str, list[dict]] = defaultdict(list)
+        route_nodes_by_name: dict[str, list[dict]] = defaultdict(list)
         for asset in visible_rg_assets:
             variant = asset.get("node_variant")
             if variant not in {"aks_ingress", "aks_service"}:
@@ -1551,24 +1592,18 @@ def build_subscription_diagrams_by_rg(
             )
             if cluster_key[1]:
                 route_nodes_by_cluster[cluster_key].append(asset)
-
-        # Collect unique FQDN hostnames per cluster from aks_ingress routes.
-        # Each distinct FQDN will become its own ingress entry-point node so
-        # upstream routing (APIM → backend → FQDN → cluster) is visible.
-        _fqdn_entries_by_cluster: dict[tuple[str, str], list[str]] = defaultdict(list)
-        _seen_fqdn_route_keys: set[tuple] = set()
-        for _ck, _route_assets in route_nodes_by_cluster.items():
-            for _ra in _route_assets:
-                if _ra.get("node_variant") != "aks_ingress":
-                    continue
-                _fqdn = str(_ra.get("fqdn") or "").strip()
-                if not _fqdn:
-                    continue
-                _fk = (_ck, _fqdn.lower())
-                if _fk in _seen_fqdn_route_keys:
-                    continue
-                _seen_fqdn_route_keys.add(_fk)
-                _fqdn_entries_by_cluster[_ck].append(_fqdn)
+            if variant == "aks_ingress":
+                for candidate in (
+                    asset.get("host"),
+                    asset.get("ingress_host"),
+                    asset.get("fqdn"),
+                ):
+                    host_key = str(candidate or "").strip().lower()
+                    if host_key:
+                        route_nodes_by_host[host_key].append(asset)
+                name_key = str(asset.get("ingress_name") or asset.get("short_name") or asset.get("name") or "").strip().lower()
+                if name_key:
+                    route_nodes_by_name[name_key].append(asset)
 
         entries = [a for a in visible_rg_assets if a.get("tier") == "entry"]
         apis = [a for a in visible_rg_assets if a.get("tier") == "api"]
@@ -1614,9 +1649,13 @@ def build_subscription_diagrams_by_rg(
             if node_id in seen_nodes:
                 return
             seen_nodes.add(node_id)
-            # Route-bearing resources should show their DNS target so downstream
-            # backend routing can be correlated in the diagram.
-            show_fqdn = include_fqdn or asset.get("tier") == "api" or bool(asset.get("routing_targets"))
+            # Route-bearing resources usually show their DNS target, but AKS ingress
+            # nodes should stay name-only because the ingress name is the stable
+            # identifier users expect in the diagram.
+            show_fqdn = (
+                (include_fqdn or asset.get("tier") == "api" or bool(asset.get("routing_targets")))
+                and asset.get("node_variant") != "aks_ingress"
+            )
             nodes.append(
                 {
                     "id": node_id,
@@ -1638,23 +1677,6 @@ def build_subscription_diagrams_by_rg(
 
         for asset in visible_rg_assets:
             add_asset_node(asset, badges=False, include_fqdn=False)
-
-        # Add one synthetic FQDN ingress node per unique hostname per AKS cluster.
-        # These sit between external callers and the cluster, making the routing
-        # chain (e.g. APIM → backend → FQDN endpoint → cluster) explicit.
-        fqdn_node_ids_by_cluster: dict[tuple[str, str], list[str]] = defaultdict(list)
-        for _ck, _fqdns in _fqdn_entries_by_cluster.items():
-            for _fqdn in _fqdns:
-                _fqdn_nid = sanitise_node_id(f"aks_fqdn_{_ck[0]}_{_ck[1]}_{_fqdn}")
-                if _fqdn_nid not in seen_nodes:
-                    seen_nodes.add(_fqdn_nid)
-                    nodes.append({
-                        "id": _fqdn_nid,
-                        "label": _fqdn,
-                        "arm_type": "kubernetes_ingress",
-                        "class_name": "apiGateway",
-                    })
-                fqdn_node_ids_by_cluster[_ck].append(_fqdn_nid)
 
         edges: list[dict] = []
         edge_keys: set[tuple[str, str, str]] = set()
@@ -1730,8 +1752,8 @@ def build_subscription_diagrams_by_rg(
 
         # For cluster-only RGs, connect each cluster to the synthetic APIM context node
         # so it's clear the cluster is not orphaned — it's reachable from the subscription-level APIM.
-        # If the cluster exposes FQDN ingress nodes, route APIM → FQDN → cluster instead of
-        # directly to the cluster, making the ingress entry point visible.
+        # Route APIM directly to the ingress resource nodes so the ingress name is the
+        # visible entry point for the cluster.
         if _sub_ctx_node_id:
             for backend in backends:
                 arm_type_low = (backend.get("arm_type") or "").lower()
@@ -1740,11 +1762,16 @@ def build_subscription_diagrams_by_rg(
                     if cluster_nid not in seen_nodes:
                         continue
                     _bk = ((backend.get("rg") or "").strip().lower(), (backend.get("name") or "").strip().lower())
-                    _ctx_fqdn_nids = fqdn_node_ids_by_cluster.get(_bk, [])
-                    if _ctx_fqdn_nids:
-                        for _fqdn_nid in _ctx_fqdn_nids:
-                            add_edge(_sub_ctx_node_id, _fqdn_nid, "routes to", "#f97316", dasharray="6,3")
-                            add_edge(_fqdn_nid, cluster_nid, "routes to", "#f97316", dasharray="6,3")
+                    _ctx_route_nodes = [
+                        item for item in route_nodes_by_cluster.get(_bk, [])
+                        if (item.get("node_variant") or "") == "aks_ingress"
+                    ]
+                    if _ctx_route_nodes:
+                        for _route_asset in _ctx_route_nodes:
+                            route_nid = subscription_node_id(_route_asset, sanitise_node_id)
+                            if route_nid in seen_nodes:
+                                add_edge(_sub_ctx_node_id, route_nid, "routes to", "#f97316", dasharray="6,3")
+                                add_edge(route_nid, cluster_nid, "routes to", "#f97316", dasharray="6,3")
                     else:
                         add_edge(_sub_ctx_node_id, cluster_nid, "routes to", "#f97316", dasharray="6,3")
 
@@ -1761,6 +1788,29 @@ def build_subscription_diagrams_by_rg(
                 if isinstance(parsed, list):
                     return [item for item in parsed if isinstance(item, dict)]
             return []
+
+        def _routing_target_candidates(target: dict) -> list[str]:
+            candidates: list[str] = []
+            for key in (
+                "target_resource_id",
+                "targetResourceId",
+                "resource_id",
+                "backend_fqdn",
+                "backendFqdn",
+                "backend_target",
+                "backendTarget",
+                "backend_url",
+                "backendUrl",
+                "hostname",
+                "host",
+                "fqdn",
+                "target",
+                "name",
+            ):
+                value = str(target.get(key) or "").strip()
+                if value and value not in candidates:
+                    candidates.append(value)
+            return candidates
 
         def _cluster_key(asset: dict) -> tuple[str, str]:
             return ((asset.get("rg") or "").strip().lower(), (asset.get("name") or "").strip().lower())
@@ -1780,10 +1830,22 @@ def build_subscription_diagrams_by_rg(
             backend_nid = subscription_node_id(backend, sanitise_node_id)
             if backend_nid not in seen_nodes:
                 continue
+            matched_route_nids: set[str] = set()
             matched_cluster_keys: set[tuple[str, str]] = set()
             for target in targets:
                 target_value = str(target.get("target") or target.get("name") or "").strip().lower()
                 target_rid = str(target.get("target_resource_id") or "").strip().lower()
+                for candidate in _routing_target_candidates(target):
+                    candidate_key = candidate.strip().lower()
+                    if candidate_key:
+                        for route_asset in route_nodes_by_host.get(candidate_key, []):
+                            route_nid = subscription_node_id(route_asset, sanitise_node_id)
+                            if route_nid in seen_nodes:
+                                matched_route_nids.add(route_nid)
+                        for route_asset in route_nodes_by_name.get(candidate_key, []):
+                            route_nid = subscription_node_id(route_asset, sanitise_node_id)
+                            if route_nid in seen_nodes:
+                                matched_route_nids.add(route_nid)
                 for cluster_asset in cluster_assets:
                     cluster_key = _cluster_key(cluster_asset)
                     cluster_id = str(cluster_asset.get("id") or "").strip().lower()
@@ -1793,36 +1855,28 @@ def build_subscription_diagrams_by_rg(
                     elif target_value and target_value in {cluster_name, str(cluster_asset.get("short_name") or "").strip().lower()}:
                         matched_cluster_keys.add(cluster_key)
 
+            for route_nid in matched_route_nids:
+                add_edge(backend_nid, route_nid, "routes to", "#f97316", dasharray="6,3")
+
             for cluster_key in matched_cluster_keys:
-                _backend_fqdn_nids = fqdn_node_ids_by_cluster.get(cluster_key, [])
-                if _backend_fqdn_nids:
-                    # Route via the FQDN ingress entry nodes so the chain
-                    # (backend → FQDN endpoint → cluster) is explicit in the diagram.
-                    for _fqdn_nid in _backend_fqdn_nids:
-                        add_edge(backend_nid, _fqdn_nid, "routes to", "#f97316", dasharray="6,3")
-                else:
-                    # No FQDN nodes harvested — fall back to individual ingress routes.
-                    for route_asset in route_nodes_by_cluster.get(cluster_key, []):
-                        if (route_asset.get("node_variant") or "") != "aks_ingress":
-                            continue
-                        route_nid = subscription_node_id(route_asset, sanitise_node_id)
-                        if route_nid in seen_nodes:
-                            add_edge(backend_nid, route_nid, "routes to", "#f97316", dasharray="6,3")
+                for route_asset in route_nodes_by_cluster.get(cluster_key, []):
+                    if (route_asset.get("node_variant") or "") != "aks_ingress":
+                        continue
+                    route_nid = subscription_node_id(route_asset, sanitise_node_id)
+                    if route_nid in seen_nodes:
+                        add_edge(backend_nid, route_nid, "routes to", "#f97316", dasharray="6,3")
 
         for cluster_asset in cluster_assets:
             cluster_key = _cluster_key(cluster_asset)
             cluster_nid = subscription_node_id(cluster_asset, sanitise_node_id)
             if cluster_nid not in seen_nodes:
                 continue
-            # Connect each FQDN ingress node to this cluster (FQDN → cluster).
-            for _fqdn_nid in fqdn_node_ids_by_cluster.get(cluster_key, []):
-                add_edge(_fqdn_nid, cluster_nid, "routes to", "#f97316", dasharray="6,3")
             for route_asset in route_nodes_by_cluster.get(cluster_key, []):
                 route_nid = subscription_node_id(route_asset, sanitise_node_id)
                 if route_nid not in seen_nodes:
                     continue
                 if (route_asset.get("node_variant") or "") == "aks_ingress":
-                    add_edge(cluster_nid, route_nid, "routes to", "#f97316", dasharray="6,3")
+                    add_edge(route_nid, cluster_nid, "routes to", "#f97316", dasharray="6,3")
                 elif (route_asset.get("node_variant") or "") == "aks_service":
                     ingress_asset = next(
                         (item for item in route_nodes_by_cluster.get(cluster_key, []) if (item.get("node_variant") or "") == "aks_ingress" and str(item.get("source_namespace") or "") == str(route_asset.get("source_namespace") or "")),
@@ -1830,6 +1884,7 @@ def build_subscription_diagrams_by_rg(
                     )
                     if ingress_asset:
                         add_edge(subscription_node_id(ingress_asset, sanitise_node_id), route_nid, "targets", "#22c55e", dasharray="6,3")
+                    add_edge(route_nid, cluster_nid, "belongs to", "#64748b", dasharray="6,3")
 
         for asset in public_assets:
             if asset.get("tier") == "entry":

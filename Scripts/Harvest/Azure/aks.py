@@ -291,8 +291,9 @@ def _build_route_model(
 ) -> list[dict[str, Any]]:
     """Join ingress backend refs → services → deployments into a flat route model.
 
-    Only routes where both ``git_repository`` and ``team`` deployment labels
-    are present are included — matching the AksExposure.ps1 BuildAksRouteModel logic.
+    Keep partially enriched routes too: if deployment metadata or labels are missing,
+    still persist the ingress→service route so downstream consumers can see that
+    traffic may reach the workload.
     """
     routes: list[dict[str, Any]] = []
     backend_refs = _get_ingress_backend_references(ingresses)
@@ -311,12 +312,32 @@ def _build_route_model(
             continue
 
         matching_deployments = _get_matching_deployments_for_service(svc, deployments)
+        if not matching_deployments:
+            routes.append({
+                "cluster_name": cluster_meta.get("name"),
+                "cluster_resource_id": cluster_meta.get("id"),
+                "resource_group": cluster_meta.get("resourceGroup"),
+                "namespace": ns,
+                "ingress_name": ref["ingress_name"],
+                "host": ref["host"],
+                "host_aliases": ref["host_aliases"],
+                "path": ref["path"],
+                "is_default_backend": 1 if ref["is_default_backend"] else 0,
+                "service_name": (svc.get("metadata") or {}).get("name"),
+                "service_port": ref["service_port"],
+                "service_ports": list(svc.get("spec", {}).get("ports") or []),
+                "deployment_name": None,
+                "deployment_namespace": None,
+                "pod_template_labels": None,
+                "git_repository": None,
+                "team": None,
+                "exposure_level": _get_ingress_route_exposure_level(ref["host_aliases"]),
+            })
+            continue
+
         for deploy in matching_deployments:
             git_repo = _get_deployment_label(deploy, "git_repository")
             team = _get_deployment_label(deploy, "team")
-
-            if not git_repo or not team:
-                continue
 
             routes.append({
                 "cluster_name": cluster_meta.get("name"),
