@@ -1711,9 +1711,8 @@ def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: s
             "waf-v2",
         )
 
-        _upsert_apim_backend(conn, subscription_id, f"apim-{brand}-edge", "web-backend", "web-backend", f"https://store.{brand}-retail.azurewebsites.net", "http")
-        _upsert_apim_backend(conn, subscription_id, f"apim-{brand}-edge", "orders-backend", "orders-backend", f"https://orders.{brand}-retail.azurewebsites.net", "http")
-        _upsert_apim_backend(conn, subscription_id, f"apim-{brand}-edge", "aks-backend", "aks-backend", f"https://api.{brand}-retail.com", "http")
+        _upsert_apim_backend(conn, subscription_id, f"apim-{brand}-edge", "store-backend", "store-backend", f"https://store.{brand}-retail.azurewebsites.net", "http")
+        _upsert_apim_backend(conn, subscription_id, f"apim-{brand}-edge", "aks-marketlane-platform-orders-orders-api-8080", "aks-marketlane-platform-orders-orders-api-8080", f"https://orders.{brand}-retail.internal/", "http")
 
         _upsert_apim_route(
             conn,
@@ -1724,7 +1723,7 @@ def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: s
             "Catalog API",
             "catalog",
             ["https"],
-            "web-backend",
+            "store-backend",
             f"https://store.{brand}-retail.azurewebsites.net",
             f"https://store.{brand}-retail.azurewebsites.net",
         )
@@ -1737,15 +1736,15 @@ def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: s
             "Orders API",
             "orders",
             ["https"],
-            "orders-backend",
-            f"https://orders.{brand}-retail.azurewebsites.net",
-            f"https://orders.{brand}-retail.azurewebsites.net",
+            "aks-marketlane-platform-orders-orders-api-8080",
+            f"https://orders.{brand}-retail.internal/",
+            f"https://orders.{brand}-retail.internal/",
         )
 
         _upsert_apim_operation(conn, subscription_id, f"apim-{brand}-edge", f"catalog-{brand}", "Catalog API", "catalog", f"https://store.{brand}-retail.azurewebsites.net", "list-items", "List items", "GET", "/items")
         _upsert_apim_operation(conn, subscription_id, f"apim-{brand}-edge", f"catalog-{brand}", "Catalog API", "catalog", f"https://store.{brand}-retail.azurewebsites.net", "get-item", "Get item", "GET", "/items/{itemId}")
-        _upsert_apim_operation(conn, subscription_id, f"apim-{brand}-edge", f"orders-{brand}", "Orders API", "orders", f"https://orders.{brand}-retail.azurewebsites.net", "create-order", "Create order", "POST", "/orders")
-        _upsert_apim_operation(conn, subscription_id, f"apim-{brand}-edge", f"orders-{brand}", "Orders API", "orders", f"https://orders.{brand}-retail.azurewebsites.net", "cancel-order", "Cancel order", "POST", "/orders/{orderId}/cancel")
+        _upsert_apim_operation(conn, subscription_id, f"apim-{brand}-edge", f"orders-{brand}", "Orders API", "orders", f"https://orders.{brand}-retail.internal/", "create-order", "Create order", "POST", "/orders")
+        _upsert_apim_operation(conn, subscription_id, f"apim-{brand}-edge", f"orders-{brand}", "Orders API", "orders", f"https://orders.{brand}-retail.internal/", "cancel-order", "Cancel order", "POST", "/orders/{orderId}/cancel")
 
         _upsert_aks_route(
             conn,

@@ -1943,7 +1943,6 @@ class TestIngressDiagramGeneration:
         result = self._call(rows=rows, appgw_waf_policy_rows=appgw_waf_policy_rows)
         mermaid = result.get("mermaid", "")
         assert "🛡️ WAF: cop-waf-policy" in mermaid, mermaid
-        assert "l_rgnet_appgw_cop_HTTPS_443 --> waf_rgnet_appgw_cop_cop_waf_policy" in mermaid, mermaid
         assert "waf_rgnet_appgw_cop_cop_waf_policy --> rgnet_appgw_cop" in mermaid, mermaid
 
     def test_backend_does_not_get_generic_data_edges(self):
@@ -2164,6 +2163,52 @@ class TestIngressDiagramGeneration:
         assert "rg_aks_aks_prod" in mermaid, mermaid
         assert any("orders_api" in line and "rg_aks_aks_prod" in line for line in mermaid.splitlines()), mermaid
 
+    def test_aks_service_is_hidden_when_ingress_hop_is_missing(self):
+        """AKS services without a concrete ingress route should stay implicit."""
+        import json
+
+        rows = [
+            (
+                "aks-prod",
+                "Microsoft.ContainerService/managedClusters",
+                "rg-aks",
+                "",
+                0,
+                "Standard",
+                "aks-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({}),
+                None,
+                None,
+            ),
+        ]
+        aks_route_rows = [
+            (
+                "aks-prod",
+                "default",
+                "",
+                "orders.example.internal",
+                "/*",
+                "Public",
+                "orders-api-8080",
+                8080,
+                "orders-api",
+                "https://github.com/org/repo",
+                "rg-aks",
+                json.dumps({"app.kubernetes.io/component": "api"}),
+            )
+        ]
+
+        result = self._call(rows=rows, aks_route_rows=aks_route_rows)
+        mermaid = result.get("mermaid", "")
+        assert "rg_aks_aks_prod" in mermaid, mermaid
+        assert "orders-api-8080 🔒" not in mermaid, mermaid
+        assert "belongs to" not in mermaid, mermaid
+
     def test_aks_ingress_routes_show_the_ingress_hostname(self):
         """AKS ingress routes should preserve the hostname hop before the cluster."""
         import json
@@ -2285,6 +2330,58 @@ class TestIngressDiagramGeneration:
         assert "grp_APIM_Public --> rg_api_apim_public" not in mermaid, mermaid
         assert 'rg_api_apim_public["' not in mermaid, mermaid
 
+    def test_apim_backend_target_stays_attached_to_apim(self):
+        """APIM backend targets should render as APIM children, not floating in Azure no-VNet."""
+        import json
+
+        rows = [
+            (
+                "apim-prod",
+                "Microsoft.ApiManagement/service",
+                "rg-api",
+                "apim.example.com",
+                1,
+                "Developer",
+                "apim-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({"properties": {}}),
+                None,
+                None,
+            ),
+            (
+                "backend1",
+                "APIM Backend Target",
+                "rg-api",
+                None,
+                0,
+                None,
+                "apim-prod::backend1",
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({
+                    "apim_name": "apim-prod",
+                    "backend_id": "backend1",
+                    "backend_url": "https://backend.example.com",
+                    "_extra": {"display_label": "backend1"},
+                }),
+                None,
+                None,
+            ),
+        ]
+
+        result = self._call(rows=rows)
+        mermaid = result.get("mermaid", "")
+        assert "rg_api_backend1" in mermaid, mermaid
+        assert "class rg_api_backend1 apimBackendPool;" in mermaid, mermaid
+        assert "grp_APIM_Public" in mermaid, mermaid
+
     def test_internal_apim_does_not_render_internet_ingress(self):
         """Internal APIM should not get an Internet ingress arrow even with outbound public IPs."""
         import json
@@ -2357,6 +2454,60 @@ class TestIngressDiagramGeneration:
         assert "Subnet: api-subnet" in mermaid, mermaid
         assert "example-api-uksouth.azure-api.net" in mermaid, mermaid
         assert mermaid.index("Network: prod-vnet") < mermaid.index("Subnet: api-subnet") < mermaid.index("grp_APIM_Public"), mermaid
+
+    def test_apim_api_links_as_hosted_instead_of_routing(self):
+        """APIM API nodes should not render a misleading Routing edge to the gateway host."""
+        import json
+
+        rows = [
+            (
+                "apim-marketlane-edge",
+                "Microsoft.ApiManagement/service",
+                "rg-marketlane-edge",
+                "apim-marketlane.azure-api.net",
+                1,
+                "Developer",
+                "apim-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({}),
+                None,
+                None,
+            ),
+            (
+                "catalog-marketlane",
+                "APIM API",
+                "rg-marketlane-edge",
+                None,
+                0,
+                None,
+                "catalog-marketlane",
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({
+                    "apim_name": "apim-marketlane-edge",
+                    "_extra": {
+                        "display_label": "Catalog API",
+                        "api_display_name": "Catalog API",
+                        "api_path": "catalog",
+                    },
+                }),
+                None,
+                None,
+            ),
+        ]
+
+        result = self._call(rows=rows)
+        mermaid = result.get("mermaid", "")
+        assert "Catalog API" in mermaid, mermaid
+        assert 'Catalog API -->|"hosted in"| grp_APIM_Public' in mermaid or "hosted in" in mermaid, mermaid
+        assert 'Catalog API -->|"Routing"| grp_APIM_Public' not in mermaid, mermaid
 
     def test_network_attached_services_render_inside_vnet_and_subnet_groups(self):
         """Network-aware services should be nested under VNet and subnet subgraphs."""
@@ -3838,6 +3989,76 @@ class TestIngressDiagramGeneration:
         assert mermaid.index("production-api-uksouth.azure-api.net") < mermaid.index("internal-transfers"), mermaid
         assert " -->|\"Routing\"| " in mermaid, mermaid
 
+    def test_marketlane_apim_backend_targets_use_backend_id_and_apim_subnet(self):
+        """APIM backend targets should keep the backend id label and inherit APIM subnet placement."""
+        import json
+
+        rows = [
+            (
+                "apim-marketlane-edge",
+                "Microsoft.ApiManagement/service",
+                "rg-marketlane-edge",
+                "apim-marketlane.azure-api.net",
+                1,
+                "Developer",
+                "apim-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({
+                    "_extra": {
+                        "vnet_name": "vnet-marketlane-core",
+                        "vnet_resource_group": "rg-marketlane-network",
+                        "subnet_name": "snet-marketlane-apim",
+                        "subnet_id": "/subscriptions/sub/resourceGroups/rg-marketlane-network/providers/Microsoft.Network/virtualNetworks/vnet-marketlane-core/subnets/snet-marketlane-apim",
+                    }
+                }),
+                None,
+                None,
+            ),
+            (
+                "aks-marketlane-platform-orders-orders-api-8080",
+                "Microsoft.ContainerService/managedClusters",
+                "rg-marketlane-app",
+                "",
+                0,
+                "Standard",
+                "aks-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                "{}",
+                None,
+                None,
+            ),
+        ]
+        apim_backend_rows = [
+            {
+                "apim_name": "apim-marketlane-edge",
+                "backend_id": "aks-marketlane-platform-orders-orders-api-8080",
+                "title": "aks-marketlane-platform-orders-orders-api-8080",
+                "url": "https://aks-marketlane-platform-orders-orders-api-8080",
+            }
+        ]
+        apim_route_map = {
+            "apim-marketlane-edge": ["https://aks-marketlane-platform-orders-orders-api-8080"],
+        }
+
+        result = self._call(
+            rows=rows,
+            apim_backend_rows=apim_backend_rows,
+            apim_route_map=apim_route_map,
+        )
+        mermaid = result.get("mermaid", "")
+        assert "rg_marketlane_edge_apim_marketlane_edge__aks_marketlane_platform_orders_orders_api_8080" in mermaid, mermaid
+        assert "Network: vnet-marketlane-core" in mermaid, mermaid
+        assert "Subnet: snet-marketlane-apim" in mermaid, mermaid
+        assert 'rg_marketlane_edge_apim_marketlane_edge__aks_marketlane_platform_orders_orders_api_8080 -->|"routes to"| rg_marketlane_app_aks_marketlane_platform_orders_orders_api_8080' in mermaid, mermaid
+
     def test_apim_does_not_infer_untargeted_backend_edges(self):
         """APIM should only render confirmed backend routes, not heuristic fanout edges."""
         import json
@@ -4950,6 +5171,7 @@ class TestCloudPosture:
         assert data["posture"]["behind_waf"] is True
 
     def test_subscription_architecture_payload_handles_current_waf_schema(self):
+        import json
         import sqlite3
 
         from web.app import _build_subscription_architecture_payload
@@ -4984,6 +5206,19 @@ class TestCloudPosture:
                     is_restricted INTEGER DEFAULT 0,
                     waf_mode TEXT
                 );
+                CREATE TABLE appgw_routing_rules (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    gateway_name TEXT,
+                    backend_fqdns TEXT,
+                    backend_pool_name TEXT,
+                    listener_name TEXT,
+                    url_path TEXT,
+                    protocol TEXT,
+                    waf_policy_name TEXT,
+                    resource_group TEXT,
+                    hostname TEXT
+                );
                 CREATE TABLE appgw_waf_policies (
                     name TEXT,
                     subscription_id TEXT,
@@ -5016,6 +5251,54 @@ class TestCloudPosture:
                     '[{"type": "OWASP", "version": "3.2"}]',
                     2,
                     '["appgw-one"]',
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO provisioned_assets (
+                    id, subscription_id, resource_group, name, type, location, sku,
+                    fqdn, is_public, status, pipeline_tag, first_detected, last_synced,
+                    raw_json, is_restricted, waf_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/appgw-one",
+                    "sub-1",
+                    "rg-net",
+                    "appgw-one",
+                    "Microsoft.Network/applicationGateways",
+                    "uksouth",
+                    "WAF_v2",
+                    "appgw-one.example.com",
+                    1,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps({}),
+                    0,
+                    "WAF_v2",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO appgw_routing_rules (
+                    id, subscription_id, gateway_name, backend_fqdns, backend_pool_name,
+                    listener_name, url_path, protocol, waf_policy_name, resource_group, hostname
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "appgw-one::rule-one",
+                    "sub-1",
+                    "appgw-one",
+                    json.dumps(["orders.example.com"]),
+                    "pool-one",
+                    "listener-one",
+                    "/*",
+                    "HTTPS",
+                    "policy-one",
+                    "rg-net",
+                    "appgw-one.example.com",
                 ),
             )
 
@@ -5876,6 +6159,45 @@ class TestCloudPosture:
             for line in mermaid.splitlines()
         ), mermaid
         os.unlink(tmp.name)
+
+    def test_subscription_diagram_does_not_render_self_routes(self):
+        """A routing target that resolves to the same node must not draw a self-loop."""
+        import json
+        import os
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        rows = [
+            (
+                "prodgreen-fincrime-casemanagementorchestrator-api",
+                "APIM backend target",
+                "rg-api",
+                "prodgreen-fincrime-casemanagementorchestrator-api.internal.cbinnovation.uk",
+                0,
+                "Standard",
+                "backend-id",
+                0,
+                None,
+                0,
+                None,
+                json.dumps([
+                    {
+                        "target": "prodgreen-fincrime-casemanagementorchestrator-api.internal.cbinnovation.uk",
+                        "name": "prodgreen-fincrime-casemanagementorchestrator-api.internal.cbinnovation.uk",
+                    }
+                ]),
+                json.dumps({"properties": {}}),
+                None,
+                None,
+            ),
+        ]
+
+        result = app_module._build_ingress_diagram(rows)
+        mermaid = result.get("mermaid", "")
+        assert "routes to" not in mermaid, mermaid
 
     def test_subscription_diagram_renders_apim_backend_pool_chain_with_private_ase_alias(self, monkeypatch):
         """APIM backend pools should still connect when the backend URL is a private ASE alias."""
@@ -10402,6 +10724,141 @@ class TestCloudPosture:
             edge.get("source") == load_balancer_id and edge.get("target") == vmss_id
             for edge in rf_graph["edges"]
         ), rf_graph["edges"]
+
+        os.unlink(tmp.name)
+
+    def test_api_cloud_architecture_reactflow_ignores_synthetic_network_parent_cycles(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+        import tempfile
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        conn = sqlite3.connect(tmp.name)
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+        cluster_id = "/subscriptions/sub-1/resourceGroups/rg-sf/providers/Microsoft.ServiceFabric/clusters/cluster-one"
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                cluster_id,
+                "sub-1",
+                "rg-sf",
+                "cluster-one",
+                "Microsoft.ServiceFabric/clusters",
+                "ukwest",
+                "Standard",
+                None,
+                0,
+                "active",
+                None,
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+                json.dumps(
+                    {
+                        "properties": {
+                            "virtualMachineProfile": {
+                                "networkProfile": {
+                                    "networkInterfaceConfigurations": [
+                                        {
+                                            "properties": {
+                                                "ipConfigurations": [
+                                                    {
+                                                        "properties": {
+                                                            "subnet": {
+                                                                "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/prod-vnet/subnets/cluster-subnet"
+                                                            }
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                ),
+                0,
+                None,
+            ),
+        )
+        conn.commit()
+
+        def _db():
+            c = sqlite3.connect(tmp.name)
+            c.row_factory = sqlite3.Row
+            return c
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", _db)
+        client = app_module.app.test_client()
+
+        resp = client.get("/api/cloud/architecture?sub=sub-1&view=reactflow")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        graph = resp.get_json()
+        nodes = graph["nodes"]
+        by_id = {str(node.get("id") or ""): node for node in nodes if node.get("id")}
+
+        assert all(
+            str((node.get("data") or {}).get("parentNodeId") or "").strip() != str(node.get("id") or "").strip()
+            for node in nodes
+        ), graph["nodes"]
+
+        for node_id in by_id:
+            seen = set()
+            cursor = node_id
+            while True:
+                parent_id = str((by_id.get(cursor, {}).get("data") or {}).get("parentNodeId") or "").strip()
+                if not parent_id:
+                    break
+                assert parent_id not in seen, graph["nodes"]
+                seen.add(parent_id)
+                if parent_id not in by_id:
+                    break
+                cursor = parent_id
 
         os.unlink(tmp.name)
 

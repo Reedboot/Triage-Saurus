@@ -94,8 +94,20 @@ function buildHierarchyContext(nodes) {
     const id = String(node?.id || "").trim();
     if (!id) continue;
     const parentId = String(node?.data?.parentNodeId || "").trim();
-    if (!parentId || !nodeById.has(parentId)) continue;
+    if (!parentId || parentId === id || !nodeById.has(parentId)) continue;
     if ((providerById.get(parentId) || "unknown") !== (providerById.get(id) || "unknown")) continue;
+    let cursor = parentId;
+    const seen = new Set([id]);
+    let createsCycle = false;
+    while (cursor) {
+      if (seen.has(cursor)) {
+        createsCycle = true;
+        break;
+      }
+      seen.add(cursor);
+      cursor = parentById.get(cursor) || "";
+    }
+    if (createsCycle) continue;
     parentById.set(id, parentId);
     if (!childrenByParent.has(parentId)) {
       childrenByParent.set(parentId, []);
@@ -385,7 +397,7 @@ function layoutReactFlowNodes(rawNodes) {
     node.extent = parentId ? "parent" : undefined;
     node.data = {
       ...(node.data || {}),
-      parentNodeId: parentId || node.data?.parentNodeId || null,
+      parentNodeId: parentId || null,
       childrenCount: childIds.length,
       hasChildren,
     };
@@ -544,6 +556,10 @@ function reflowVisibleTree(nodes, expandedNodes) {
       node.parentNode = undefined;
       node.extent = undefined;
     }
+    node.data = {
+      ...(node.data || {}),
+      parentNodeId: parentAbs ? (String(nodeById.get(id)?.parentNode || nodeById.get(id)?.data?.parentNodeId || "") || null) : null,
+    };
     placedIds.add(id);
 
     if (!shouldExpand) {

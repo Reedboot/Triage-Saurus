@@ -24,6 +24,7 @@ const FIREFOX_VIEWBOX_PADDING_X = 18;
 const FIREFOX_VIEWBOX_PADDING_TOP = 150;
 const FIREFOX_VIEWBOX_PADDING_BOTTOM = 18;
 let mermaidNodeDataById = new Map();
+let mermaidOriginalIdByNodeId = new Map();
 let mermaidClickHandler = null;
 let currentMermaidSubscriptionId = "";
 
@@ -291,8 +292,8 @@ function buildFallbackModalData(resourceId, nodeData, lookup = {}) {
       ? nodeData.network.routing_targets
       : [],
   network: {
-    vnet: firstNonEmpty(nodeData?.vnet, nodeData?.vnet_name) || null,
-    subnet: firstNonEmpty(nodeData?.subnet, nodeData?.subnet_name) || null,
+    vnet: firstNonEmpty(nodeData?.network?.vnet, nodeData?.vnet, nodeData?.vnetName, nodeData?.vnet_name) || null,
+    subnet: firstNonEmpty(nodeData?.network?.subnet, nodeData?.subnet, nodeData?.subnetName, nodeData?.subnet_name) || null,
     routing_targets: Array.isArray(nodeData?.network?.routing_targets)
       ? nodeData.network.routing_targets
       : Array.isArray(nodeData?.routing_targets)
@@ -440,6 +441,11 @@ function normalizeMermaidNodeId(rawId) {
     .replace(/-\d+$/, "");
 }
 
+function resolveMermaidOriginalId(nodeId) {
+  const compactId = String(nodeId || "").trim();
+  return mermaidOriginalIdByNodeId.get(compactId) || compactId;
+}
+
 function attachMermaidDrilldownHandlers(svg) {
   if (!svg) return;
 
@@ -563,8 +569,20 @@ function buildHierarchyContext(nodes) {
     const id = String(node?.id || "").trim();
     if (!id) continue;
     const parentId = String(node?.data?.parentNodeId || "").trim();
-    if (!parentId || !nodeById.has(parentId)) continue;
+    if (!parentId || parentId === id || !nodeById.has(parentId)) continue;
     if ((providerById.get(parentId) || "unknown") !== (providerById.get(id) || "unknown")) continue;
+    let cursor = parentId;
+    const seen = new Set([id]);
+    let createsCycle = false;
+    while (cursor) {
+      if (seen.has(cursor)) {
+        createsCycle = true;
+        break;
+      }
+      seen.add(cursor);
+      cursor = parentById.get(cursor) || "";
+    }
+    if (createsCycle) continue;
     parentById.set(id, parentId);
     if (!childrenByParent.has(parentId)) {
       childrenByParent.set(parentId, []);
@@ -1022,6 +1040,18 @@ async function renderMermaidGraph(payload, subscriptionName) {
         .filter(([id, data]) => id && data)
     );
   }
+  mermaidOriginalIdByNodeId = new Map(
+    Object.entries(payload?.id_map || {})
+      .map(([compactId, originalId]) => [String(compactId || ""), String(originalId || "")])
+      .filter(([compactId, originalId]) => compactId && originalId)
+  );
+  if (!mermaidOriginalIdByNodeId.size) {
+    mermaidOriginalIdByNodeId = new Map(
+      (Array.isArray(payload?.nodes) ? payload.nodes : [])
+        .map((node) => [String(node?.id || ""), String(node?.id || "")])
+        .filter(([id, originalId]) => id && originalId)
+    );
+  }
   applyMermaidCss(payload?.css_code || "");
   try {
     mermaidManualZoom = false;
@@ -1088,6 +1118,7 @@ function openNodePopup(resourceId, nodeData) {
   const resources = Array.isArray(nodeData?.resources) ? nodeData.resources.filter(Boolean) : [];
   const isGroupedNode = Boolean(nodeData?.is_group || nodeData?.isGroupNode || nodeData?.summaryNode || nodeData?.groupType);
   const armType = String(nodeData?.arm_type || nodeData?.type || nodeData?.resourceType || "").toLowerCase();
+  const originalResourceId = resolveMermaidOriginalId(resourceId);
   const prefersChildDrilldown =
     armType.includes("applicationgateway") ||
     armType.includes("sites") ||
@@ -1105,8 +1136,8 @@ function openNodePopup(resourceId, nodeData) {
     const resource = resources[0] || {};
     if (prefersChildDrilldown && currentMermaidSubscriptionId) {
       openDrilldownModal(nodeData, currentMermaidSubscriptionId, () => {
-        openModal(resourceId, nodeData, {
-          id: resource.id,
+        openModal(originalResourceId, nodeData, {
+          id: resolveMermaidOriginalId(resource.id),
           name: resource.name,
           resourceGroup: resource.rg,
           type: nodeData?.arm_type || nodeData?.type || nodeData?.resourceType || "",
@@ -1116,8 +1147,8 @@ function openNodePopup(resourceId, nodeData) {
       });
       return;
     }
-    openModal(resourceId, nodeData, {
-      id: resource.id,
+    openModal(originalResourceId, nodeData, {
+      id: resolveMermaidOriginalId(resource.id),
       name: resource.name,
       resourceGroup: resource.rg,
       type: nodeData?.arm_type || nodeData?.type || nodeData?.resourceType || "",
@@ -1126,7 +1157,7 @@ function openNodePopup(resourceId, nodeData) {
     });
     return;
   }
-  openModal(resourceId, nodeData, { nodeId: resourceId });
+  openModal(originalResourceId, nodeData, { nodeId: resourceId, id: originalResourceId });
 }
 
 function openDrilldownModal(nodeData, subId, fallback = null) {
@@ -1141,13 +1172,34 @@ function openDrilldownModal(nodeData, subId, fallback = null) {
   });
 
   const url = new URL(`/api/subscriptions/${encodeURIComponent(subId)}/drilldown`, window.location.origin);
+  const remapNodeRef = (value) => resolveMermaidOriginalId(value);
+  const remapResourceRefs = (items) => (Array.isArray(items) ? items.map((item) => {
+    if (!item || typeof item !== "object") return item;
+    const next = { ...item };
+    if (next.id) next.id = remapNodeRef(next.id);
+    if (next.parentNodeId) next.parentNodeId = remapNodeRef(next.parentNodeId);
+    if (next.parent_id) next.parent_id = remapNodeRef(next.parent_id);
+    if (next.resource_id) next.resource_id = remapNodeRef(next.resource_id);
+    return next;
+  }) : items);
+  const nodePayload = nodeData && typeof nodeData === "object"
+    ? {
+        ...nodeData,
+        id: remapNodeRef(nodeData.id),
+        parentNodeId: remapNodeRef(nodeData.parentNodeId),
+        resources: remapResourceRefs(nodeData.resources),
+        items: remapResourceRefs(nodeData.items),
+        members: remapResourceRefs(nodeData.members),
+        children: remapResourceRefs(nodeData.children),
+      }
+    : nodeData;
   fetch(url.toString(), {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({
       arm_type: nodeData?.arm_type || nodeData?.type || "",
-      resources: nodeData?.resources || [],
-      node: nodeData || null,
+      resources: remapResourceRefs(nodeData?.resources || []),
+      node: nodePayload || null,
     }),
     signal: controller.signal,
   })

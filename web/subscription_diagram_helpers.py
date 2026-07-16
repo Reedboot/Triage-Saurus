@@ -1472,6 +1472,12 @@ def build_subscription_diagrams_by_rg(
                 continue
             seen_route_keys.add(route_key)
 
+            # Skip synthetic AKS service nodes unless the route row actually
+            # carries ingress context. This keeps the diagram focused on
+            # ingress-exposed services instead of every cluster-side service.
+            if not any(str(value or "").strip() for value in (ingress_name, host, path)):
+                continue
+
             ingress_display = str(host or "").strip() or ingress_label
             ingress_asset = {
                 "name": f"{cluster_name}-{namespace}-{ingress_label}-{str(host or path or 'route').replace('/', '_')}-ingress",
@@ -1507,38 +1513,6 @@ def build_subscription_diagrams_by_rg(
             }
 
             groups[cluster_rg or "default"].append(ingress_asset)
-
-            service_asset = {
-                "name": f"{cluster_name}-{namespace}-{service_name or deployment_name or 'service'}-{str(service_port or 'svc').replace('/', '_')}",
-                "node_variant": "aks_service",
-                "arm_type": "kubernetes_service",
-                "rg": cluster_rg or "default",
-                "fqdn": None,
-                "public": False,
-                "sku": None,
-                "id": f"aks-service::{route_key}",
-                "has_waf": False,
-                "waf_mode": None,
-                "listeners": None,
-                "routing_targets": [],
-                "is_restricted": False,
-                "tier": "backend",
-                "friendly_type": "Kubernetes Service",
-                "short_name": str(service_name or deployment_name or "Kubernetes Service").strip(),
-                "label": str(service_name or deployment_name or "Kubernetes Service").strip(),
-                "auth_methods": [],
-                "resources": [],
-                "source_cluster_rg": cluster_rg,
-                "source_cluster_name": cluster_name,
-                "source_namespace": namespace,
-                "source_service": service_name,
-                "source_service_port": service_port,
-                "source_deployment": deployment_name,
-                "source_repo": git_repository,
-                "source_labels": pod_template_labels,
-            }
-
-            groups[cluster_rg or "default"].append(service_asset)
 
     diagrams = []
 
@@ -1584,7 +1558,7 @@ def build_subscription_diagrams_by_rg(
         route_nodes_by_name: dict[str, list[dict]] = defaultdict(list)
         for asset in visible_rg_assets:
             variant = asset.get("node_variant")
-            if variant not in {"aks_ingress", "aks_service"}:
+            if variant != "aks_ingress":
                 continue
             cluster_key = (
                 str(asset.get("source_cluster_rg") or asset.get("rg") or "").strip().lower(),
@@ -1877,14 +1851,6 @@ def build_subscription_diagrams_by_rg(
                     continue
                 if (route_asset.get("node_variant") or "") == "aks_ingress":
                     add_edge(route_nid, cluster_nid, "routes to", "#f97316", dasharray="6,3")
-                elif (route_asset.get("node_variant") or "") == "aks_service":
-                    ingress_asset = next(
-                        (item for item in route_nodes_by_cluster.get(cluster_key, []) if (item.get("node_variant") or "") == "aks_ingress" and str(item.get("source_namespace") or "") == str(route_asset.get("source_namespace") or "")),
-                        None,
-                    )
-                    if ingress_asset:
-                        add_edge(subscription_node_id(ingress_asset, sanitise_node_id), route_nid, "targets", "#22c55e", dasharray="6,3")
-                    add_edge(route_nid, cluster_nid, "belongs to", "#64748b", dasharray="6,3")
 
         for asset in public_assets:
             if asset.get("tier") == "entry":
