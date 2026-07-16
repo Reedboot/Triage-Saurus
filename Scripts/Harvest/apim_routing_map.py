@@ -604,6 +604,23 @@ def harvest_backends(
     return len(backend_rows), linked_routes
 
 
+def harvest_routes(
+    subscription_id: str,
+    conn: sqlite3.Connection,
+    dry_run: bool = False,
+) -> int:
+    """Harvest APIM API→backend routes for every APIM instance in a subscription."""
+    apim_instances = list_apim_instances(subscription_id)
+    if not apim_instances:
+        print("  No APIM instances found — skipping")
+        return 0
+
+    total = 0
+    for apim in apim_instances:
+        total += process_apim(apim, subscription_id, conn, dry_run)
+    return total
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -663,14 +680,7 @@ def main() -> None:
         sub_id = sub["id"]
         sub_name = sub.get("name") or sub_id
         print(f"\n[subscription] {sub_name}")
-
-        apim_instances = list_apim_instances(sub_id)
-        if not apim_instances:
-            print("  No APIM instances found — skipping")
-            continue
-
-        for apim in apim_instances:
-            total += process_apim(apim, sub_id, conn, args.dry_run)
+        total += harvest_routes(sub_id, conn, args.dry_run)
 
     conn.close()
     print(f"\n[apim-routing] Done. {total} API routes across {len(target_subs)} subscription(s).")

@@ -233,8 +233,8 @@ def test_apim_routing_targets_render_explicit_backend_edge():
             None,
             json.dumps([
                 {
-                    "target": "cbuk-core-prodgreen-api-uksouth.azure-api.net",
-                    "name": "cbuk-core-prodgreen-api-uksouth",
+                    "target": "production-api-uksouth.azure-api.net",
+                    "name": "production-api-uksouth",
                 }
             ]),
             json.dumps({"properties": {"publicNetworkAccess": "Enabled"}}),
@@ -242,13 +242,13 @@ def test_apim_routing_targets_render_explicit_backend_edge():
             None,
         ),
         (
-            "cbuk-core-prodgreen-api-uksouth",
+            "production-api-uksouth",
             "microsoft.web/sites",
             "rg-backend",
-            "cbuk-core-prodgreen-api-uksouth.azure-api.net",
+            "production-api-uksouth.azure-api.net",
             False,
             "",
-            "/subscriptions/000/resourceGroups/rg-backend/providers/Microsoft.Web/sites/cbuk-core-prodgreen-api-uksouth",
+            "/subscriptions/000/resourceGroups/rg-backend/providers/Microsoft.Web/sites/production-api-uksouth",
             False,
             None,
             False,
@@ -264,7 +264,7 @@ def test_apim_routing_targets_render_explicit_backend_edge():
     mermaid = diagram["mermaid"]
 
     source_id = _sanitise_node_id("grp_APIM_Public")
-    target_id = _sanitise_node_id("rg-backend_cbuk-core-prodgreen-api-uksouth")
+    target_id = _sanitise_node_id("rg-backend_production-api-uksouth")
 
     assert source_id in mermaid
     assert target_id in mermaid

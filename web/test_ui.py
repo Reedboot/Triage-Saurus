@@ -1693,7 +1693,7 @@ class TestIngressDiagramGeneration:
             )
         ]
 
-    def _call(self, rows=None, plan_links=None, firewall_policy_rows=None, appgw_routes=None, aks_route_rows=None, appgw_waf_policy_rows=None):
+    def _call(self, rows=None, plan_links=None, firewall_policy_rows=None, appgw_routes=None, aks_route_rows=None, appgw_waf_policy_rows=None, apim_backend_rows=None, apim_route_map=None, apim_api_rows=None):
         import sys
         import os
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -1706,6 +1706,9 @@ class TestIngressDiagramGeneration:
             appgw_routes=appgw_routes,
             aks_route_rows=aks_route_rows,
             appgw_waf_policy_rows=appgw_waf_policy_rows,
+            apim_backend_rows=apim_backend_rows,
+            apim_route_map=apim_route_map,
+            apim_api_rows=apim_api_rows,
         )
 
     def test_internet_node_defined_once(self):
@@ -1749,7 +1752,7 @@ class TestIngressDiagramGeneration:
         appgw_routes = [
             (
                 "test-appgw",
-                "mtls.api.clearbank.co.uk",
+                "mtls.api.mydomain.co.uk",
                 '["apim-one.azure-api.net"]',
                 "pool-a",
                 "listener-a",
@@ -1759,7 +1762,7 @@ class TestIngressDiagramGeneration:
             ),
             (
                 "test-appgw",
-                "payments.api.clearbank.co.uk",
+                "payments.api.mydomain.co.uk",
                 '["apim-one.azure-api.net"]',
                 "pool-b",
                 "listener-b",
@@ -1774,11 +1777,11 @@ class TestIngressDiagramGeneration:
         assert "🛡️ WAF: waf-policy-a" in mermaid, mermaid
         assert "🛡️ WAF: waf-policy-b" in mermaid, mermaid
         assert (
-            'l_test_rg_test_appgw_HTTPS_mtls_api_clearbank_co_uk --> waf_test_rg_test_appgw_waf_policy_a'
+            'l_test_rg_test_appgw_HTTPS_mtls_api_mydomain_co_uk --> waf_test_rg_test_appgw_waf_policy_a'
             in mermaid
         ), mermaid
         assert (
-            'l_test_rg_test_appgw_HTTPS_payments_api_clearbank_co_uk --> waf_test_rg_test_appgw_waf_policy_b'
+            'l_test_rg_test_appgw_HTTPS_payments_api_mydomain_co_uk --> waf_test_rg_test_appgw_waf_policy_b'
             in mermaid
         ), mermaid
 
@@ -2179,14 +2182,14 @@ class TestIngressDiagramGeneration:
                 0,
                 None,
                 json.dumps([
-                    {"target": "prodgreen-authentication-totp.internal.cbinnovation.uk", "name": "prodgreen-authentication-totp.internal.cbinnovation.uk"}
+                    {"target": "production-authentication-totp.internal.cbinnovation.uk", "name": "production-authentication-totp.internal.cbinnovation.uk"}
                 ]),
                 json.dumps({}),
                 None,
                 None,
             ),
             (
-                "cbuk-core-prodgreen-shared-aks-uksouth",
+                "production-shared-aks-uksouth",
                 "Microsoft.ContainerService/managedClusters",
                 "rg-aks",
                 "",
@@ -2205,10 +2208,10 @@ class TestIngressDiagramGeneration:
         ]
         aks_route_rows = [
             (
-                "cbuk-core-prodgreen-shared-aks-uksouth",
+                "production-shared-aks-uksouth",
                 "default",
                 "authentication-totp-ingress",
-                "prodgreen-authentication-totp.internal.cbinnovation.uk",
+                "production-authentication-totp.internal.cbinnovation.uk",
                 "/*",
                 "Internal",
                 "authentication-totp",
@@ -2223,7 +2226,7 @@ class TestIngressDiagramGeneration:
         result = self._call(rows=rows, aks_route_rows=aks_route_rows)
         mermaid = result.get("mermaid", "")
         assert "Internet -->" not in mermaid, mermaid
-        assert "prodgreen-authentication-totp.internal.cbinnovation.uk" in mermaid, mermaid
+        assert "production-authentication-totp.internal.cbinnovation.uk" in mermaid, mermaid
 
     def test_apim_public_ip_is_rendered_on_apim_details(self):
         """APIM-linked Public IPs should appear on the APIM drilldown, not as a separate node."""
@@ -2576,7 +2579,7 @@ class TestIngressDiagramGeneration:
                 )
                 """
             )
-            plan_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/serverfarms/cbuk-core-prodgreen-institution-portal-uksouth"
+            plan_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/serverfarms/production-institution-portal-uksouth"
             conn.execute(
                 """
                 INSERT INTO provisioned_assets (name, resource_group, raw_json, type, subscription_id)
@@ -2597,7 +2600,7 @@ class TestIngressDiagramGeneration:
                     "rg-app",
                     "institution-portal",
                     "rg-app",
-                    "cbuk-core-prodgreen-institution-portal-uksouth",
+                    "production-institution-portal-uksouth",
                 )
             ], links
         finally:
@@ -3096,12 +3099,12 @@ class TestIngressDiagramGeneration:
 
             monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
             client = app_module.app.test_client()
-            resource_id = "cbuk_core_prodgreen_shared_aks_uksouth_cbuk_core_prodgreen_shared_aks_uksouth_prodgreen_account_products_isa_tisa_orchestrator_api_service_80"
+            resource_id = "production_aks_uksouth_production_aks_uksouth_production_account_products_orchestrator_api_service_80"
             resp = client.get(
                 "/api/cloud/resource-details",
                 query_string={
                     "id": resource_id,
-                    "name": "cbuk-core-prodgreen-shared-aks-uksouth-prodgreen-account-products-isa-tisa-orchestrator-api-service-80",
+                    "name": "production-shared-aks-uksouth-production-account-products-orchestrator-api-service-80",
                     "resource_group": "rg-app",
                     "type": "Kubernetes Service",
                     "sub": "sub-1",
@@ -3567,9 +3570,9 @@ class TestIngressDiagramGeneration:
                     "fn-1",
                     "sub-1",
                     "rg-app",
-                    "cbuk-core-prodgreen-fi-api-uksouth",
+                    "production-fi-api-uksouth",
                     "Microsoft.Web/sites",
-                    "cbuk-core-prodgreen-fi-api-uksouth.azurewebsites.net",
+                    "production-fi-api-uksouth.azurewebsites.net",
                     1,
                     0,
                     json.dumps({"kind": "functionapp,linux"}),
@@ -3580,7 +3583,7 @@ class TestIngressDiagramGeneration:
                 conn,
                 "sub-1",
                 "Microsoft.Web/sites",
-                [{"rg": "rg-app", "name": "cbuk-core-prodgreen-fi-api-uksouth"}],
+                [{"rg": "rg-app", "name": "production-fi-api-uksouth"}],
             )
         finally:
             conn.close()
@@ -3728,10 +3731,10 @@ class TestIngressDiagramGeneration:
                 None,
             ),
             (
-                "cbuk-core-prodgreen-api-uksouth",
+                "production-api-uksouth",
                 "Microsoft.ApiManagement/service",
                 "rg-api",
-                "cbuk-core-prodgreen-api-uksouth.azure-api.net",
+                "production-api-uksouth.azure-api.net",
                 1,
                 "Developer",
                 "apim-id",
@@ -3747,7 +3750,7 @@ class TestIngressDiagramGeneration:
             (
                 "cop-resource-server-apim",
                 "cop-resource-server-apim.example.com",
-                '["https://cbuk-core-prodgreen-api-uksouth.azure-api.net/"]',
+                '["https://production-api-uksouth.azure-api.net/"]',
                 "backend-pool",
                 "listener-one",
                 "/*",
@@ -3759,7 +3762,81 @@ class TestIngressDiagramGeneration:
         result = self._call(rows=rows, appgw_routes=appgw_routes)
         mermaid = result.get("mermaid", "")
         assert 'agpool_rg_app_cop_resource_server_apim_backend_pool -->|"HTTPS"| grp_APIM_Public' in mermaid, mermaid
-        assert "cbuk-core-prodgreen-api-uksouth.azure-api.net" in mermaid, mermaid
+        assert "production-api-uksouth.azure-api.net" in mermaid, mermaid
+
+    def test_apim_api_nodes_and_backend_targets_render_as_separate_hops(self):
+        """APIM routes should show API → APIM → backend target → workload."""
+        rows = [
+            (
+                "production-api-uksouth",
+                "Microsoft.ApiManagement/service",
+                "rg-api",
+                "production-api-uksouth.azure-api.net",
+                1,
+                "Developer",
+                "/subscriptions/000/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/production-api-uksouth",
+                0,
+                None,
+                0,
+                None,
+                None,
+                "{}",
+                None,
+                None,
+            ),
+            (
+                "production-internal-transfers-fn-uksouth",
+                "Microsoft.Web/sites",
+                "rg-backend",
+                "production-internal-transfers-fn-uksouth.azurewebsites.net",
+                1,
+                "Y1",
+                "/subscriptions/000/resourceGroups/rg-backend/providers/Microsoft.Web/sites/production-internal-transfers-fn-uksouth",
+                0,
+                None,
+                0,
+                None,
+                None,
+                "{}",
+                None,
+                None,
+            ),
+        ]
+        apim_api_rows = [
+            {
+                "apim_name": "production-api-uksouth",
+                "apim_resource_id": "/subscriptions/000/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/production-api-uksouth",
+                "api_name": "orders-api",
+                "api_display_name": "Orders API",
+                "api_path": "/orders",
+            }
+        ]
+        apim_backend_rows = [
+            {
+                "apim_name": "production-api-uksouth",
+                "backend_id": "internal-transfers",
+                "title": "internal-transfers",
+                "url": "https://production-internal-transfers-fn-uksouth.azurewebsites.net/",
+            }
+        ]
+        apim_route_map = {
+            "production-api-uksouth": [
+                "https://production-internal-transfers-fn-uksouth.azurewebsites.net/",
+            ]
+        }
+
+        result = self._call(
+            rows=rows,
+            apim_api_rows=apim_api_rows,
+            apim_backend_rows=apim_backend_rows,
+            apim_route_map=apim_route_map,
+        )
+        mermaid = result.get("mermaid", "")
+        assert "Orders API" in mermaid, mermaid
+        assert "internal-transfers" in mermaid, mermaid
+        assert mermaid.index("Orders API") < mermaid.index("production-api-uksouth.azure-api.net"), mermaid
+        assert mermaid.index("production-api-uksouth.azure-api.net") < mermaid.index("internal-transfers"), mermaid
+        assert " -->|\"Routing\"| " in mermaid, mermaid
 
     def test_apim_does_not_infer_untargeted_backend_edges(self):
         """APIM should only render confirmed backend routes, not heuristic fanout edges."""
@@ -3767,10 +3844,10 @@ class TestIngressDiagramGeneration:
 
         rows = [
             (
-                "cbuk-core-prodgreen-api-uksouth",
+                "production-api-uksouth",
                 "Microsoft.ApiManagement/service",
                 "rg-api",
-                "cbuk-core-prodgreen-api-uksouth.azure-api.net",
+                "production-api-uksouth.azure-api.net",
                 1,
                 "Developer",
                 "apim-id",
@@ -3782,10 +3859,10 @@ class TestIngressDiagramGeneration:
                 "{}",
             ),
             (
-                "cbuk-core-prodgreen-internal-transfers-fn-uksouth",
+                "production-internal-transfers-fn-uksouth",
                 "Microsoft.Web/sites",
-                "cbuk-core-prodgreen-internal-transfers-fn-uksouth",
-                "cbuk-core-prodgreen-internal-transfers-fn-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                "production-internal-transfers-fn-uksouth",
+                "production-internal-transfers-fn-uksouth.production-shared-uksouth.appserviceenvironment.net",
                 1,
                 "Y1",
                 "fn-id",
@@ -3846,8 +3923,8 @@ class TestIngressDiagramGeneration:
                 "cop-resource-server-apim",
                 "cop-resource-server-apim.example.com",
                 json.dumps([
-                    "https://cbuk-core-prodgreen-cards-management-web-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net/",
-                    "https://cbuk-core-prodgreen-institution-portal-crm-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net/",
+                    "https://production-cards-management-web-uksouth.production-shared-uksouth.appserviceenvironment.net/",
+                    "https://production-institution-portal-crm-uksouth.production-shared-uksouth.appserviceenvironment.net/",
                 ]),
                 "backend-pool",
                 "listener-one",
@@ -3905,7 +3982,7 @@ class TestIngressDiagramGeneration:
             (
                 "cop-resource-server-apim",
                 "cop-resource-server-apim.example.com",
-                json.dumps(["https://cbuk-core-prodgreen-institution-portal-internal-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net/"]),
+                json.dumps(["https://production-institution-portal-internal-uksouth.production-shared-uksouth.appserviceenvironment.net/"]),
                 "institution-portal-internal",
                 "listener-one",
                 "/*",
@@ -3915,7 +3992,7 @@ class TestIngressDiagramGeneration:
             (
                 "cop-resource-server-apim",
                 "cop-resource-server-apim.example.com",
-                json.dumps(["https://cbuk-core-prodgreen-transaction-notifications-f-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net/"]),
+                json.dumps(["https://production-transaction-notifications-f-uksouth.production-shared-uksouth.appserviceenvironment.net/"]),
                 "transactionnotifications",
                 "listener-two",
                 "/*",
@@ -4950,6 +5027,53 @@ class TestCloudPosture:
         assert len(waf_nodes) == 1, payload
         assert waf_nodes[0]["data"].get("label") == "policy-one", waf_nodes[0]
 
+    def test_subscription_architecture_payload_places_waf_before_gateway(self):
+        import json
+        import sqlite3
+
+        from web.app import _build_ingress_diagram
+
+        rows = [[
+            "appgw-one",
+            "Microsoft.Network/applicationGateways",
+            "rg-net",
+            "appgw-one.example.com",
+            1,
+            "WAF_v2",
+            "gw-1",
+            True,
+            [],
+            False,
+            "Prevention",
+            [],
+            "{}",
+            [],
+            None,
+        ]]
+        appgw_routes = [(
+            "appgw-one",
+            "appgw-one.example.com",
+            json.dumps(["api.example.com"]),
+            "pool-a",
+            "listener-a",
+            "/*",
+            "HTTPS",
+            "policy-one",
+        )]
+        waf_rows = [(
+            "policy-one",
+            json.dumps(["appgw-one"]),
+            "Enabled",
+        )]
+
+        mermaid = _build_ingress_diagram(
+            rows,
+            appgw_routes=appgw_routes,
+            appgw_waf_policy_rows=waf_rows,
+        )["mermaid"]
+        assert mermaid.index("waf_rg_net_appgw_one_policy_one") < mermaid.index("rg_net_appgw_one"), mermaid
+        assert "waf_rg_net_appgw_one_policy_one --> rg_net_appgw_one" in mermaid, mermaid
+
     def test_subscription_architecture_payload_joins_appgw_backend_pool_to_apim(self):
         import json
         import sqlite3
@@ -5178,7 +5302,7 @@ class TestCloudPosture:
                         "Microsoft.Web/sites",
                         "uksouth",
                         "P1v3",
-                        "example-transaction-notifications-f-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                        "example-transaction-notifications-f-uksouth.production-shared-uksouth.appserviceenvironment.net",
                         0,
                         "active",
                         None,
@@ -5196,7 +5320,7 @@ class TestCloudPosture:
                         "Microsoft.Web/sites",
                         "uksouth",
                         "P1v3",
-                        "example-institution-portal-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                        "example-institution-portal-uksouth.production-shared-uksouth.appserviceenvironment.net",
                         0,
                         "active",
                         None,
@@ -5220,8 +5344,8 @@ class TestCloudPosture:
                     "sub-1",
                     "appgw-one",
                     json.dumps([
-                        "example-transaction-notifications-f-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
-                        "example-institution-portal-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                        "example-transaction-notifications-f-uksouth.production-shared-uksouth.appserviceenvironment.net",
+                        "example-institution-portal-uksouth.production-shared-uksouth.appserviceenvironment.net",
                     ]),
                     "ase-backend-pool",
                     "listener-one",
@@ -5297,7 +5421,7 @@ class TestCloudPosture:
                 ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
             )
             gw_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/appgw-one"
-            ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/prodgreen-shared-uksouth"
+            ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/production-shared-uksouth"
             conn.executemany(
                 """
                 INSERT INTO provisioned_assets (
@@ -5329,11 +5453,11 @@ class TestCloudPosture:
                         ase_id,
                         "sub-1",
                         "rg-app",
-                        "prodgreen-shared-uksouth",
+                        "production-shared-uksouth",
                         "Microsoft.Web/hostingEnvironments",
                         "uksouth",
                         "ASEv3",
-                        "prodgreen-shared-uksouth.appserviceenvironment.net",
+                        "production-shared-uksouth.appserviceenvironment.net",
                         0,
                         "active",
                         None,
@@ -5357,7 +5481,7 @@ class TestCloudPosture:
                     "sub-1",
                     "appgw-one",
                     json.dumps([
-                        "cbuk-core-prodgreen-institution-portal-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                        "production-institution-portal-uksouth.production-shared-uksouth.appserviceenvironment.net",
                     ]),
                     "institution-portal",
                     "listener-one",
@@ -5378,10 +5502,10 @@ class TestCloudPosture:
 
         assert resp.status_code == 200, resp.get_data(as_text=True)
         mermaid = resp.get_json()["ingress_diagram"]["mermaid"]
-        assert 'prodgreen_shared_uksouth["' in mermaid, mermaid
+        assert 'production_shared_uksouth["' in mermaid, mermaid
         assert "appserviceenvironment.net" not in mermaid, mermaid
         assert any(
-            line.startswith("    rg_net_appgw_one -->") and "rg_app_prodgreen_shared_uksouth" in line
+            line.startswith("    rg_net_appgw_one -->") and "rg_app_production_shared_uksouth" in line
             for line in mermaid.splitlines()
         ), mermaid
 
@@ -5441,7 +5565,7 @@ class TestCloudPosture:
                 ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
             )
             gw_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/appgw-one"
-            ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/prodgreen-shared-uksouth"
+            ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/production-shared-uksouth"
             site_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/institution-portal"
             conn.executemany(
                 """
@@ -5474,11 +5598,11 @@ class TestCloudPosture:
                         ase_id,
                         "sub-1",
                         "rg-app",
-                        "prodgreen-shared-uksouth",
+                        "production-shared-uksouth",
                         "Microsoft.Web/hostingEnvironments",
                         "uksouth",
                         "ASEv3",
-                        "prodgreen-shared-uksouth.appserviceenvironment.net",
+                        "production-shared-uksouth.appserviceenvironment.net",
                         0,
                         "active",
                         None,
@@ -5520,7 +5644,7 @@ class TestCloudPosture:
                     "sub-1",
                     "appgw-one",
                     json.dumps([
-                        "cbuk-core-prodgreen-institution-portal-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                        "production-institution-portal-uksouth.production-shared-uksouth.appserviceenvironment.net",
                     ]),
                     "institution-portal",
                     "listener-one",
@@ -5543,10 +5667,10 @@ class TestCloudPosture:
         assert resp.status_code == 200, resp.get_data(as_text=True)
         mermaid = resp.get_json()["ingress_diagram"]["mermaid"]
         assert "agpool_rg_net_appgw_one_institution_portal" in mermaid, mermaid
-        assert "rg_app_prodgreen_shared_uksouth" in mermaid, mermaid
+        assert "rg_app_production_shared_uksouth" in mermaid, mermaid
         assert any(
             line.startswith("    agpool_rg_net_appgw_one_institution_portal -->")
-            and "rg_app_prodgreen_shared_uksouth" in line
+            and "rg_app_production_shared_uksouth" in line
             for line in mermaid.splitlines()
         ), mermaid
 
@@ -5643,14 +5767,14 @@ class TestCloudPosture:
             """,
             [
                 (
-                    "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/cbuk-core-prodgreen-api-uksouth",
+                    "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/production-api-uksouth",
                     "sub-1",
                     "rg-api",
-                    "cbuk-core-prodgreen-api-uksouth",
+                    "production-api-uksouth",
                     "Microsoft.ApiManagement/service",
                     "uksouth",
                     "Developer",
-                    "cbuk-core-prodgreen-api-uksouth.azure-api.net",
+                    "production-api-uksouth.azure-api.net",
                     1,
                     "active",
                     None,
@@ -5661,14 +5785,14 @@ class TestCloudPosture:
                     None,
                 ),
                 (
-                    "/subscriptions/sub-1/resourceGroups/rg-backend/providers/Microsoft.Web/sites/cbuk-core-prodgreen-internal-transfers-fn-uksouth",
+                    "/subscriptions/sub-1/resourceGroups/rg-backend/providers/Microsoft.Web/sites/production-internal-transfers-fn-uksouth",
                     "sub-1",
                     "rg-backend",
-                    "cbuk-core-prodgreen-internal-transfers-fn-uksouth",
+                    "production-internal-transfers-fn-uksouth",
                     "Microsoft.Web/sites",
                     "uksouth",
                     "Y1",
-                    "cbuk-core-prodgreen-internal-transfers-fn-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                    "production-internal-transfers-fn-uksouth.production-shared-uksouth.appserviceenvironment.net",
                     0,
                     "active",
                     None,
@@ -5688,13 +5812,13 @@ class TestCloudPosture:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "cbuk-core-prodgreen-api-uksouth::internal-transfers",
+                "production-api-uksouth::internal-transfers",
                 "sub-1",
-                "cbuk-core-prodgreen-api-uksouth",
+                "production-api-uksouth",
                 "internal-transfers",
                 "internal-transfers",
                 None,
-                "https://cbuk-core-prodgreen-internal-transfers-fn-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                "https://production-internal-transfers-fn-uksouth.production-shared-uksouth.appserviceenvironment.net",
                 "http",
                 None,
                 None,
@@ -5712,17 +5836,17 @@ class TestCloudPosture:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "cbuk-core-prodgreen-api-uksouth::internal-transfers",
+                "production-api-uksouth::internal-transfers",
                 "sub-1",
-                "cbuk-core-prodgreen-api-uksouth",
-                "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/cbuk-core-prodgreen-api-uksouth",
+                "production-api-uksouth",
+                "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/production-api-uksouth",
                 "internal-transfers",
                 "Internal Transfers",
                 "/internal-transfers",
                 json.dumps(["HTTPS"]),
                 "internal-transfers",
-                "https://cbuk-core-prodgreen-internal-transfers-fn-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
-                "https://cbuk-core-prodgreen-api-uksouth.azure-api.net",
+                "https://production-internal-transfers-fn-uksouth.production-shared-uksouth.appserviceenvironment.net",
+                "https://production-api-uksouth.azure-api.net",
                 1,
                 json.dumps([]),
                 "Public",
@@ -5748,7 +5872,7 @@ class TestCloudPosture:
             for line in mermaid.splitlines()
         ), mermaid
         assert any(
-            "internal_transfers" in line and "cbuk_core_prodgreen_internal_transfers_fn_uksouth" in line
+            "internal_transfers" in line and "production_internal_transfers_fn_uksouth" in line
             for line in mermaid.splitlines()
         ), mermaid
         os.unlink(tmp.name)
@@ -5836,7 +5960,7 @@ class TestCloudPosture:
             "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
             ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
         )
-        apim_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/cbuk-core-prodgreen-api-uksouth"
+        apim_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/production-api-uksouth"
         backend_site_id = "/subscriptions/sub-1/resourceGroups/rg-backend/providers/Microsoft.Web/sites/transactionnotifications"
         conn.executemany(
             """
@@ -5851,11 +5975,11 @@ class TestCloudPosture:
                     apim_id,
                     "sub-1",
                     "rg-api",
-                    "cbuk-core-prodgreen-api-uksouth",
+                    "production-api-uksouth",
                     "Microsoft.ApiManagement/service",
                     "uksouth",
                     "Developer",
-                    "cbuk-core-prodgreen-api-uksouth.azure-api.net",
+                    "production-api-uksouth.azure-api.net",
                     1,
                     "active",
                     None,
@@ -5893,13 +6017,13 @@ class TestCloudPosture:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "cbuk-core-prodgreen-api-uksouth::transactionnotifications",
+                "production-api-uksouth::transactionnotifications",
                 "sub-1",
-                "cbuk-core-prodgreen-api-uksouth",
+                "production-api-uksouth",
                 "transactionnotifications",
                 "transactionnotifications",
                 None,
-                "https://cbuk-core-prodgreen-transaction-notifications-f-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                "https://production-transaction-notifications-f-uksouth.production-shared-uksouth.appserviceenvironment.net",
                 "http",
                 None,
                 None,
@@ -5917,17 +6041,17 @@ class TestCloudPosture:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "cbuk-core-prodgreen-api-uksouth::transactionnotifications",
+                "production-api-uksouth::transactionnotifications",
                 "sub-1",
-                "cbuk-core-prodgreen-api-uksouth",
+                "production-api-uksouth",
                 apim_id,
                 "transactionnotifications",
                 "transactionnotifications",
                 "/transactionnotifications",
                 json.dumps(["HTTPS"]),
                 "transactionnotifications",
-                "https://cbuk-core-prodgreen-transaction-notifications-f-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
-                "https://cbuk-core-prodgreen-api-uksouth.azure-api.net",
+                "https://production-transaction-notifications-f-uksouth.production-shared-uksouth.appserviceenvironment.net",
+                "https://production-api-uksouth.azure-api.net",
                 1,
                 json.dumps([]),
                 "Internal",
@@ -6022,11 +6146,11 @@ class TestCloudPosture:
             "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
             ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
         )
-        topic_name = "clearbank.bacs.events.payments.bacsdirectcreditrecalledevent"
-        fn_name = "cbuk-core-prodgreen-bacs-dcr-webhook-uksouth"
-        ns_name = "cbuk-core-prodgreen-servicebus-uksouth"
+        topic_name = "mydomain.service.events.payments.servicedirectcreditrecalledevent"
+        fn_name = "production-service-dcr-webhook-uksouth"
+        ns_name = "production-servicebus-uksouth"
         ns_id = "/subscriptions/sub-1/resourceGroups/rg-msg/providers/Microsoft.ServiceBus/namespaces/" + ns_name
-        topic_id = "/subscriptions/sub-1/resourceGroups/rg-msg/providers/Microsoft.ServiceBus/namespaces/cbuk-core-prodgreen-servicebus-uksouth/topics/" + topic_name
+        topic_id = "/subscriptions/sub-1/resourceGroups/rg-msg/providers/Microsoft.ServiceBus/namespaces/production-servicebus-uksouth/topics/" + topic_name
         fn_id = "/subscriptions/sub-1/resourceGroups/rg-fn/providers/Microsoft.Web/sites/" + fn_name
         conn.executemany(
             """
@@ -6045,7 +6169,7 @@ class TestCloudPosture:
                     "Microsoft.ServiceBus/namespaces",
                     "uksouth",
                     "Standard",
-                    "cbuk-core-prodgreen-servicebus-uksouth.servicebus.windows.net",
+                    "production-servicebus-uksouth.servicebus.windows.net",
                     0,
                     "active",
                     None,
@@ -6081,7 +6205,7 @@ class TestCloudPosture:
                     "Microsoft.Web/sites",
                     "uksouth",
                     "Y1",
-                    fn_name + ".prodgreen-shared-uksouth.appserviceenvironment.net",
+                    fn_name + ".production-shared-uksouth.appserviceenvironment.net",
                     0,
                     "active",
                     None,
@@ -6111,7 +6235,7 @@ class TestCloudPosture:
                 "servicebustrigger",
                 "topic",
                 topic_name,
-                "bacs_direct_credit_recalled_event_topic_subscription",
+                "service_direct_credit_recalled_event_topic_subscription",
                 "ServiceBusConnection",
                 "2026-06-01T00:00:00Z",
             ),
@@ -6524,7 +6648,7 @@ class TestCloudPosture:
             "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
             ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
         )
-        apim_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/cbuk-core-prodgreen-api-uksouth"
+        apim_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/production-api-uksouth"
         backend_site_id = "/subscriptions/sub-1/resourceGroups/rg-backend/providers/Microsoft.Web/sites/transactionnotifications"
         conn.executemany(
             """
@@ -6539,11 +6663,11 @@ class TestCloudPosture:
                     apim_id,
                     "sub-1",
                     "rg-api",
-                    "cbuk-core-prodgreen-api-uksouth",
+                    "production-api-uksouth",
                     "Microsoft.ApiManagement/service",
                     "uksouth",
                     "Developer",
-                    "cbuk-core-prodgreen-api-uksouth.azure-api.net",
+                    "production-api-uksouth.azure-api.net",
                     1,
                     "active",
                     None,
@@ -6581,13 +6705,13 @@ class TestCloudPosture:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "cbuk-core-prodgreen-api-uksouth::transactionnotifications",
+                "production-api-uksouth::transactionnotifications",
                 "sub-1",
-                "cbuk-core-prodgreen-api-uksouth",
+                "production-api-uksouth",
                 "transactionnotifications",
                 "transactionnotifications",
                 None,
-                "https://cbuk-core-prodgreen-transaction-notifications-f-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                "https://production-transaction-notifications-f-uksouth.production-shared-uksouth.appserviceenvironment.net",
                 "http",
                 None,
                 None,
@@ -6605,17 +6729,17 @@ class TestCloudPosture:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "cbuk-core-prodgreen-api-uksouth::transactionnotifications",
+                "production-api-uksouth::transactionnotifications",
                 "sub-1",
-                "cbuk-core-prodgreen-api-uksouth",
+                "production-api-uksouth",
                 apim_id,
                 "transactionnotifications",
                 "transactionnotifications",
                 "/transactionnotifications",
                 json.dumps(["HTTPS"]),
                 "transactionnotifications",
-                "https://cbuk-core-prodgreen-transaction-notifications-f-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
-                "https://cbuk-core-prodgreen-api-uksouth.azure-api.net",
+                "https://production-transaction-notifications-f-uksouth.production-shared-uksouth.appserviceenvironment.net",
+                "https://production-api-uksouth.azure-api.net",
                 1,
                 json.dumps([]),
                 "Internal",
@@ -6636,9 +6760,9 @@ class TestCloudPosture:
         finally:
             conn.close()
 
-        assert "class rg_api_cbuk_core_prodgreen_api_uksouth__transactionnotifications apimBackendPool;" in mermaid, mermaid
+        assert "class rg_api_production_api_uksouth__transactionnotifications apimBackendPool;" in mermaid, mermaid
         assert any(
-            "rg_api_cbuk_core_prodgreen_api_uksouth__transactionnotifications -->" in line
+            "rg_api_production_api_uksouth__transactionnotifications -->" in line
             and "rg_backend_transactionnotifications" in line
             for line in mermaid.splitlines()
         ), mermaid
@@ -6699,7 +6823,7 @@ class TestCloudPosture:
                 ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
             )
             gw_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/appgw-one"
-            ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/prodgreen-shared-uksouth"
+            ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/production-shared-uksouth"
             conn.executemany(
                 """
                 INSERT INTO provisioned_assets (
@@ -6731,11 +6855,11 @@ class TestCloudPosture:
                         ase_id,
                         "sub-1",
                         "rg-app",
-                        "prodgreen-shared-uksouth",
+                        "production-shared-uksouth",
                         "Microsoft.Web/hostingEnvironments",
                         "uksouth",
                         "ASEv3",
-                        "prodgreen-shared-uksouth.appserviceenvironment.net",
+                        "production-shared-uksouth.appserviceenvironment.net",
                         0,
                         "active",
                         None,
@@ -6760,7 +6884,7 @@ class TestCloudPosture:
                         "sub-1",
                         "appgw-one",
                         json.dumps([
-                            "cbuk-core-prodgreen-fi-api-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                            "production-fi-api-uksouth.production-shared-uksouth.appserviceenvironment.net",
                         ]),
                         "fiapi",
                         "listener-one",
@@ -6775,7 +6899,7 @@ class TestCloudPosture:
                         "sub-1",
                         "appgw-one",
                         json.dumps([
-                            "cbuk-core-prodgreen-institution-portal-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net",
+                            "production-institution-portal-uksouth.production-shared-uksouth.appserviceenvironment.net",
                         ]),
                         "institution-portal",
                         "listener-two",
@@ -6800,14 +6924,28 @@ class TestCloudPosture:
         mermaid = resp.get_json()["ingress_diagram"]["mermaid"]
         assert any(
             line.startswith("    agpool_rg_net_appgw_one_institution_portal -->")
-            and "rg_app_prodgreen_shared_uksouth" in line
+            and "rg_app_production_shared_uksouth" in line
             for line in mermaid.splitlines()
         ), mermaid
         assert any(
             line.startswith("    agpool_rg_net_appgw_one_fiapi -->")
-            and "rg_app_prodgreen_shared_uksouth" in line
+            and "rg_app_production_shared_uksouth" in line
             for line in mermaid.splitlines()
         ), mermaid
+
+    def test_routing_target_resolver_matches_confirmed_app_fqdn_from_ase_host(self):
+        import web.app as app_module
+
+        node_id = app_module._resolve_routing_target_node_id(
+            {
+                "target": "production-fi-api-uksouth.production-shared-uksouth.appserviceenvironment.net",
+                "fqdn": "production-fi-api-uksouth.production-shared-uksouth.appserviceenvironment.net",
+                "name": "production-fi-api-uksouth.azurewebsites.net",
+            },
+            node_by_fqdn={"production-fi-api-uksouth.azurewebsites.net": "node-fi-api"},
+        )
+
+        assert node_id == "node-fi-api"
 
     def test_subscription_architecture_payload_links_nested_ase_siteconfig_parent(self):
         import json
@@ -6880,7 +7018,7 @@ class TestCloudPosture:
                 "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
                 ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
             )
-            ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/prodgreen-shared-uksouth"
+            ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/production-shared-uksouth"
             site_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/institution-portal"
             conn.executemany(
                 """
@@ -6895,11 +7033,11 @@ class TestCloudPosture:
                         ase_id,
                         "sub-1",
                         "rg-app",
-                        "prodgreen-shared-uksouth",
+                        "production-shared-uksouth",
                         "Microsoft.Web/hostingEnvironments",
                         "uksouth",
                         "ASEv3",
-                        "prodgreen-shared-uksouth.appserviceenvironment.net",
+                        "production-shared-uksouth.appserviceenvironment.net",
                         0,
                         "active",
                         None,
@@ -7016,9 +7154,9 @@ class TestCloudPosture:
                 "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
                 ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
             )
-            cluster_id = "/subscriptions/sub-1/resourceGroups/cbuk-core-prodgreen-sf-uksouth/providers/Microsoft.ServiceFabric/clusters/cbuk-core-prodgreen-sf"
-            vmss_id = "/subscriptions/sub-1/resourceGroups/cbuk-core-prodgreen-sf-uksouth/providers/Microsoft.Compute/virtualMachineScaleSets/sharedz1"
-            subnet_id = "/subscriptions/sub-1/resourceGroups/cbuk-core-prodgreen-network-uksouth/providers/Microsoft.Network/virtualNetworks/prodgreen/subnets/service_fabric_zonal"
+            cluster_id = "/subscriptions/sub-1/resourceGroups/production-sf-uksouth/providers/Microsoft.ServiceFabric/clusters/production-sf"
+            vmss_id = "/subscriptions/sub-1/resourceGroups/production-sf-uksouth/providers/Microsoft.Compute/virtualMachineScaleSets/sharedz1"
+            subnet_id = "/subscriptions/sub-1/resourceGroups/production-network-uksouth/providers/Microsoft.Network/virtualNetworks/production/subnets/service_fabric_zonal"
             conn.executemany(
                 """
                 INSERT INTO provisioned_assets (
@@ -7031,8 +7169,8 @@ class TestCloudPosture:
                     (
                         cluster_id,
                         "sub-1",
-                        "cbuk-core-prodgreen-sf-uksouth",
-                        "cbuk-core-prodgreen-sf",
+                        "production-sf-uksouth",
+                        "production-sf",
                         "Microsoft.ServiceFabric/clusters",
                         "uksouth",
                         "Standard",
@@ -7049,7 +7187,7 @@ class TestCloudPosture:
                     (
                         vmss_id,
                         "sub-1",
-                        "cbuk-core-prodgreen-sf-uksouth",
+                        "production-sf-uksouth",
                         "sharedz1",
                         "Microsoft.Compute/virtualMachineScaleSets",
                         "uksouth",
@@ -7093,15 +7231,15 @@ class TestCloudPosture:
             assert graph_resp.status_code == 200, graph_resp.get_data(as_text=True)
             graph = graph_resp.get_json()
             mermaid = graph["views"]["connectivity"]["mermaid"]
-            cluster_node_id = app_module._sanitise_node_id("cbuk-core-prodgreen-sf-uksouth_cbuk-core-prodgreen-sf")
-            vmss_node_id = app_module._sanitise_node_id("cbuk-core-prodgreen-sf-uksouth_sharedz1")
+            cluster_node_id = app_module._sanitise_node_id("production-sf-uksouth_production-sf")
+            vmss_node_id = app_module._sanitise_node_id("production-sf-uksouth_sharedz1")
             assert f'{cluster_node_id} -->|"contains"| {vmss_node_id}' in mermaid, mermaid
         finally:
             app_module._get_db_with_schema = original_get_db
             conn.close()
 
         cluster_node = next(node for node in payload["nodes"] if node["id"] == cluster_id)
-        assert cluster_node["data"].get("vnetName") == "prodgreen", cluster_node
+        assert cluster_node["data"].get("vnetName") == "production", cluster_node
         assert cluster_node["data"].get("subnetName") == "service_fabric_zonal", cluster_node
 
     def test_subscription_architecture_payload_links_service_fabric_vmss_across_resource_groups(self):
@@ -7182,9 +7320,9 @@ class TestCloudPosture:
                 "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
                 ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
             )
-            cluster_id = "/subscriptions/sub-1/resourceGroups/cbuk-core-prodgreen-sf-uksouth/providers/Microsoft.ServiceFabric/clusters/cbuk-core-prodgreen-sf"
-            vmss_id = "/subscriptions/sub-1/resourceGroups/cbuk-core-prodgreen-compute-uksouth/providers/Microsoft.Compute/virtualMachineScaleSets/sharedz1"
-            subnet_id = "/subscriptions/sub-1/resourceGroups/cbuk-core-prodgreen-network-uksouth/providers/Microsoft.Network/virtualNetworks/prodgreen/subnets/service_fabric_zonal"
+            cluster_id = "/subscriptions/sub-1/resourceGroups/production-sf-uksouth/providers/Microsoft.ServiceFabric/clusters/production-sf"
+            vmss_id = "/subscriptions/sub-1/resourceGroups/production-compute-uksouth/providers/Microsoft.Compute/virtualMachineScaleSets/sharedz1"
+            subnet_id = "/subscriptions/sub-1/resourceGroups/production-network-uksouth/providers/Microsoft.Network/virtualNetworks/production/subnets/service_fabric_zonal"
             conn.executemany(
                 """
                 INSERT INTO provisioned_assets (
@@ -7197,8 +7335,8 @@ class TestCloudPosture:
                     (
                         cluster_id,
                         "sub-1",
-                        "cbuk-core-prodgreen-sf-uksouth",
-                        "cbuk-core-prodgreen-sf",
+                        "production-sf-uksouth",
+                        "production-sf",
                         "Microsoft.ServiceFabric/clusters",
                         "uksouth",
                         "Standard",
@@ -7215,7 +7353,7 @@ class TestCloudPosture:
                     (
                         vmss_id,
                         "sub-1",
-                        "cbuk-core-prodgreen-compute-uksouth",
+                        "production-compute-uksouth",
                         "sharedz1",
                         "Microsoft.Compute/virtualMachineScaleSets",
                         "uksouth",
@@ -7258,8 +7396,8 @@ class TestCloudPosture:
             assert graph_resp.status_code == 200, graph_resp.get_data(as_text=True)
             graph = graph_resp.get_json()
             mermaid = graph["views"]["connectivity"]["mermaid"]
-            cluster_node_id = app_module._sanitise_node_id("cbuk-core-prodgreen-sf-uksouth_cbuk-core-prodgreen-sf")
-            vmss_node_id = app_module._sanitise_node_id("cbuk-core-prodgreen-compute-uksouth_sharedz1")
+            cluster_node_id = app_module._sanitise_node_id("production-sf-uksouth_production-sf")
+            vmss_node_id = app_module._sanitise_node_id("production-compute-uksouth_sharedz1")
             assert f'{cluster_node_id} -->|"contains"| {vmss_node_id}' in mermaid, mermaid
         finally:
             app_module._get_db_with_schema = original_get_db
@@ -7364,7 +7502,7 @@ class TestCloudPosture:
                         json.dumps({
                             "_extra": {
                                 "node_types": [{"name": "sharedz1"}],
-                                "subnet_id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/prodgreen/subnets/service_fabric",
+                                "subnet_id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/production/subnets/service_fabric",
                             }
                         }),
                         0,
@@ -7395,7 +7533,7 @@ class TestCloudPosture:
                                                     "ipConfigurations": [
                                                         {
                                                             "properties": {
-                                                                "subnet": {"id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/prodgreen/subnets/service_fabric"}
+                                                                "subnet": {"id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/production/subnets/service_fabric"}
                                                             }
                                                         }
                                                     ]
@@ -7580,7 +7718,7 @@ class TestCloudPosture:
                     "DirectCredit",
                     "servicebustrigger",
                     "topic",
-                    "clearbank.bacs.events.payments.bacsdirectcreditrecalledevent",
+                    "mydomain.service.events.payments.servicedirectcreditrecalledevent",
                     "sb-subscription",
                     "servicebus-connection",
                     "2026-06-01T00:00:00Z",
@@ -8212,7 +8350,7 @@ class TestCloudPosture:
                     "DirectCredit",
                     "servicebustrigger",
                     "topic",
-                    "clearbank.bacs.events.payments.bacsdirectcreditrecalledevent",
+                    "mydomain.service.events.payments.servicedirectcreditrecalledevent",
                     "sb-subscription",
                     "servicebus-connection",
                     "2026-06-01T00:00:00Z",
@@ -8259,7 +8397,7 @@ class TestCloudPosture:
                 "DirectCredit",
                 "servicebustrigger",
                 "topic",
-                "clearbank.bacs.events.payments.bacsdirectcreditrecalledevent",
+                "mydomain.service.events.payments.servicedirectcreditrecalledevent",
                 "sb-subscription",
                 "servicebus-connection",
                 "2026-06-01T00:00:00Z",
@@ -8623,7 +8761,7 @@ class TestCloudPosture:
                 "DirectCredit",
                 "servicebustrigger",
                 "topic",
-                "clearbank.bacs.events.payments.bacsdirectcreditrecalledevent",
+                "mydomain.service.events.payments.servicedirectcreditrecalledevent",
                 "sb-subscription",
                 "servicebus-connection",
                 "2026-06-01T00:00:00Z",
@@ -8862,7 +9000,7 @@ class TestCloudPosture:
                 "DirectCredit",
                 "servicebustrigger",
                 "topic",
-                "clearbank.bacs.events.payments.bacsdirectcreditrecalledevent",
+                "mydomain.service.events.payments.servicedirectcreditrecalledevent",
                 "sb-subscription",
                 "servicebus-connection",
                 "2026-06-01T00:00:00Z",
@@ -9341,7 +9479,7 @@ class TestCloudPosture:
                 "sub-1",
                 "cop-resource-server-apim",
                 json.dumps([
-                    "https://cbuk-core-prodgreen-cards-management-web-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net/"
+                    "https://production-cards-management-web-uksouth.production-shared-uksouth.appserviceenvironment.net/"
                 ]),
                 "backend-pool",
                 "listener-1",
@@ -9422,7 +9560,7 @@ class TestCloudPosture:
             "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
             ("sub-1", "Test Subscription", "production", "Enabled"),
         )
-        ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/prodgreen-shared-uksouth"
+        ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/production-shared-uksouth"
         gw_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Network/applicationGateways/cop-resource-server-apim"
         site_id = "/subscriptions/sub-1/resourceGroups/rg-backend/providers/Microsoft.Web/sites/institution-portal-internal"
         conn.executemany(
@@ -9438,11 +9576,11 @@ class TestCloudPosture:
                     ase_id,
                     "sub-1",
                     "rg-app",
-                    "prodgreen-shared-uksouth",
+                    "production-shared-uksouth",
                     "Microsoft.Web/hostingEnvironments",
                     "uksouth",
                     "ASEv3",
-                    "prodgreen-shared-uksouth.appserviceenvironment.net",
+                    "production-shared-uksouth.appserviceenvironment.net",
                     0,
                     "active",
                     None,
@@ -9502,7 +9640,7 @@ class TestCloudPosture:
                 "sub-1",
                 "cop-resource-server-apim",
                 json.dumps([
-                    "https://cbuk-core-prodgreen-institution-portal-internal-uksouth.prodgreen-shared-uksouth.appserviceenvironment.net/"
+                    "https://production-institution-portal-internal-uksouth.production-shared-uksouth.appserviceenvironment.net/"
                 ]),
                 "backend-pool",
                 "listener-1",
@@ -9521,7 +9659,7 @@ class TestCloudPosture:
 
         assert resp.status_code == 200, resp.get_data(as_text=True)
         data = resp.get_json()
-        assert data["parent_resource"]["name"] == "prodgreen-shared-uksouth"
+        assert data["parent_resource"]["name"] == "production-shared-uksouth"
         assert data["parent_resource"]["type_label"] == "App Service Environment"
 
     def test_api_cloud_apim_child_apis_returns_table_payload(self, monkeypatch):
@@ -10144,9 +10282,9 @@ class TestCloudPosture:
             "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
             ("sub-1", "Test Subscription", "production", "Enabled"),
         )
-        load_balancer_id = "/subscriptions/sub-1/resourceGroups/cbuk-core-blue-pbi-gateway-ukwest/providers/Microsoft.Network/loadBalancers/pbi-gateway"
-        vmss_id = "/subscriptions/sub-1/resourceGroups/cbuk-core-blue-pbi-gateway-ukwest/providers/Microsoft.Compute/virtualMachineScaleSets/power_bi_gateway"
-        public_ip_id = "/subscriptions/sub-1/resourceGroups/cbuk-core-blue-pbi-gateway-ukwest/providers/Microsoft.Network/publicIPAddresses/backend"
+        load_balancer_id = "/subscriptions/sub-1/resourceGroups/blue-pbi-gateway-ukwest/providers/Microsoft.Network/loadBalancers/pbi-gateway"
+        vmss_id = "/subscriptions/sub-1/resourceGroups/blue-pbi-gateway-ukwest/providers/Microsoft.Compute/virtualMachineScaleSets/power_bi_gateway"
+        public_ip_id = "/subscriptions/sub-1/resourceGroups/blue-pbi-gateway-ukwest/providers/Microsoft.Network/publicIPAddresses/backend"
         conn.executemany(
             """
             INSERT INTO provisioned_assets (
@@ -10159,7 +10297,7 @@ class TestCloudPosture:
                 (
                     load_balancer_id,
                     "sub-1",
-                    "cbuk-core-blue-pbi-gateway-ukwest",
+                    "blue-pbi-gateway-ukwest",
                     "pbi-gateway",
                     "Microsoft.Network/loadBalancers",
                     "ukwest",
@@ -10194,7 +10332,7 @@ class TestCloudPosture:
                 (
                     vmss_id,
                     "sub-1",
-                    "cbuk-core-blue-pbi-gateway-ukwest",
+                    "blue-pbi-gateway-ukwest",
                     "power_bi_gateway",
                     "Microsoft.Compute/virtualMachineScaleSets",
                     "ukwest",
@@ -10212,7 +10350,7 @@ class TestCloudPosture:
                 (
                     public_ip_id,
                     "sub-1",
-                    "cbuk-core-blue-pbi-gateway-ukwest",
+                    "blue-pbi-gateway-ukwest",
                     "backend",
                     "Microsoft.Network/publicIPAddresses",
                     "ukwest",
@@ -10243,8 +10381,8 @@ class TestCloudPosture:
         assert graph_resp.status_code == 200, graph_resp.get_data(as_text=True)
         graph = graph_resp.get_json()
         mermaid = graph["views"]["connectivity"]["mermaid"]
-        lb_node_id = "cbuk_core_blue_pbi_gateway_ukwest_pbi_gateway"
-        vmss_node_id = "cbuk_core_blue_pbi_gateway_ukwest_power_bi_gateway"
+        lb_node_id = "blue_pbi_gateway_ukwest_pbi_gateway"
+        vmss_node_id = "blue_pbi_gateway_ukwest_power_bi_gateway"
         assert f'{lb_node_id}["' in mermaid, mermaid
         assert f'{lb_node_id} -->|"Load balancing"| {vmss_node_id}' in mermaid, mermaid
         assert "pbi-gateway.example.contoso.com" not in mermaid, mermaid
@@ -10472,9 +10610,9 @@ class TestCloudPosture:
             "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
             ("sub-1", "Test Subscription", "production", "Enabled"),
         )
-        cluster_id = "/subscriptions/sub-1/resourceGroups/cbuk-core-prodgreen-sf-uksouth/providers/Microsoft.ServiceFabric/clusters/cbuk-core-prodgreen-sf"
-        key_vault_id = "/subscriptions/sub-1/resourceGroups/cbuk-core-prodgreen-sf-uksouth/providers/Microsoft.KeyVault/vaults/cbuk-core-prodgreen-kv"
-        subnet_id = "/subscriptions/sub-1/resourceGroups/cbuk-core-prodgreen-network-uksouth/providers/Microsoft.Network/virtualNetworks/prodgreen/subnets/service_fabric_zonal"
+        cluster_id = "/subscriptions/sub-1/resourceGroups/production-sf-uksouth/providers/Microsoft.ServiceFabric/clusters/production-sf"
+        key_vault_id = "/subscriptions/sub-1/resourceGroups/production-sf-uksouth/providers/Microsoft.KeyVault/vaults/production-kv"
+        subnet_id = "/subscriptions/sub-1/resourceGroups/production-network-uksouth/providers/Microsoft.Network/virtualNetworks/production/subnets/service_fabric_zonal"
         conn.executemany(
             """
             INSERT INTO provisioned_assets (
@@ -10487,8 +10625,8 @@ class TestCloudPosture:
                 (
                     cluster_id,
                     "sub-1",
-                    "cbuk-core-prodgreen-sf-uksouth",
-                    "cbuk-core-prodgreen-sf",
+                    "production-sf-uksouth",
+                    "production-sf",
                     "Microsoft.ServiceFabric/clusters",
                     "uksouth",
                     "Standard",
@@ -10525,8 +10663,8 @@ class TestCloudPosture:
                 (
                     key_vault_id,
                     "sub-1",
-                    "cbuk-core-prodgreen-sf-uksouth",
-                    "cbuk-core-prodgreen-kv",
+                    "production-sf-uksouth",
+                    "production-kv",
                     "Microsoft.KeyVault/vaults",
                     "uksouth",
                     "Standard",
@@ -10536,7 +10674,7 @@ class TestCloudPosture:
                     None,
                     "2026-06-01T00:00:00Z",
                     "2026-06-01T00:00:00Z",
-                    json.dumps({"properties": {"vaultUri": "https://cbuk-core-prodgreen-sf.vault.azure.net/"}}),
+                    json.dumps({"properties": {"vaultUri": "https://production-sf.vault.azure.net/"}}),
                     0,
                     None,
                 ),
@@ -10555,10 +10693,10 @@ class TestCloudPosture:
         details_resp = client.get("/api/cloud/resource-details", query_string={"id": cluster_id})
         assert details_resp.status_code == 200, details_resp.get_data(as_text=True)
         details = details_resp.get_json()
-        assert details["name"] == "cbuk-core-prodgreen-sf"
+        assert details["name"] == "production-sf"
         assert details["parent_resource"]["type_label"] != "Key Vault"
         assert details["parent_resource"]["type_label"] in {"Subnet", "Virtual Network"}
-        assert details["network"]["vnet"] == "prodgreen"
+        assert details["network"]["vnet"] == "production"
         assert details["network"]["subnet"] == "service_fabric_zonal"
 
         os.unlink(tmp.name)
@@ -11413,7 +11551,7 @@ class TestCloudPosture:
                 "DirectCredit",
                 "servicebustrigger",
                 "topic",
-                "clearbank.bacs.events.payments.bacsdirectcreditrecalledevent",
+                "mydomain.service.events.payments.servicedirectcreditrecalledevent",
                 "sb-subscription",
                 "servicebus-connection",
                 "2026-06-01T00:00:00Z",
@@ -11571,6 +11709,323 @@ class TestCloudPosture:
         assert data["routing_targets"][0]["backend_pool_name"] == "pool-a"
         assert data["routing_targets"][0]["listener_name"] == "https-listener"
         assert data["routing_targets"][0]["waf_policy_name"] == "policy-one"
+
+        os.unlink(tmp.name)
+
+    def test_api_cloud_route_trace_returns_full_appgw_apim_aks_chain(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+        import tempfile
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        conn = sqlite3.connect(tmp.name)
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT,
+                last_synced TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            CREATE TABLE appgw_routing_rules (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                gateway_name TEXT,
+                gateway_resource_id TEXT,
+                resource_group TEXT,
+                rule_name TEXT,
+                listener_name TEXT,
+                hostname TEXT,
+                protocol TEXT,
+                url_path TEXT,
+                backend_pool_name TEXT,
+                backend_fqdns TEXT,
+                http_settings_name TEXT,
+                backend_port INTEGER,
+                backend_protocol TEXT,
+                host_override TEXT,
+                waf_policy_name TEXT,
+                exposure_level TEXT,
+                last_synced TEXT
+            );
+            CREATE TABLE apim_api_routes (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                apim_name TEXT,
+                apim_resource_id TEXT,
+                api_name TEXT,
+                api_display_name TEXT,
+                api_path TEXT,
+                api_protocols TEXT,
+                backend_id TEXT,
+                backend_url TEXT,
+                service_url TEXT,
+                requires_subscription INTEGER DEFAULT 1,
+                gateway_hosts TEXT,
+                exposure_level TEXT,
+                last_synced TEXT
+            );
+            CREATE TABLE apim_backends (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                apim_name TEXT,
+                backend_id TEXT,
+                title TEXT,
+                description TEXT,
+                url TEXT,
+                protocol TEXT,
+                circuit_breaker TEXT,
+                credentials TEXT,
+                tls_validate_cert INTEGER DEFAULT 1,
+                last_synced TEXT
+            );
+            CREATE TABLE aks_routes (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                cluster_name TEXT,
+                cluster_resource_id TEXT,
+                resource_group TEXT,
+                namespace TEXT,
+                ingress_name TEXT,
+                host TEXT,
+                host_aliases TEXT,
+                path TEXT,
+                is_default_backend INTEGER DEFAULT 0,
+                service_name TEXT,
+                service_port TEXT,
+                service_ports TEXT,
+                deployment_name TEXT,
+                deployment_namespace TEXT,
+                pod_template_labels TEXT,
+                git_repository TEXT,
+                team TEXT,
+                exposure_level TEXT,
+                last_synced TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+        )
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.Network/applicationGateways/appgw-one",
+                "sub-1",
+                "rg-api",
+                "appgw-one",
+                "Microsoft.Network/applicationGateways",
+                "uksouth",
+                "WAF_v2",
+                "napier-events.mydomain.co.uk",
+                1,
+                "active",
+                None,
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+                json.dumps({"properties": {}}),
+                0,
+                "WAF_v2",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/production-api-uksouth",
+                "sub-1",
+                "rg-api",
+                "production-api-uksouth",
+                "Microsoft.ApiManagement/service",
+                "uksouth",
+                "Developer",
+                "production-api-uksouth.azure-api.net",
+                1,
+                "active",
+                None,
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+                json.dumps({"properties": {}}),
+                0,
+                None,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO appgw_routing_rules (
+                id, subscription_id, gateway_name, gateway_resource_id, resource_group,
+                rule_name, listener_name, hostname, protocol, url_path, backend_pool_name,
+                backend_fqdns, http_settings_name, backend_port, backend_protocol,
+                host_override, waf_policy_name, exposure_level, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "appgw-one::rule-1::/*",
+                "sub-1",
+                "appgw-one",
+                "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.Network/applicationGateways/appgw-one",
+                "rg-api",
+                "rule-1",
+                "napier-events.mydomain.co.uk_public",
+                "napier-events.mydomain.co.uk",
+                "HTTPS",
+                "/*",
+                "apim-gateway",
+                json.dumps(["production-api-uksouth.azure-api.net"]),
+                "napier-events",
+                443,
+                "HTTPS",
+                None,
+                "waf-marketlane",
+                "Public",
+                "2026-06-01T00:00:00Z",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO apim_api_routes (
+                id, subscription_id, apim_name, apim_resource_id, api_name, api_display_name,
+                api_path, api_protocols, backend_id, backend_url, service_url,
+                requires_subscription, gateway_hosts, exposure_level, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "production-api-uksouth::napier-api",
+                "sub-1",
+                "production-api-uksouth",
+                "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/production-api-uksouth",
+                "napier-api",
+                "napier-api",
+                "/napier-api",
+                json.dumps(["https"]),
+                "fincrime-napier-api",
+                "https://production-fincrime-napier-api.internal.cbinnovation.uk",
+                "https://production-fincrime-napier-api.internal.cbinnovation.uk",
+                1,
+                json.dumps(["production-api-uksouth.azure-api.net"]),
+                "Public",
+                "2026-06-01T00:00:00Z",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO apim_backends (
+                id, subscription_id, apim_name, backend_id, title, description, url,
+                protocol, circuit_breaker, credentials, tls_validate_cert, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "production-api-uksouth::fincrime-napier-api",
+                "sub-1",
+                "production-api-uksouth",
+                "fincrime-napier-api",
+                "fincrime-napier-api",
+                "Napier backend",
+                "https://production-fincrime-napier-api.internal.cbinnovation.uk",
+                "http",
+                None,
+                None,
+                1,
+                "2026-06-01T00:00:00Z",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO aks_routes (
+                id, subscription_id, cluster_name, cluster_resource_id, resource_group,
+                namespace, ingress_name, host, host_aliases, path, is_default_backend,
+                service_name, service_port, service_ports, deployment_name, deployment_namespace,
+                pod_template_labels, git_repository, team, exposure_level, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "production-shared-aks-uksouth::finance::fincrime-napier-api-ingress::production-fincrime-napier-api.internal.cbinnovation.uk::/*::fincrime-napier-api::80::fincrime-napier-api::rule",
+                "sub-1",
+                "production-shared-aks-uksouth",
+                "/subscriptions/sub-1/resourceGroups/rg-aks/providers/Microsoft.ContainerService/managedClusters/production-shared-aks-uksouth",
+                "rg-aks",
+                "finance",
+                "fincrime-napier-api-ingress",
+                "production-fincrime-napier-api.internal.cbinnovation.uk",
+                json.dumps(["production-fincrime-napier-api.internal.cbinnovation.uk"]),
+                "/*",
+                0,
+                "fincrime-napier-api",
+                "80",
+                json.dumps([80]),
+                "fincrime-napier-api",
+                "finance",
+                json.dumps({"app": "napier"}),
+                "git@example.com/napier",
+                "platform",
+                "Internal",
+                "2026-06-01T00:00:00Z",
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get(
+            "/api/cloud/route-trace",
+            query_string={"sub": "sub-1", "endpoint": "https://napier-events.mydomain.co.uk"},
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        assert data["host"] == "napier-events.mydomain.co.uk", data
+        assert data["path"] == "/", data
+        kinds = [step["kind"] for step in data["resolved_chain"]]
+        assert kinds[:4] == ["internet", "listener", "appgw", "backend_pool"], data
+        assert any(step["kind"] == "appgw" and step.get("waf_policy_name") for step in data["resolved_chain"]), data
+        assert "apim_service" in kinds, data
+        assert "apim_api" in kinds, data
+        assert "apim_backend" in kinds, data
+        assert kinds[-4:] == ["aks_ingress", "aks_service", "aks_deployment", "aks_cluster"], data
+        assert "classDef entryPointProtected stroke:#ea580c,stroke-width:2px,fill:#3d1c0d;" in data["mermaid"], data["mermaid"]
+        assert "class appgw::appgw-one entryPointProtected;" in data["mermaid"], data["mermaid"]
+        assert "class internet internet;" in data["mermaid"], data["mermaid"]
+        assert "napier-events.mydomain.co.uk" in data["mermaid"], data["mermaid"]
+        assert "production-api-uksouth" in data["mermaid"], data["mermaid"]
+        assert "fincrime-napier-api-ingress" in data["mermaid"], data["mermaid"]
 
         os.unlink(tmp.name)
 
@@ -12130,7 +12585,7 @@ def _cloud_assets_payload():
     ase_app_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/ase-app"
     ase_fn_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/ase-fn"
     gw_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/gw-one"
-    apim_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/cbuk-core-prodgreen-api-uksouth"
+    apim_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/production-api-uksouth"
     storage_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one"
     container_id = f"{storage_id}/blobServices/default/containers/logs"
     sql_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Sql/servers/sql-one"
@@ -12680,7 +13135,7 @@ class TestCloudAssetsApi:
         ase_app_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/ase-app"
         ase_fn_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/ase-fn"
         gw_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/gw-one"
-        apim_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/cbuk-core-prodgreen-api-uksouth"
+        apim_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/production-api-uksouth"
         storage_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one"
         container_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one/blobServices/default/containers/logs"
         acr_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.ContainerRegistry/registries/acr-one"
@@ -12729,8 +13184,8 @@ class TestCloudAssetsApi:
                  }), now, now, "active"),
                 (gw_id, "sub-1", "rg-net", "gw-one", "Microsoft.Network/applicationGateways", "westus", "WAF_v2",
                  None, 1, "gw.example.com", None, json.dumps({}), now, now, "active"),
-                (apim_id, "sub-1", "rg-api", "cbuk-core-prodgreen-api-uksouth", "Microsoft.ApiManagement/service", "uksouth", "Premium",
-                 None, 1, "cbuk-core-prodgreen-api-uksouth.azure-api.net", None, json.dumps({}), now, now, "active"),
+                (apim_id, "sub-1", "rg-api", "production-api-uksouth", "Microsoft.ApiManagement/service", "uksouth", "Premium",
+                 None, 1, "production-api-uksouth.azure-api.net", None, json.dumps({}), now, now, "active"),
                 (storage_id, "sub-1", "rg-data", "sa-one", "Microsoft.Storage/storageAccounts", "westus", "Standard_LRS",
                  None, 1, "sa-one.blob.core.windows.net", None, json.dumps({
                      "kind": "StorageV2",
@@ -12794,7 +13249,7 @@ class TestCloudAssetsApi:
         ase_app = assets["/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/ase-app"]
         ase_fn = assets["/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/ase-fn"]
         gw = assets["/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/gw-one"]
-        apim = assets["/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/cbuk-core-prodgreen-api-uksouth"]
+        apim = assets["/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/production-api-uksouth"]
         listener = assets["listener::gw-one::https::gw.example.com"]
 
         storage = assets["/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one"]

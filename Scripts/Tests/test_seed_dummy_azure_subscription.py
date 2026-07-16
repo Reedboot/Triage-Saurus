@@ -67,9 +67,9 @@ def test_seed_dummy_azure_subscription_populates_cozo(tmp_path):
             "list-items",
             "create-order",
             "asp-marketlane-web",
+            "ase-marketlane-shared",
             "listener-marketlane-web",
             "listener-marketlane-api",
-            "waf-marketlane-edge",
             "product-marketlane-core",
             "sub-marketlane-core",
             "backend-marketlane-catalog",
@@ -80,6 +80,7 @@ def test_seed_dummy_azure_subscription_populates_cozo(tmp_path):
             "cosmos-marketlane-orders",
             "snet-marketlane-apim",
             "snet-marketlane-aks",
+            "snet-marketlane-ase",
             "snet-marketlane-appsvc",
         }.issubset(names)
 
@@ -87,7 +88,11 @@ def test_seed_dummy_azure_subscription_populates_cozo(tmp_path):
         assert conn_count >= 40
 
         assert conn.execute("SELECT COUNT(*) FROM appgw_routing_rules").fetchone()[0] >= 2
-        assert conn.execute("SELECT COUNT(*) FROM appgw_waf_policies").fetchone()[0] >= 1
+        assert conn.execute("SELECT COUNT(*) FROM appgw_waf_policies").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM aks_routes").fetchone()[0] >= 2
+        assert conn.execute("SELECT COUNT(*) FROM firewall_policies").fetchone()[0] >= 1
+        assert conn.execute("SELECT COUNT(*) FROM firewall_app_rules").fetchone()[0] >= 2
+        assert conn.execute("SELECT COUNT(*) FROM firewall_nat_rules").fetchone()[0] >= 1
         assert conn.execute("SELECT COUNT(*) FROM apim_api_routes").fetchone()[0] >= 2
         assert conn.execute("SELECT COUNT(*) FROM apim_api_operations").fetchone()[0] >= 4
 

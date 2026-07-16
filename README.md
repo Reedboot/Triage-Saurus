@@ -12,6 +12,7 @@ Security triage workspace for repo scans, findings, knowledge capture, and risk 
 - **Repo/context discovery:** `Agents/ContextDiscoveryAgent.md` and `Agents/RepoAgent.md`
 - **Security review:** `Agents/SecurityAgent.md`
 - **Cloud diagrams:** `Agents/ArchitectureAgent.md`
+- **Route tracing:** `.github/skills/route-trace/SKILL.md`
 - **Learning/experiments:** `Agents/ExperimentAgent.md` and `Agents/LearningAgent.md`
 
 ## Core commands

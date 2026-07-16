@@ -803,14 +803,13 @@ def harvest_subscription(
         except Exception as exc:
             print(f"  [AKS Routes] FAILED ({exc})")
 
-        # APIM API → backend routes (staged backfill: operations enrich asynchronously)
+        # APIM API → backend routes
         print(f"  [APIM Routes] harvesting API→backend mappings...", flush=True)
         try:
             phase_started = time.perf_counter()
-            result = apim.harvest_routes(sub_id, conn, dry_run=dry_run, stage_backfill=True)
-            asset_count, backfill_count = _store_result(result)
+            route_count = apim_routing_map.harvest_routes(sub_id, conn, dry_run=dry_run)
             action = "would write" if dry_run else "written"
-            print(f"  [APIM Routes] {asset_count} routes {action}, {backfill_count} operation(s) queued for backfill in {time.perf_counter() - phase_started:.2f}s")
+            print(f"  [APIM Routes] {route_count} routes {action} in {time.perf_counter() - phase_started:.2f}s")
         except Exception as exc:
             print(f"  [APIM Routes] FAILED ({exc})")
 

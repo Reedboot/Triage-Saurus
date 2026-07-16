@@ -14,8 +14,14 @@
     if (window.mermaid && typeof window.mermaid.initialize === 'function') {
       window.mermaid.initialize({
         startOnLoad: false,
+        theme: 'dark',
         securityLevel: 'loose',
         maxTextSize: 2000000,
+        maxEdges: 2000,
+        flowchart: {
+          useMaxWidth: false,
+          htmlLabels: true,
+        },
       });
       console.info('✓ Mermaid initialized');
     }

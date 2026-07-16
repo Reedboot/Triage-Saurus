@@ -15,6 +15,7 @@ export function getMermaidConfig() {
     theme: 'dark',
     securityLevel: 'loose',
     maxTextSize: 2000000,
+    maxEdges: 2000,
     flowchart: { useMaxWidth: false, htmlLabels: true },
     onError: (err) => console.error('[Mermaid] Rendering error:', err.message),
   };

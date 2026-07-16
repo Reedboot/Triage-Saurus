@@ -97,13 +97,13 @@ def test_extracts_app_service_environment_vnet_and_subnet():
     subnet_id = "/subscriptions/000/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/app-vnet/subnets/app-subnet"
     rows = [
         (
-            "prodgreen-shared-uksouth",
+            "production-shared-uksouth",
             "Microsoft.Web/hostingenvironments",
             "rg-net",
             None,
             False,
             None,
-            "/subscriptions/000/resourceGroups/rg-net/providers/Microsoft.Web/hostingenvironments/prodgreen-shared-uksouth",
+            "/subscriptions/000/resourceGroups/rg-net/providers/Microsoft.Web/hostingenvironments/production-shared-uksouth",
             False,
             None,
             False,
@@ -121,7 +121,7 @@ def test_extracts_app_service_environment_vnet_and_subnet():
     ]
 
     assets = subscription_assets_from_rows(rows, _friendly_type)
-    ase = next(asset for asset in assets if asset["name"] == "prodgreen-shared-uksouth")
+    ase = next(asset for asset in assets if asset["name"] == "production-shared-uksouth")
 
     assert ase["tier"] == "network"
     assert ase["subnet_id"] == subnet_id
@@ -231,13 +231,13 @@ def test_app_service_environment_renders_inside_vnet_and_subnet():
             None,
         ),
         (
-            "prodgreen-shared-uksouth",
+            "production-shared-uksouth",
             "Microsoft.Web/hostingenvironments",
             "rg-net",
             None,
             False,
             None,
-            "/subscriptions/000/resourceGroups/rg-net/providers/Microsoft.Web/hostingenvironments/prodgreen-shared-uksouth",
+            "/subscriptions/000/resourceGroups/rg-net/providers/Microsoft.Web/hostingenvironments/production-shared-uksouth",
             False,
             None,
             False,
@@ -256,7 +256,7 @@ def test_app_service_environment_renders_inside_vnet_and_subnet():
             "functions_windows",
             "Microsoft.Web/serverfarms",
             "rg-net",
-            "functions_windows.prodgreen-shared-uksouth.appserviceenvironment.net",
+            "functions_windows.production-shared-uksouth.appserviceenvironment.net",
             False,
             None,
             "/subscriptions/000/resourceGroups/rg-net/providers/Microsoft.Web/serverfarms/functions_windows",
@@ -285,7 +285,7 @@ def test_app_service_environment_renders_inside_vnet_and_subnet():
     view = next(d["views"]["connectivity"] for d in diagrams if d["rg"] == "rg-net")
     assets = subscription_assets_from_rows(rows, _friendly_type)
     vnet = next(asset for asset in assets if asset["name"] == "app-vnet")
-    ase = next(asset for asset in assets if asset["name"] == "prodgreen-shared-uksouth")
+    ase = next(asset for asset in assets if asset["name"] == "production-shared-uksouth")
     plan = next(asset for asset in assets if asset["name"] == "functions_windows")
 
     vnet_node_id = subscription_node_id(vnet, lambda s: s.replace("/", "_").replace("-", "_"))

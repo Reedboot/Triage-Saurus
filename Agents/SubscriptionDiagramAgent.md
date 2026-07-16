@@ -16,6 +16,7 @@
 - `content_accuracy.json` — comparison of harvested counts vs rendered counts
 
 **Full SKILL.md** (Copilot slash command): `.github/skills/subscription-diagram-check/SKILL.md`
+**Route trace skill**: `.github/skills/route-trace/SKILL.md`
 
 ## Mermaid Diagram lookup map
 - **Cloud Architecture UI:** `web/templates/cloud_architecture.html`
@@ -23,6 +24,7 @@
 - **Shared render helper:** `web/static/js/cloud-mermaid-helper.js`
 - **Mermaid renderer wrapper:** `web/static/js/subscription-diagrams.js`
 - **API route used by the mermaid page:** `web/app.py` (`/cloud/architecture` and `/api/cloud/architecture?sub=...&view=mermaid`)
+- **Route trace API:** `web/app.py` (`/api/cloud/route-trace` and `/api/subscriptions/<sub_id>/trace-route`)
 - **Mermaid generation:** `Scripts/Generate/generate_diagram.py`
 - **Architecture bundle builder:** `Scripts/Generate/architecture_view_helpers.py`
 

@@ -1756,7 +1756,7 @@ class TestServiceFabricHarvest:
                                     {
                                         "properties": {
                                             "subnet": {
-                                                "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/prodgreen/subnets/service_fabric_zonal"
+                                                "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/production/subnets/service_fabric_zonal"
                                             }
                                         }
                                     }
@@ -1818,27 +1818,27 @@ class TestServiceFabricHarvest:
         assert svc["resource_group"] == "rg-sf"
         assert svc["fqdn"] == "sfha.example.com"
         cluster_row = next(r for r in rows if r["type"] == "Microsoft.ServiceFabric/clusters")
-        assert cluster_row["vnet_name"] == "prodgreen"
+        assert cluster_row["vnet_name"] == "production"
         assert cluster_row["subnet_name"] == "service_fabric_zonal"
-        assert cluster_row["subnet_id"] == "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/prodgreen/subnets/service_fabric_zonal"
+        assert cluster_row["subnet_id"] == "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/production/subnets/service_fabric_zonal"
 
 
 class TestAppServiceEnvironmentHarvest:
     def test_harvest_exposes_network_scope_for_diagram_grouping(self, monkeypatch):
         ase = {
-            "id": "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/prodgreen-shared-uksouth",
-            "name": "prodgreen-shared-uksouth",
+            "id": "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/production-shared-uksouth",
+            "name": "production-shared-uksouth",
             "resourceGroup": "rg-app",
             "location": "uksouth",
             "type": "Microsoft.Web/hostingEnvironments",
             "kind": "ASEV3",
             "properties": {
-                "dnsSuffix": "prodgreen-shared-uksouth.appserviceenvironment.net",
+                "dnsSuffix": "production-shared-uksouth.appserviceenvironment.net",
                 "internalLoadBalancingMode": "Web, Publishing",
                 "virtualNetwork": {
-                    "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/prodgreen",
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/production",
                     "subnet": {
-                        "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/prodgreen/subnets/shared_ase"
+                        "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/production/subnets/shared_ase"
                     },
                 },
             },
@@ -1849,12 +1849,12 @@ class TestAppServiceEnvironmentHarvest:
         rows = app_service_environment.harvest("sub-1")
         assert len(rows) == 1
         row = rows[0]
-        assert row["name"] == "prodgreen-shared-uksouth"
-        assert row["vnet_name"] == "prodgreen"
+        assert row["name"] == "production-shared-uksouth"
+        assert row["vnet_name"] == "production"
         assert row["subnet_name"] == "shared_ase"
         assert row["subnet_id"].endswith("/subnets/shared_ase")
         raw = json.loads(row["raw_json"])
-        assert raw["_extra"]["vnet_name"] == "prodgreen"
+        assert raw["_extra"]["vnet_name"] == "production"
 
 
 class TestFirewallNatRules:
@@ -2336,9 +2336,9 @@ class TestAppGatewayRewriteHarvest:
 
     def test_apim_route_bundle_resolves_backend_id_to_url(self, monkeypatch):
         service = {
-            "name": "cbuk-core-prodgreen-api-uksouth",
-            "resourceGroup": "cbuk-core-prodgreen-api-uksouth",
-            "id": "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.ApiManagement/service/cbuk-core-prodgreen-api-uksouth",
+            "name": "production-api-uksouth",
+            "resourceGroup": "production-api-uksouth",
+            "id": "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.ApiManagement/service/production-api-uksouth",
         }
         api = {
             "name": "account_identification",
@@ -2352,7 +2352,7 @@ class TestAppGatewayRewriteHarvest:
         }
         backend = {
             "name": "account-identification-api-backend-aks",
-            "url": "https://prodgreen-account-identification.internal.cbinnovation.uk",
+            "url": "https://production-account-identification.internal.cbinnovation.uk",
         }
 
         monkeypatch.setattr(
@@ -2373,13 +2373,13 @@ class TestAppGatewayRewriteHarvest:
         assert operations == []
         assert route is not None
         assert route["backend_id"] == "account-identification-api-backend-aks"
-        assert route["backend_url"] == "https://prodgreen-account-identification.internal.cbinnovation.uk"
+        assert route["backend_url"] == "https://production-account-identification.internal.cbinnovation.uk"
         assert route["service_url"] is None
 
     def test_apim_operation_policy_resolves_non_sf_backend_id_to_url(self, monkeypatch):
         backend = {
             "name": "account-identification-api-backend-aks",
-            "url": "https://prodgreen-account-identification.internal.cbinnovation.uk",
+            "url": "https://production-account-identification.internal.cbinnovation.uk",
         }
 
         monkeypatch.setattr(
@@ -2390,10 +2390,10 @@ class TestAppGatewayRewriteHarvest:
 
         row = apim._materialize_operation_row(
             {
-                "id": "cbuk-core-prodgreen-api-uksouth::account_identification::account_identification-get",
+                "id": "production-api-uksouth::account_identification::account_identification-get",
                 "subscription_id": "sub-1",
-                "apim_name": "cbuk-core-prodgreen-api-uksouth",
-                "resource_group": "cbuk-core-prodgreen-api-uksouth",
+                "apim_name": "production-api-uksouth",
+                "resource_group": "production-api-uksouth",
                 "api_name": "account_identification",
                 "api_display_name": "account_identification",
                 "api_path": "accountIdentification",
@@ -2418,13 +2418,13 @@ class TestAppGatewayRewriteHarvest:
 
         assert row is not None
         assert row["backend_id"] == "account-identification-api-backend-aks"
-        assert row["backend_url"] == "https://prodgreen-account-identification.internal.cbinnovation.uk"
+        assert row["backend_url"] == "https://production-account-identification.internal.cbinnovation.uk"
 
     def test_apim_route_bundle_extracts_service_fabric_policy_attrs(self, monkeypatch):
         service = {
-            "name": "cbuk-core-prodgreen-api-uksouth",
-            "resourceGroup": "cbuk-core-prodgreen-api-uksouth",
-            "id": "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.ApiManagement/service/cbuk-core-prodgreen-api-uksouth",
+            "name": "production-api-uksouth",
+            "resourceGroup": "production-api-uksouth",
+            "id": "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.ApiManagement/service/production-api-uksouth",
         }
         api = {
             "name": "fscs",
@@ -2437,7 +2437,7 @@ class TestAppGatewayRewriteHarvest:
             },
         }
         backend = {
-            "name": "cbuk-core-prodgreen-sf",
+            "name": "production-sf",
             "url": "fabric:/fake/service",
             "properties": {
                 "serviceFabricCluster": {
@@ -2449,7 +2449,7 @@ class TestAppGatewayRewriteHarvest:
         monkeypatch.setattr(
             apim,
             "_az_show_policy",
-            lambda *args, **kwargs: '<policies><inbound><base /><set-backend-service backend-id="cbuk-core-prodgreen-sf" sf-resolve-condition="{{sf-resolve-condition}}" sf-service-instance-name="fabric:/ClearBank.FSCS.ServiceFabric/ClearBank.FSCS.Api" /></inbound></policies>',
+            lambda *args, **kwargs: '<policies><inbound><base /><set-backend-service backend-id="production-sf" sf-resolve-condition="{{sf-resolve-condition}}" sf-service-instance-name="fabric:/mydomain.FSCS.ServiceFabric/mydomain.FSCS.Api" /></inbound></policies>',
         )
         monkeypatch.setattr(apim, "_az_list_operations", lambda *args, **kwargs: [])
 
@@ -2463,22 +2463,27 @@ class TestAppGatewayRewriteHarvest:
 
         assert operations == []
         assert route is not None
-        assert route["backend_id"] == "cbuk-core-prodgreen-sf"
+        assert route["backend_id"] == "production-sf"
         assert route["backend_url"] == "https://192.168.118.61:19080"
-        assert route["sf_service_instance_name"] == "fabric:/ClearBank.FSCS.ServiceFabric/ClearBank.FSCS.Api"
+        assert route["sf_service_instance_name"] == "fabric:/mydomain.FSCS.ServiceFabric/mydomain.FSCS.Api"
         assert route["sf_resolve_condition"] == "{{sf-resolve-condition}}"
         assert route["api_policy_flags"]["sf_service_instance_names"] == [
-            "fabric:/ClearBank.FSCS.ServiceFabric/ClearBank.FSCS.Api"
+            "fabric:/mydomain.FSCS.ServiceFabric/mydomain.FSCS.Api"
         ]
 
-    def test_invokes_apim_backend_links_harvest(self, monkeypatch):
+    def test_invokes_apim_routing_harvest_and_backend_links(self, monkeypatch):
         calls = []
 
+        def fake_harvest_routes(subscription_id, conn, dry_run=False):
+            calls.append(("routes", subscription_id, dry_run))
+            return 3
+
         def fake_harvest_backends(subscription_id, conn, dry_run=False):
-            calls.append((subscription_id, dry_run))
+            calls.append(("backends", subscription_id, dry_run))
             return 0, 0
 
         monkeypatch.setattr(harvest_azure_assets, "PROVIDERS", [])
+        monkeypatch.setattr(harvest_azure_assets.apim_routing_map, "harvest_routes", fake_harvest_routes)
         monkeypatch.setattr(harvest_azure_assets.apim_routing_map, "harvest_backends", fake_harvest_backends)
 
         conn = sqlite3.connect(":memory:")
@@ -2487,7 +2492,7 @@ class TestAppGatewayRewriteHarvest:
         finally:
             conn.close()
 
-        assert calls == [("sub-1", True)]
+        assert calls == [("routes", "sub-1", True), ("backends", "sub-1", True)]
 
 
 class TestAppConfigurationHarvest:
@@ -2988,7 +2993,7 @@ class TestKeyVaultHarvest:
                     ],
                     "virtualNetworkRules": [
                         {
-                            "virtualNetworkResourceId": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/prodgreen",
+                            "virtualNetworkResourceId": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/production",
                         }
                     ],
                     "bypass": "AzureServices",
@@ -3021,7 +3026,7 @@ class TestKeyVaultHarvest:
         assert json.loads(row["ip_restrictions"]) == [
             "51.132.44.20/32",
             "51.137.137.41/32",
-            "vnet:prodgreen",
+            "vnet:production",
         ]
 
         extra = json.loads(row["raw_json"])["_extra"]
@@ -3036,14 +3041,14 @@ class TestKeyVaultHarvest:
 class TestSqlServerHarvest:
     def test_classifies_firewalled_server_as_restricted(self, monkeypatch):
         server = {
-            "id": "/subscriptions/sub-1/resourceGroups/cbuk-core-prodgreen-sql-uksouth/providers/Microsoft.Sql/servers/cbuk-core-prodgreen-sql-uksouth",
-            "name": "cbuk-core-prodgreen-sql-uksouth",
-            "resourceGroup": "cbuk-core-prodgreen-sql-uksouth",
+            "id": "/subscriptions/sub-1/resourceGroups/production-sql-uksouth/providers/Microsoft.Sql/servers/production-sql-uksouth",
+            "name": "production-sql-uksouth",
+            "resourceGroup": "production-sql-uksouth",
             "location": "uksouth",
             "type": "Microsoft.Sql/servers",
             "properties": {
                 "publicNetworkAccess": "Enabled",
-                "fullyQualifiedDomainName": "cbuk-core-prodgreen-sql-uksouth.database.windows.net",
+                "fullyQualifiedDomainName": "production-sql-uksouth.database.windows.net",
             },
         }
         firewall_rules = [
@@ -3062,11 +3067,11 @@ class TestSqlServerHarvest:
         def fake_az(args, subscription_id):
             if args == ["sql", "server", "list"]:
                 return [server]
-            if args == ["sql", "server", "firewall-rule", "list", "-s", "cbuk-core-prodgreen-sql-uksouth", "-g", "cbuk-core-prodgreen-sql-uksouth"]:
+            if args == ["sql", "server", "firewall-rule", "list", "-s", "production-sql-uksouth", "-g", "production-sql-uksouth"]:
                 return firewall_rules
-            if args == ["sql", "server", "ad-admin", "list", "--server", "cbuk-core-prodgreen-sql-uksouth", "--resource-group", "cbuk-core-prodgreen-sql-uksouth"]:
+            if args == ["sql", "server", "ad-admin", "list", "--server", "production-sql-uksouth", "--resource-group", "production-sql-uksouth"]:
                 return []
-            if args == ["sql", "db", "list", "--server", "cbuk-core-prodgreen-sql-uksouth", "--resource-group", "cbuk-core-prodgreen-sql-uksouth"]:
+            if args == ["sql", "db", "list", "--server", "production-sql-uksouth", "--resource-group", "production-sql-uksouth"]:
                 return []
             raise AssertionError(f"unexpected az args: {args}")
 
@@ -3076,7 +3081,7 @@ class TestSqlServerHarvest:
         rows = sql_server.harvest("sub-1")
         assert len(rows) == 1
         row = rows[0]
-        assert row["name"] == "cbuk-core-prodgreen-sql-uksouth"
+        assert row["name"] == "production-sql-uksouth"
         assert row["is_public"] == 0
         assert row["is_restricted"] == 1
         assert json.loads(row["ip_restrictions"]) == [

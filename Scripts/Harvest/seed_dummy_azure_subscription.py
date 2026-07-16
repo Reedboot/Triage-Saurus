@@ -214,6 +214,16 @@ def _build_assets(brand: str, subscription_id: str | None = None) -> list[AssetS
             raw_json={"properties": {"addressPrefix": "10.40.7.0/24"}},
         ),
         AssetSpec(
+            key="subnet_ase",
+            name=f"snet-{brand}-ase",
+            resource_group=rg["network"],
+            arm_type="Microsoft.Network/virtualNetworks/subnets",
+            location="uksouth",
+            is_public=0,
+            tags={"brand": brand, "tier": "application"},
+            raw_json={"properties": {"addressPrefix": "10.40.9.0/24"}},
+        ),
+        AssetSpec(
             key="subnet_appsvc",
             name=f"snet-{brand}-appsvc",
             resource_group=rg["network"],
@@ -504,7 +514,31 @@ def _build_assets(brand: str, subscription_id: str | None = None) -> list[AssetS
             raw_json={
                 "properties": {
                     "reserved": True,
-                    "virtualNetworkSubnetId": f"/subscriptions/{subscription_id}/resourceGroups/rg-{brand}-network/providers/Microsoft.Network/virtualNetworks/vnet-{brand}-core/subnets/snet-{brand}-appsvc",
+                    "hostingEnvironmentProfile": {
+                        "id": f"/subscriptions/{subscription_id}/resourceGroups/rg-{brand}-app/providers/Microsoft.Web/hostingEnvironments/ase-{brand}-shared"
+                    },
+                }
+            },
+        ),
+        AssetSpec(
+            key="ase",
+            name=f"ase-{brand}-shared",
+            resource_group=rg["app"],
+            arm_type="Microsoft.Web/hostingEnvironments",
+            location="uksouth",
+            sku="ASEv3",
+            fqdn=f"ase-{brand}-shared.uksouth.appserviceenvironment.net",
+            is_public=0,
+            tags={"brand": brand, "tier": "application"},
+            raw_json={
+                "properties": {
+                    "internalLoadBalancingMode": "Web",
+                    "virtualNetwork": {
+                        "id": f"/subscriptions/{subscription_id}/resourceGroups/rg-{brand}-network/providers/Microsoft.Network/virtualNetworks/vnet-{brand}-core"
+                    },
+                    "subnet": {
+                        "id": f"/subscriptions/{subscription_id}/resourceGroups/rg-{brand}-network/providers/Microsoft.Network/virtualNetworks/vnet-{brand}-core/subnets/snet-{brand}-ase"
+                    },
                 }
             },
         ),
@@ -1387,6 +1421,210 @@ def _upsert_apim_operation(
     )
 
 
+def _upsert_aks_route(
+    conn: sqlite3.Connection,
+    subscription_id: str,
+    cluster_name: str,
+    resource_group: str,
+    namespace: str,
+    ingress_name: str,
+    host: str,
+    path: str,
+    service_name: str,
+    service_port: str,
+    deployment_name: str,
+    git_repository: str,
+    *,
+    exposure_level: str = "Public",
+    service_ports: list[str] | None = None,
+    pod_template_labels: dict[str, str] | None = None,
+) -> None:
+    route_id = f"{cluster_name}::{namespace}::{ingress_name}::{host or '*'}::{path or '*'}::{service_name}::{service_port}::{deployment_name}"
+    cluster_resource_id = _arm_id(subscription_id, resource_group, "Microsoft.ContainerService/managedClusters", cluster_name)
+    conn.execute(
+        """
+        INSERT INTO aks_routes
+            (id, subscription_id, cluster_name, cluster_resource_id, resource_group, namespace,
+             ingress_name, host, host_aliases, path, is_default_backend, service_name,
+             service_port, service_ports, deployment_name, deployment_namespace,
+             pod_template_labels, git_repository, team, exposure_level, last_synced)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            host                 = excluded.host,
+            path                 = excluded.path,
+            service_name         = excluded.service_name,
+            service_port         = excluded.service_port,
+            service_ports        = excluded.service_ports,
+            deployment_name      = excluded.deployment_name,
+            deployment_namespace = excluded.deployment_namespace,
+            pod_template_labels   = excluded.pod_template_labels,
+            git_repository       = excluded.git_repository,
+            team                 = excluded.team,
+            exposure_level       = excluded.exposure_level,
+            last_synced          = excluded.last_synced
+        """,
+        (
+            route_id,
+            subscription_id,
+            cluster_name,
+            cluster_resource_id,
+            resource_group,
+            namespace,
+            ingress_name,
+            host,
+            json.dumps([host]) if host else None,
+            path,
+            0,
+            service_name,
+            service_port,
+            json.dumps(service_ports or ([service_port] if service_port else [])),
+            deployment_name,
+            namespace,
+            json.dumps(pod_template_labels or {}),
+            git_repository,
+            "marketplace",
+            exposure_level,
+            _utcnow(),
+        ),
+    )
+
+
+def _upsert_firewall_policy(
+    conn: sqlite3.Connection,
+    subscription_id: str,
+    name: str,
+    resource_group: str,
+    associated_firewalls: list[str],
+    *,
+    mode: str = "Alert",
+    threat_intelligence_mode: str = "Alert",
+    rule_collection_groups: list[dict[str, Any]] | None = None,
+    nat_rule_count: int = 0,
+    app_rule_count: int = 0,
+) -> None:
+    policy_id = _arm_id(subscription_id, resource_group, "Microsoft.Network/firewallPolicies", name)
+    conn.execute(
+        """
+        INSERT INTO firewall_policies
+            (id, subscription_id, name, resource_group, associated_firewalls, mode,
+             threat_intelligence_mode, dns_proxy_enabled, rule_collection_groups,
+             nat_rule_count, app_rule_count, last_synced)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            associated_firewalls     = excluded.associated_firewalls,
+            mode                    = excluded.mode,
+            threat_intelligence_mode = excluded.threat_intelligence_mode,
+            dns_proxy_enabled       = excluded.dns_proxy_enabled,
+            rule_collection_groups  = excluded.rule_collection_groups,
+            nat_rule_count          = excluded.nat_rule_count,
+            app_rule_count          = excluded.app_rule_count,
+            last_synced             = excluded.last_synced
+        """,
+        (
+            policy_id,
+            subscription_id,
+            name,
+            resource_group,
+            json.dumps(associated_firewalls),
+            mode,
+            threat_intelligence_mode,
+            0,
+            json.dumps(rule_collection_groups or []),
+            nat_rule_count,
+            app_rule_count,
+            _utcnow(),
+        ),
+    )
+
+
+def _upsert_firewall_nat_rule(
+    conn: sqlite3.Connection,
+    subscription_id: str,
+    firewall_name: str,
+    resource_group: str,
+    collection_name: str,
+    rule_name: str,
+    entry_hosts: list[str],
+    translated_address: str,
+    translated_fqdn: str,
+    translated_port: str,
+    protocols: list[str],
+    exposure_level: str = "Public",
+) -> None:
+    rule_id = f"{firewall_name}::{collection_name}::{rule_name}::{translated_fqdn or translated_address}"
+    conn.execute(
+        """
+        INSERT INTO firewall_nat_rules
+            (id, subscription_id, firewall_name, resource_group, collection_name, rule_name,
+             entry_hosts, translated_address, translated_fqdn, translated_port, protocols,
+             exposure_level, last_synced)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            entry_hosts        = excluded.entry_hosts,
+            translated_address = excluded.translated_address,
+            translated_fqdn    = excluded.translated_fqdn,
+            translated_port    = excluded.translated_port,
+            protocols          = excluded.protocols,
+            exposure_level     = excluded.exposure_level,
+            last_synced        = excluded.last_synced
+        """,
+        (
+            rule_id,
+            subscription_id,
+            firewall_name,
+            resource_group,
+            collection_name,
+            rule_name,
+            json.dumps(entry_hosts),
+            translated_address,
+            translated_fqdn,
+            translated_port,
+            json.dumps(protocols),
+            exposure_level,
+            _utcnow(),
+        ),
+    )
+
+
+def _upsert_firewall_app_rule(
+    conn: sqlite3.Connection,
+    subscription_id: str,
+    firewall_name: str,
+    resource_group: str,
+    collection_name: str,
+    rule_name: str,
+    source_addresses: list[str],
+    target_fqdns: list[str],
+    protocols: list[str],
+) -> None:
+    rule_id = f"{firewall_name}::{collection_name}::{rule_name}"
+    conn.execute(
+        """
+        INSERT INTO firewall_app_rules
+            (id, subscription_id, firewall_name, resource_group, collection_name, rule_name,
+             source_addresses, target_fqdns, protocols, last_synced)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            source_addresses = excluded.source_addresses,
+            target_fqdns     = excluded.target_fqdns,
+            protocols        = excluded.protocols,
+            last_synced      = excluded.last_synced
+        """,
+        (
+            rule_id,
+            subscription_id,
+            firewall_name,
+            resource_group,
+            collection_name,
+            rule_name,
+            json.dumps(source_addresses),
+            json.dumps(target_fqdns),
+            json.dumps(protocols),
+            _utcnow(),
+        ),
+    )
+
+
 def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: str, tenant_id: str, environment: str, state: str, brand: str) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), timeout=30)
@@ -1402,6 +1640,10 @@ def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: s
         conn.execute("DELETE FROM resource_connections WHERE experiment_id = ?", (experiment_id,))
         conn.execute("DELETE FROM subscription_context WHERE experiment_id = ? AND scope_key = 'subscription'", (experiment_id,))
         conn.execute("DELETE FROM provisioned_assets WHERE subscription_id = ?", (subscription_id,))
+        conn.execute("DELETE FROM aks_routes WHERE subscription_id = ?", (subscription_id,))
+        conn.execute("DELETE FROM firewall_policies WHERE subscription_id = ?", (subscription_id,))
+        conn.execute("DELETE FROM firewall_nat_rules WHERE subscription_id = ?", (subscription_id,))
+        conn.execute("DELETE FROM firewall_app_rules WHERE subscription_id = ?", (subscription_id,))
         conn.execute("DELETE FROM subscriptions WHERE id = ?", (subscription_id,))
 
         existing = _load_existing_names(conn)
@@ -1427,8 +1669,9 @@ def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: s
         apim_api_orders_id = conn.execute("SELECT id FROM provisioned_assets WHERE name = ?", (f"orders-{brand}",)).fetchone()[0]
         appgw_rg = f"rg-{brand}-edge"
         apim_rg = f"rg-{brand}-edge"
+        app_rg = f"rg-{brand}-app"
+        network_rg = f"rg-{brand}-network"
 
-        _upsert_appgw_waf_policy(conn, subscription_id, f"waf-{brand}-edge", appgw_rg, associated_gateways=[f"agw-{brand}-edge"])
         _upsert_appgw_route(
             conn,
             subscription_id,
@@ -1446,7 +1689,7 @@ def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: s
             443,
             "Https",
             None,
-            f"waf-{brand}-edge",
+            "waf-v2",
         )
         _upsert_appgw_route(
             conn,
@@ -1465,7 +1708,7 @@ def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: s
             443,
             "Https",
             None,
-            f"waf-{brand}-edge",
+            "waf-v2",
         )
 
         _upsert_apim_backend(conn, subscription_id, f"apim-{brand}-edge", "web-backend", "web-backend", f"https://store.{brand}-retail.azurewebsites.net", "http")
@@ -1503,6 +1746,101 @@ def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: s
         _upsert_apim_operation(conn, subscription_id, f"apim-{brand}-edge", f"catalog-{brand}", "Catalog API", "catalog", f"https://store.{brand}-retail.azurewebsites.net", "get-item", "Get item", "GET", "/items/{itemId}")
         _upsert_apim_operation(conn, subscription_id, f"apim-{brand}-edge", f"orders-{brand}", "Orders API", "orders", f"https://orders.{brand}-retail.azurewebsites.net", "create-order", "Create order", "POST", "/orders")
         _upsert_apim_operation(conn, subscription_id, f"apim-{brand}-edge", f"orders-{brand}", "Orders API", "orders", f"https://orders.{brand}-retail.azurewebsites.net", "cancel-order", "Cancel order", "POST", "/orders/{orderId}/cancel")
+
+        _upsert_aks_route(
+            conn,
+            subscription_id,
+            f"aks-{brand}-platform",
+            app_rg,
+            "storefront",
+            "storefront-ingress",
+            f"store.{brand}-retail.com",
+            "/*",
+            "store-web",
+            "80",
+            "store-web",
+            f"https://github.com/{brand}/storefront.git",
+            exposure_level="Public",
+            service_ports=["80", "443"],
+            pod_template_labels={
+                "app.kubernetes.io/name": "store-web",
+                "app.kubernetes.io/component": "frontend",
+            },
+        )
+        _upsert_aks_route(
+            conn,
+            subscription_id,
+            f"aks-{brand}-platform",
+            app_rg,
+            "orders",
+            "orders-ingress",
+            f"orders.{brand}-retail.internal",
+            "/api/orders/*",
+            "orders-api",
+            "8080",
+            "orders-api",
+            f"https://github.com/{brand}/orders-api.git",
+            exposure_level="Internal",
+            service_ports=["8080"],
+            pod_template_labels={
+                "app.kubernetes.io/name": "orders-api",
+                "app.kubernetes.io/component": "api",
+            },
+        )
+
+        _upsert_firewall_policy(
+            conn,
+            subscription_id,
+            f"fw-{brand}-policy",
+            network_rg,
+            [f"fw-{brand}-core"],
+            rule_collection_groups=[
+                {
+                    "name": f"egress-{brand}",
+                    "priority": 100,
+                    "collection_count": 2,
+                    "rule_count": 3,
+                }
+            ],
+            nat_rule_count=1,
+            app_rule_count=2,
+        )
+        _upsert_firewall_nat_rule(
+            conn,
+            subscription_id,
+            f"fw-{brand}-core",
+            network_rg,
+            "web-collection",
+            "shop-public",
+            ["52.160.10.10"],
+            "10.40.4.10",
+            f"shop.{brand}-retail.com",
+            "443",
+            ["HTTPS:443"],
+            exposure_level="Public",
+        )
+        _upsert_firewall_app_rule(
+            conn,
+            subscription_id,
+            f"fw-{brand}-core",
+            network_rg,
+            "egress",
+            "storefront-egress",
+            ["10.40.4.0/24"],
+            [f"store.{brand}-retail.azurewebsites.net", f"orders.{brand}-retail.azurewebsites.net"],
+            ["Https:443"],
+        )
+        _upsert_firewall_app_rule(
+            conn,
+            subscription_id,
+            f"fw-{brand}-core",
+            network_rg,
+            "egress",
+            "platform-egress",
+            ["10.40.7.0/24"],
+            [f"*.{brand}-retail.internal", "mcr.microsoft.com"],
+            ["Https:443"],
+        )
 
         notes = "Seeded by Scripts/Harvest/seed_dummy_azure_subscription.py"
         connection_pairs = [
@@ -1555,9 +1893,7 @@ def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: s
             ("sql_server", "sql_firewall", "contains"),
             ("web_slot", "web_store", "contains"),
             ("fn_orders", "subnet_app", "deploys_to"),
-            ("fn_orders", "subnet_appsvc", "deploys_to"),
             ("web_store", "subnet_app", "deploys_to"),
-            ("web_store", "subnet_appsvc", "deploys_to"),
             ("fn_orders", "sb", "publishes_to"),
             ("aks", "acr", "pulls_from"),
             ("aks", "subnet_aks", "runs_in"),
@@ -1565,8 +1901,8 @@ def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: s
             ("aks_ingress", "aks", "routes_to"),
             ("aks_ingress", "appgw_edge", "fronted_by"),
             ("apim", "subnet_apim", "runs_in"),
-            ("plan_web", "subnet_appsvc", "integrates_with"),
-            ("plan_web", "subnet_app", "integrates_with"),
+            ("plan_web", "ase", "hosts"),
+            ("ase", "subnet_ase", "resides_in"),
             ("firewall", "subnet_edge", "protects"),
             ("bastion", "subnet_bastion", "resides_in"),
             ("load_balancer", "subnet_ingress", "resides_in"),
@@ -1588,6 +1924,7 @@ def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: s
             ("vnet", "subnet_app", "contains"),
             ("vnet", "subnet_apim", "contains"),
             ("vnet", "subnet_aks", "contains"),
+            ("vnet", "subnet_ase", "contains"),
             ("vnet", "subnet_appsvc", "contains"),
             ("vnet", "subnet_data", "contains"),
             ("appcfg", "web_store", "configures"),

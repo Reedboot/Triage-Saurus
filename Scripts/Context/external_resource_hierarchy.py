@@ -280,7 +280,6 @@ HIERARCHY_CONFIG: Dict[str, Dict[str, str]] = {
     "aws_s3_bucket_server_side_encryption_configuration": {"parent_type": "aws_s3_bucket", "parent_field": "bucket"},
     "aws_s3_bucket_website_configuration": {"parent_type": "aws_s3_bucket", "parent_field": "bucket"},
     "aws_s3_bucket_accelerate_configuration": {"parent_type": "aws_s3_bucket", "parent_field": "bucket"},
-    "aws_s3_bucket_request_payment_configuration": {"parent_type": "aws_s3_bucket", "parent_field": "bucket"},
     "aws_s3_bucket_intelligent_tiering_configuration": {"parent_type": "aws_s3_bucket", "parent_field": "bucket"},
     "aws_s3_bucket_metric": {"parent_type": "aws_s3_bucket", "parent_field": "bucket"},
     "aws_s3_bucket_inventory": {"parent_type": "aws_s3_bucket", "parent_field": "bucket"},
