@@ -28,7 +28,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Review generated diagrams with Playwright and produce before/after report."
     )
-    parser.add_argument("--base-url", default="http://127.0.0.1:9000")
+    parser.add_argument("--base-url", default="http://127.0.0.1:9001")
     parser.add_argument("--audit-root", default=str(DEFAULT_AUDIT_ROOT))
     parser.add_argument("--concurrency", type=int, default=6)
     parser.add_argument("--scan-complete-timeout-sec", type=int, default=600)

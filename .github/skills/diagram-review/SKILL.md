@@ -7,7 +7,7 @@ Run the Triage-Saurus diagram review workflow for this repository.
 
 ## Prerequisites
 Before running, verify:
-1. The web UI is reachable: `curl -sf http://127.0.0.1:9000 > /dev/null || echo "Server not running"`
+1. The web UI is reachable: `curl -sf http://127.0.0.1:9001 > /dev/null || echo "Server not running"`
 2. Playwright is installed: `python3 -m playwright install chromium`
 
 If the server is not running, instruct the user to start it (e.g. `bash Scripts/start_web.sh`) before proceeding.
@@ -16,7 +16,7 @@ If the server is not running, instruct the user to start it (e.g. `bash Scripts/
 
 Use the orchestrator script with sensible defaults:
 ```bash
-python3 Scripts/Validate/review_generated_diagrams.py --base-url http://127.0.0.1:9000
+python3 Scripts/Validate/review_generated_diagrams.py --base-url http://127.0.0.1:9001
 ```
 
 ### Key flags

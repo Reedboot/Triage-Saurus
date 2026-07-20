@@ -1,6 +1,6 @@
 ## Invocation & Output
 
-**Script:** `python3 Scripts/Validate/review_generated_diagrams.py --base-url http://127.0.0.1:9000`
+**Script:** `python3 Scripts/Validate/review_generated_diagrams.py --base-url http://127.0.0.1:9001`
 
 **Output artifacts** (written under `Output/Audit/DiagramReviewSkill_<timestamp>/`):
 - `diagram_review_report.md` — main before/after report with metrics table

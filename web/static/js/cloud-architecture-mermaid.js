@@ -270,14 +270,14 @@ function buildFallbackModalData(resourceId, nodeData, lookup = {}) {
   ].filter(Boolean)));
   return {
   title: firstNonEmpty(
-    lookup.name,
-    primary?.name,
     nodeData?.title,
     nodeData?.label,
+    lookup.name,
+    primary?.name,
     nodeData?.providerLabel,
     resourceId
   ),
-  name: firstNonEmpty(lookup.name, primary?.name, nodeData?.label, resourceId),
+  name: firstNonEmpty(nodeData?.label, nodeData?.title, lookup.name, primary?.name, resourceId),
   resource_group: firstNonEmpty(lookup.resourceGroup, primary?.rg, nodeData?.resourceGroup),
   type_label: firstNonEmpty(lookup.type, nodeData?.typeLabel, nodeData?.type),
   type: firstNonEmpty(lookup.type, nodeData?.resourceType, nodeData?.arm_type, nodeData?.type),
@@ -1845,7 +1845,7 @@ function buildTrafficFlowSection(data) {
 function renderTabularModalContent(data) {
   if (!modalOverlay || !modalTitle || !modalBody) return;
   modalOverlay.hidden = false;
-  modalTitle.textContent = firstNonEmpty(data?.title, data?.name, "Details");
+  modalTitle.textContent = firstNonEmpty(data?.__node_label, data?.title, data?.name, "Details");
   if (modalSubtitle) modalSubtitle.textContent = "";
   setModalHeaderIcon(data?.icon_path || data?.parent_resource?.icon_path || "", "☁");
   const suppressParentHeading =
@@ -1982,7 +1982,7 @@ function renderTabularModalContent(data) {
 function renderModalContent(data) {
   if (!modalOverlay || !modalTitle || !modalBody) return;
   modalOverlay.hidden = false;
-  modalTitle.textContent = firstNonEmpty(data.title, data.name, "Resource details");
+  modalTitle.textContent = firstNonEmpty(data.__node_label, data.title, data.name, "Resource details");
   if (modalSubtitle) {
     modalSubtitle.textContent = firstNonEmpty(data.type_label, data.type, data.resourceType);
   }
@@ -2090,7 +2090,7 @@ function renderModalContent(data) {
   const suppressParentHeading =
     String(firstNonEmpty(data.title, data.name, "")).toLowerCase() === "simulation-knowledgecentre-uksouth" &&
     String(firstNonEmpty(data.type_label, data.type, data.resourceType, "")).toLowerCase().includes("app service plan");
-  const resourceName = firstNonEmpty(data.name, data.title, data.resource_name, data.__node_label);
+  const resourceName = firstNonEmpty(data.__node_label, data.name, data.title, data.resource_name);
   const resourceGroup = firstNonEmpty(
     data.resource_group,
     data.resourceGroup,

@@ -210,4 +210,151 @@ def test_aks_route_backend_prefers_ingress_hostname_over_cluster():
     assert "production-portalui2.internal.cbinnovation.uk" in mermaid
     assert f"{portalui_nid} -->|\"routes to\"| {ingress_nid}" in mermaid
     assert f"{ingress_nid} -->|\"routes to\"| {cluster_nid}" in mermaid
-    assert f"{service_nid} -->|\"belongs to\"| {cluster_nid}" in mermaid
+    assert f"{service_nid}[" not in mermaid
+
+
+def test_kubernetes_service_nodes_are_hidden_when_orphaned():
+    rows = [
+        (
+            "SharedAKS",
+            "Microsoft.ContainerService/managedClusters",
+            "rg-aks",
+            "",
+            0,
+            "Standard",
+            "/subscriptions/sub-1/resourceGroups/rg-aks/providers/Microsoft.ContainerService/managedClusters/SharedAKS",
+            0,
+            None,
+            0,
+            None,
+            None,
+            '{"properties":{}}',
+            None,
+            None,
+        ),
+        (
+            "portalui",
+            "Microsoft.Kubernetes/services",
+            "rg-aks",
+            "",
+            0,
+            None,
+            "/subscriptions/sub-1/resourceGroups/rg-aks/providers/Microsoft.Kubernetes/services/portalui",
+            0,
+            None,
+            0,
+            None,
+            None,
+            '{"properties":{}}',
+            None,
+            None,
+        ),
+    ]
+
+    diagrams = build_subscription_diagrams_by_rg(
+        "pipeline-customer-production",
+        "production",
+        rows,
+        sanitise_node_id=lambda value: value.replace("-", "_").replace("/", "_").replace(".", "_"),
+        friendly_type=lambda arm_type: arm_type.split("/")[-1],
+        get_icon_path=lambda arm_type: None,
+        normalize_attack_paths=lambda value, reviewer=None: [],
+    )
+
+    mermaid = diagrams[0]["mermaid"]
+    service_nid = subscription_node_id(
+        {"name": "portalui", "rg": "rg-aks"},
+        lambda value: value.replace("-", "_").replace("/", "_").replace(".", "_"),
+    )
+    cluster_nid = subscription_node_id(
+        {"name": "SharedAKS", "rg": "rg-aks"},
+        lambda value: value.replace("-", "_").replace("/", "_").replace(".", "_"),
+    )
+
+    assert f"{service_nid}[" not in mermaid
+    assert cluster_nid in mermaid
+
+
+def test_apim_backend_target_routes_to_target_service():
+    import json
+
+    rows = [
+        (
+            "apim-prod",
+            "Microsoft.ApiManagement/service",
+            "rg-api",
+            "apim.example.com",
+            1,
+            "Developer",
+            "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/apim-prod",
+            0,
+            None,
+            0,
+            None,
+            None,
+            json.dumps({"properties": {}}),
+            None,
+            None,
+        ),
+        (
+            "apim-prod::backend1",
+            "APIM Backend Target",
+            "rg-api",
+            None,
+            0,
+            None,
+            "apim-prod::backend1",
+            0,
+            None,
+            0,
+            None,
+            None,
+            json.dumps({
+                "apim_name": "apim-prod",
+                "backend_id": "backend1",
+                "backend_url": "https://backend1.azurewebsites.net",
+                "_extra": {"display_label": "backend1"},
+            }),
+            None,
+            None,
+        ),
+        (
+            "backend1",
+            "Microsoft.Web/sites",
+            "rg-api",
+            "backend1.azurewebsites.net",
+            1,
+            "P1v3",
+            "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.Web/sites/backend1",
+            0,
+            None,
+            0,
+            None,
+            None,
+            json.dumps({"properties": {}}),
+            None,
+            None,
+        ),
+    ]
+
+    diagrams = build_subscription_diagrams_by_rg(
+        "Test Subscription",
+        "production",
+        rows,
+        sanitise_node_id=lambda value: value.replace("-", "_").replace("/", "_").replace(".", "_"),
+        friendly_type=lambda arm_type: arm_type.split("/")[-1],
+        get_icon_path=lambda _resource_type: None,
+        normalize_attack_paths=lambda raw_paths, reviewer=None: raw_paths,
+    )
+
+    mermaid = diagrams[0]["views"]["connectivity"]["mermaid"]
+    backend_target_nid = subscription_node_id(
+        {"name": "apim-prod::backend1", "rg": "rg-api"},
+        lambda value: value.replace("-", "_").replace("/", "_").replace(".", "_"),
+    )
+    function_nid = subscription_node_id(
+        {"name": "backend1", "rg": "rg-api"},
+        lambda value: value.replace("-", "_").replace("/", "_").replace(".", "_"),
+    )
+
+    assert f"{backend_target_nid} -->|\"routes to\"| {function_nid}" in mermaid, mermaid

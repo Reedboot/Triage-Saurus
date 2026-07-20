@@ -133,9 +133,48 @@ else
   fi
 fi
 
+_port_is_available() {
+  local port="$1"
+  "$PY_EXEC" - "$port" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind(("0.0.0.0", port))
+    except OSError:
+        raise SystemExit(1)
+PY
+}
+
+_choose_web_port() {
+  if [ -n "${TRIAGE_WEB_PORT:-}" ]; then
+    printf '%s\n' "$TRIAGE_WEB_PORT"
+    return 0
+  fi
+  if [ -n "${PORT:-}" ]; then
+    printf '%s\n' "$PORT"
+    return 0
+  fi
+
+  local preferred=9001
+  local port="$preferred"
+  local attempts=20
+  while [ "$port" -lt $((preferred + attempts)) ]; do
+    if _port_is_available "$port"; then
+      printf '%s\n' "$port"
+      return 0
+    fi
+    port=$((port + 1))
+  done
+
+  return 1
+}
+
 echo ""
 echo -e "${GREEN}🦕 Starting Triage-Saurus web server${RESET}"
-echo -e "   ${CYAN}URL: http://localhost:9000${RESET}"
 _print_no_install_hint
 echo -e "   ${CYAN}Press Ctrl-C to stop.${RESET}"
 echo ""
@@ -213,5 +252,15 @@ else
   echo -e "  ${YELLOW}ℹ No package.json found in web/ — skipping npm install.${RESET}"
 fi
 
+WEB_PORT="$(_choose_web_port)" || {
+  echo -e "  ${RED}❌ No free web port found starting at 9000.${RESET}"
+  exit 1
+}
+if [ "$WEB_PORT" != "9001" ] && [ -z "${TRIAGE_WEB_PORT:-}" ] && [ -z "${PORT:-}" ]; then
+  echo -e "  ${YELLOW}⚠ Port 9001 is busy; using port ${WEB_PORT} instead.${RESET}"
+fi
+export TRIAGE_WEB_PORT="$WEB_PORT"
+
+echo -e "   ${CYAN}URL: http://localhost:${WEB_PORT}${RESET}"
 echo -e "  ${CYAN}Launching web app with: ${BOLD}${PY_EXEC}${RESET}"
 exec "$PY_EXEC" "$ROOT/web/app.py"

@@ -394,7 +394,7 @@ def test_scan_repo_worker_plumbs_scan_complete_timeout(monkeypatch, tmp_path: Pa
     result = asyncio.run(
         scan_repo_worker(
             browser=DummyBrowser(),
-            base_url="http://127.0.0.1:9000",
+            base_url="http://127.0.0.1:9001",
             repo=repo,
             screenshots_dir=tmp_path,
             candidate_rules_dir=tmp_path,

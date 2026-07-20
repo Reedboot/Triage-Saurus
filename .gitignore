@@ -44,3 +44,4 @@ web/app.db
 web/app_data.db
 *.db-shm
 *.db-wal
+.aider*

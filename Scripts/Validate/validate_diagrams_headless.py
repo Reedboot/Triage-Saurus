@@ -146,7 +146,7 @@ class DiagramScreenshotValidator:
 async def main():
     parser = argparse.ArgumentParser(description="Validate architecture diagrams with headless browser")
     parser.add_argument("--experiment", required=True, help="Experiment ID")
-    parser.add_argument("--base-url", default="http://127.0.0.1:9000", help="Web UI base URL")
+    parser.add_argument("--base-url", default="http://127.0.0.1:9001", help="Web UI base URL")
     parser.add_argument("--output", type=Path, default=Path("Output/Audit/diagram-validation"), help="Output directory")
     parser.add_argument("--headed", action="store_true", help="Run browser in headed mode (for debugging)")
     args = parser.parse_args()

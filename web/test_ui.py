@@ -3989,6 +3989,85 @@ class TestIngressDiagramGeneration:
         assert mermaid.index("production-api-uksouth.azure-api.net") < mermaid.index("internal-transfers"), mermaid
         assert " -->|\"Routing\"| " in mermaid, mermaid
 
+    def test_apim_backend_targets_keep_display_label_in_modal_and_subnet_graph(self):
+        """APIM backend targets should render under the APIM subnet and keep a readable popup title."""
+        import json
+
+        rows = [
+            (
+                "cbuk-core-prodgreen-api-uksouth",
+                "Microsoft.ApiManagement/service",
+                "rg-api",
+                "cbuk-core-prodgreen-api-uksouth.azure-api.net",
+                1,
+                "Developer",
+                "/subscriptions/000/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/cbuk-core-prodgreen-api-uksouth",
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({
+                    "_extra": {
+                        "vnet_name": "vnet-core",
+                        "vnet_resource_group": "rg-network",
+                        "subnet_name": "snet-apim",
+                        "subnet_id": "/subscriptions/000/resourceGroups/rg-network/providers/Microsoft.Network/virtualNetworks/vnet-core/subnets/snet-apim",
+                    }
+                }),
+                None,
+                None,
+            ),
+            (
+                "cbuk-core-prodgreen-api-uksouth-prodgreen-eventgrid-bridge",
+                "Microsoft.Web/sites",
+                "rg-app",
+                "cbuk-core-prodgreen-api-uksouth-prodgreen-eventgrid-bridge.azurewebsites.net",
+                1,
+                "Y1",
+                "/subscriptions/000/resourceGroups/rg-app/providers/Microsoft.Web/sites/cbuk-core-prodgreen-api-uksouth-prodgreen-eventgrid-bridge",
+                0,
+                None,
+                0,
+                None,
+                None,
+                "{}",
+                None,
+                None,
+            ),
+        ]
+        apim_backend_rows = [
+            {
+                "apim_name": "cbuk-core-prodgreen-api-uksouth",
+                "backend_id": "prodgreen-eventgrid-bridge",
+                "title": "prodgreen-eventgrid-bridge.internal.cbinnovation.uk",
+                "url": "https://prodgreen-eventgrid-bridge.internal.cbinnovation.uk/",
+            }
+        ]
+        apim_route_map = {
+            "cbuk-core-prodgreen-api-uksouth": [
+                "https://prodgreen-eventgrid-bridge.internal.cbinnovation.uk/",
+            ]
+        }
+
+        result = self._call(
+            rows=rows,
+            apim_backend_rows=apim_backend_rows,
+            apim_route_map=apim_route_map,
+        )
+        mermaid = result.get("mermaid", "")
+        node_map = result.get("node_drilldown_map", {})
+        target = next(
+            value
+            for value in node_map.values()
+            if value.get("arm_type") == "APIM Backend Target"
+        )
+
+        assert "prodgreen-eventgrid-bridge.internal.cbinnovation.uk 🔒" in mermaid, mermaid
+        assert "rg_api_cbuk_core_prodgreen_api_uksouth__prodgreen_eventgrid_bridge_internal_cbinnovation_uk" in mermaid, mermaid
+        assert target.get("title") == "prodgreen-eventgrid-bridge.internal.cbinnovation.uk", target
+        assert target.get("resources", [{}])[0].get("name") == "cbuk-core-prodgreen-api-uksouth::prodgreen-eventgrid-bridge.internal.cbinnovation.uk", target
+
     def test_marketlane_apim_backend_targets_use_backend_id_and_apim_subnet(self):
         """APIM backend targets should keep the backend id label and inherit APIM subnet placement."""
         import json
@@ -9647,6 +9726,153 @@ class TestCloudPosture:
         assert data["network"]["virtual_network_type"] == "Internal"
         assert data["network"]["outbound_public_ips"] == ["20.90.204.14"]
         assert data["network"]["public_ips"] == ["20.90.204.14"]
+
+    def test_api_cloud_resource_details_resolves_apim_backend_target(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            CREATE TABLE apim_backends (
+                apim_name TEXT,
+                backend_id TEXT,
+                title TEXT,
+                description TEXT,
+                url TEXT,
+                protocol TEXT,
+                subscription_id TEXT
+            );
+            CREATE TABLE apim_api_routes (
+                apim_name TEXT,
+                api_name TEXT,
+                api_display_name TEXT,
+                api_path TEXT,
+                backend_url TEXT,
+                service_url TEXT,
+                requires_subscription INTEGER,
+                subscription_id TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+        apim_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/cbuk-core-prodgreen-api-uksouth"
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                apim_id,
+                "sub-1",
+                "rg-api",
+                "cbuk-core-prodgreen-api-uksouth",
+                "Microsoft.ApiManagement/service",
+                "uksouth",
+                "Premium",
+                "cbuk-core-prodgreen-api-uksouth.azure-api.net",
+                0,
+                "active",
+                None,
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+                json.dumps({"properties": {"virtualNetworkType": "Internal"}}),
+                0,
+                None,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO apim_backends (apim_name, backend_id, title, description, url, protocol, subscription_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "cbuk-core-prodgreen-api-uksouth",
+                "prodgreen-eventgrid-bridge",
+                "prodgreen-eventgrid-bridge.internal.cbinnovation.uk",
+                "EventGrid bridge backend",
+                "https://prodgreen-eventgrid-bridge.internal.cbinnovation.uk/",
+                "https",
+                "sub-1",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO apim_api_routes (
+                apim_name, api_name, api_display_name, api_path, backend_url, service_url,
+                requires_subscription, subscription_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "cbuk-core-prodgreen-api-uksouth",
+                "bridge-api",
+                "Bridge API",
+                "/bridge",
+                "https://prodgreen-eventgrid-bridge.internal.cbinnovation.uk/",
+                "https://prodgreen-eventgrid-bridge.internal.cbinnovation.uk/",
+                1,
+                "sub-1",
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get(
+            "/api/cloud/resource-details",
+            query_string={
+                "id": "cbuk_core_prodgreen_api_uksouth_prodgreen_eventgrid_bridge_internal_cbinnovation_uk",
+                "name": "prodgreen-eventgrid-bridge.internal.cbinnovation.uk",
+                "resource_group": "cbuk-core-prodgreen-api-uksouth",
+                "type": "APIM Backend Target",
+                "sub": "sub-1",
+            },
+        )
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        assert data["type_label"] == "APIM Backend Target"
+        assert data["name"] == "prodgreen-eventgrid-bridge.internal.cbinnovation.uk"
+        assert data["parent_resource"]["name"] == "cbuk-core-prodgreen-api-uksouth"
+        assert data["configuration"]["backend_id"] == "prodgreen-eventgrid-bridge"
+        assert data["network"]["subnet"] is None or isinstance(data["network"]["subnet"], str)
 
     def test_api_cloud_resource_details_infers_appgw_parent_from_backend_route(self, monkeypatch):
         import json

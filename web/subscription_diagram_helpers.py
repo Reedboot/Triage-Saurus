@@ -142,6 +142,15 @@ def subscription_asset_tier(arm_type: str, name: str = "") -> str:
     return "other"
 
 
+def subscription_is_kubernetes_service(asset: dict) -> bool:
+    type_key = (asset.get("arm_type") or asset.get("type") or "").lower()
+    return "kubernetes_service" in type_key or "microsoft.kubernetes/services" in type_key
+
+
+def subscription_should_hide_in_subscription_diagram(asset: dict) -> bool:
+    return subscription_is_kubernetes_service(asset)
+
+
 def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str]) -> list[dict]:
     def _parse_json(value: object) -> dict | list | None:
         if value is None or value == "":
@@ -1277,6 +1286,10 @@ def build_subscription_attack_paths(
     scope_label: str,
     normalize_attack_paths: Callable[[object, str | None], list[dict]],
 ) -> list[dict]:
+    assets = [
+        asset for asset in assets
+        if not subscription_should_hide_in_subscription_diagram(asset)
+    ]
     entries = [a for a in assets if a.get("tier") == "entry"]
     apis = [a for a in assets if a.get("tier") == "api"]
     backends = [a for a in assets if a.get("tier") == "backend"]
@@ -1400,6 +1413,10 @@ def build_subscription_overlay_views(
 ) -> dict:
     assets = subscription_assets_from_rows(rows, friendly_type)
     assets = subscription_apply_plan_hierarchy(assets, plan_links)
+    assets = [
+        asset for asset in assets
+        if not subscription_should_hide_in_subscription_diagram(asset)
+    ]
     entries = [a for a in assets if a.get("tier") == "entry"]
     apis = [a for a in assets if a.get("tier") == "api"]
     backends = [a for a in assets if a.get("tier") == "backend"]
@@ -1539,14 +1556,18 @@ def build_subscription_diagrams_by_rg(
 
     def build_rg_view(rg: str, rg_assets: list[dict]) -> tuple[dict, int]:
         rg_assets = subscription_apply_plan_hierarchy(rg_assets, plan_links)
-        summary = rg_asset_summary(rg_assets)
+        diagram_assets = [
+            asset for asset in rg_assets
+            if not subscription_should_hide_in_subscription_diagram(asset)
+        ]
+        summary = rg_asset_summary(diagram_assets)
         hosted_site_keys = {
             ((site_name or "").lower(), (site_rg or "").lower())
             for site_rg, site_name, _plan_rg, _plan_name in (plan_links or [])
         }
         visible_rg_assets = [
             asset
-            for asset in rg_assets
+            for asset in diagram_assets
             if not (
                 asset.get("tier") == "backend"
                 and "sites" in (asset.get("arm_type") or "").lower()
@@ -1556,7 +1577,63 @@ def build_subscription_diagrams_by_rg(
         route_nodes_by_cluster: dict[tuple[str, str], list[dict]] = defaultdict(list)
         route_nodes_by_host: dict[str, list[dict]] = defaultdict(list)
         route_nodes_by_name: dict[str, list[dict]] = defaultdict(list)
+        visible_nodes_by_name: dict[str, set[str]] = defaultdict(set)
+        visible_nodes_by_name_normalized: dict[str, set[str]] = defaultdict(set)
+        visible_nodes_by_fqdn: dict[str, set[str]] = defaultdict(set)
+        visible_nodes_by_fqdn_normalized: dict[str, set[str]] = defaultdict(set)
+        visible_nodes_by_resource_id: dict[str, str] = {}
+
+        def _routing_lookup_key(value: str) -> str:
+            import re as _re
+
+            text = str(value or "").strip().lower().rstrip(".")
+            if not text:
+                return ""
+            text = text.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+            text = text.split(":", 1)[0].rstrip(".")
+            for prefix in ("production-", "prod-", "subscription-production-"):
+                if text.startswith(prefix):
+                    text = text[len(prefix):]
+                    break
+            text = _re.sub(r"-(uksouth|ukwest|eastus\d*|westeurope|northeurope|westus\d*)$", "", text, flags=_re.IGNORECASE)
+            env_suffix = _re.compile(r"-(prod|production|dev|stg|staging|uat|int|internal|ext|external|api|svc|service)$", _re.IGNORECASE)
+            while True:
+                next_text = env_suffix.sub("", text)
+                if next_text == text:
+                    break
+                text = next_text
+            text = _re.sub(r"-(f|fn|func|function)$", "", text, flags=_re.IGNORECASE)
+            return _re.sub(r"[^a-z0-9]+", "", text)
+
         for asset in visible_rg_assets:
+            node_id = subscription_node_id(asset, sanitise_node_id)
+            asset_id = str(asset.get("id") or "").strip().lower()
+            if asset_id:
+                visible_nodes_by_resource_id[asset_id] = node_id
+            for candidate in (
+                asset.get("name"),
+                asset.get("short_name"),
+                asset.get("ingress_name"),
+                asset.get("source_service"),
+                asset.get("source_deployment"),
+            ):
+                candidate_key = str(candidate or "").strip().lower()
+                if candidate_key:
+                    visible_nodes_by_name[candidate_key].add(node_id)
+                    normalized = _routing_lookup_key(candidate_key)
+                    if normalized:
+                        visible_nodes_by_name_normalized[normalized].add(node_id)
+            for candidate in (
+                asset.get("fqdn"),
+                asset.get("host"),
+                asset.get("ingress_host"),
+            ):
+                candidate_key = str(candidate or "").strip().lower()
+                if candidate_key:
+                    visible_nodes_by_fqdn[candidate_key].add(node_id)
+                    normalized = _routing_lookup_key(candidate_key)
+                    if normalized:
+                        visible_nodes_by_fqdn_normalized[normalized].add(node_id)
             variant = asset.get("node_variant")
             if variant != "aks_ingress":
                 continue
@@ -1828,6 +1905,18 @@ def build_subscription_diagrams_by_rg(
                         matched_cluster_keys.add(cluster_key)
                     elif target_value and target_value in {cluster_name, str(cluster_asset.get("short_name") or "").strip().lower()}:
                         matched_cluster_keys.add(cluster_key)
+                if target_rid and target_rid in visible_nodes_by_resource_id:
+                    matched_route_nids.add(visible_nodes_by_resource_id[target_rid])
+                for candidate in _routing_target_candidates(target):
+                    candidate_key = candidate.strip().lower()
+                    if not candidate_key:
+                        continue
+                    matched_route_nids.update(visible_nodes_by_name.get(candidate_key, set()))
+                    matched_route_nids.update(visible_nodes_by_fqdn.get(candidate_key, set()))
+                    normalized = _routing_lookup_key(candidate_key)
+                    if normalized:
+                        matched_route_nids.update(visible_nodes_by_name_normalized.get(normalized, set()))
+                        matched_route_nids.update(visible_nodes_by_fqdn_normalized.get(normalized, set()))
 
             for route_nid in matched_route_nids:
                 add_edge(backend_nid, route_nid, "routes to", "#f97316", dasharray="6,3")

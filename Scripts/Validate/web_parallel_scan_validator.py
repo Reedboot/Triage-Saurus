@@ -47,7 +47,7 @@ except ImportError as e:
     validate_icon_mapping_semantics = None
     validate_rendering_pipeline = None
     generate_asset_validation_report = None
-DEFAULT_BASE_URL = "http://127.0.0.1:9000"
+DEFAULT_BASE_URL = "http://127.0.0.1:9001"
 DEFAULT_AUDIT_ROOT = REPO_ROOT / "Output" / "Audit"
 SETTINGS_PATH = REPO_ROOT / "Settings" / "paths.json"
 INTAKE_REPOS_FILE = REPO_ROOT / "Intake" / "ReposToScan.txt"
@@ -1886,7 +1886,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Headless web scan + diagram validator (parallel or serial execution)."
     )
-    parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="Web UI base URL (default: http://127.0.0.1:9000)")
+    parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="Web UI base URL (default: http://127.0.0.1:9001)")
     parser.add_argument("--concurrency", type=int, default=6, help="Maximum concurrent scans (default: 6)")
     parser.add_argument(
         "--repo-at-a-time",

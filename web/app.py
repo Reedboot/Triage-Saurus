@@ -48,6 +48,25 @@ except ImportError:
 
 app = Flask(__name__)
 
+
+def _web_host() -> str:
+    host = (os.getenv("TRIAGE_WEB_HOST") or os.getenv("HOST") or "0.0.0.0").strip()
+    return host or "0.0.0.0"
+
+
+def _web_port() -> int:
+    for var in ("TRIAGE_WEB_PORT", "PORT", "FLASK_RUN_PORT"):
+        raw = (os.getenv(var) or "").strip()
+        if not raw:
+            continue
+        try:
+            port = int(raw)
+        except ValueError:
+            continue
+        if 1 <= port <= 65535:
+            return port
+    return 9000
+
 # Jinja2 custom filters
 import os as _os
 from markupsafe import Markup as _Markup
@@ -14110,6 +14129,189 @@ def _build_subscription_architecture_payload(
                 }
             )
 
+    synthetic_apim_api_assets: list[dict] = []
+    synthetic_apim_backend_assets: list[dict] = []
+    if apim_api_rows:
+        def _apim_api_label(api_name: str, api_display_name: str) -> str:
+            display = str(api_display_name or "").strip()
+            if not display:
+                return api_name
+            display_lc = display.lower()
+            if display_lc.startswith(("http://", "https://")):
+                return api_name
+            if "." in display_lc or display_lc.endswith(".azure-api.net"):
+                return api_name
+            return display
+
+        apim_service_assets = [
+            asset for asset in assets
+            if "apimanagement" in str(asset.get("type") or "").lower()
+        ]
+        seen_apim_api_keys: set[tuple[str, str]] = set()
+        for row in apim_api_rows:
+            apim_name = str(row["apim_name"] or "").strip().lower()
+            api_name = str(row["api_name"] or "").strip()
+            if not apim_name or not api_name:
+                continue
+            key = (apim_name, api_name.lower())
+            if key in seen_apim_api_keys:
+                continue
+            seen_apim_api_keys.add(key)
+
+            api_display_name = str(row["api_display_name"] or api_name).strip() or api_name
+            api_path = str(row["api_path"] or "").strip()
+            parent_asset = next(
+                (
+                    asset
+                    for asset in apim_service_assets
+                    if str(asset.get("name") or "").strip().lower() == apim_name
+                ),
+                None,
+            )
+            if not parent_asset:
+                continue
+
+            synthetic_apim_api_assets.append({
+                "id": f"apim-api::{apim_name}::{api_name}",
+                "name": api_name,
+                "type": "APIM API",
+                "type_label": "APIM API",
+                "display_type_label": "APIM API",
+                "resource_group": str(parent_asset.get("resource_group") or "").strip(),
+                "location": parent_asset.get("location"),
+                "sku": api_path or api_display_name,
+                "fqdn": "",
+                "is_public": False,
+                "status": "active",
+                "pipeline_tag": None,
+                "first_detected": None,
+                "last_synced": None,
+                "sub_id": sub_id,
+                "sub_name": sub_name,
+                "environment": sub_env,
+                "cloud_provider": "Azure",
+                "linked_repo": None,
+                "kind": None,
+                "parent_id": parent_asset.get("id"),
+                "parent_name": parent_asset.get("name"),
+                "parent_resource_group": parent_asset.get("resource_group"),
+                "parent_type_label": parent_asset.get("display_type_label") or parent_asset.get("type_label") or "APIM",
+                "children_count": 0,
+                "is_child": True,
+                "depth": 1,
+                "waf_mode": None,
+                "provider_key": "azure",
+                "provider_label": "Azure",
+                "tier": "api",
+                "routing_targets": [],
+                "vnet_name": parent_asset.get("vnet_name"),
+                "vnet_resource_group": parent_asset.get("vnet_resource_group"),
+                "subnet_name": parent_asset.get("subnet_name"),
+                "subnet_id": parent_asset.get("subnet_id"),
+                "network": dict(parent_asset.get("network") or {}),
+                "label": _apim_api_label(api_name, api_display_name),
+            })
+
+    if apim_backend_rows:
+        def _apim_backend_label(apim_name: str, backend_id: str, title: str, url: str) -> str:
+            title_text = str(title or "").strip()
+            backend_id_text = str(backend_id or "").strip()
+            apim_name_text = str(apim_name or "").strip().lower()
+            if title_text:
+                title_lc = title_text.lower()
+                if (
+                    title_lc == apim_name_text
+                    or title_lc.startswith("rg-")
+                    or (backend_id_text and title_lc == backend_id_text.lower())
+                ):
+                    title_text = ""
+            if title_text:
+                return title_text
+            if backend_id_text:
+                return backend_id_text
+            try:
+                from urllib.parse import urlsplit as _urlsplit
+                host = (_urlsplit(url or "").hostname or "").strip()
+                if host:
+                    return host
+            except Exception:
+                pass
+            return "APIM Backend Target"
+
+        apim_service_assets = [
+            asset for asset in assets
+            if "apimanagement" in str(asset.get("type") or "").lower()
+        ]
+        seen_backend_keys: set[tuple[str, str]] = set()
+        for row in apim_backend_rows:
+            apim_name = str(row["apim_name"] or "").strip().lower()
+            backend_id = str(row["backend_id"] or "").strip()
+            title = str(row["title"] or backend_id or "").strip()
+            url = str(row["url"] or "").strip()
+            if not apim_name or not backend_id:
+                continue
+            key = (apim_name, backend_id.lower())
+            if key in seen_backend_keys:
+                continue
+            seen_backend_keys.add(key)
+
+            parent_asset = next(
+                (
+                    asset
+                    for asset in apim_service_assets
+                    if str(asset.get("name") or "").strip().lower() == apim_name
+                ),
+                None,
+            )
+            if not parent_asset:
+                continue
+
+            backend_label = _apim_backend_label(apim_name, backend_id, title, url)
+            synthetic_apim_backend_assets.append({
+                "id": f"apim-backend::{apim_name}::{backend_label}",
+                "name": backend_label,
+                "type": "APIM Backend Target",
+                "type_label": "APIM Backend Target",
+                "display_type_label": "APIM Backend Target",
+                "resource_group": str(parent_asset.get("resource_group") or "").strip(),
+                "location": parent_asset.get("location"),
+                "sku": backend_id or backend_label,
+                "fqdn": "",
+                "is_public": False,
+                "status": "active",
+                "pipeline_tag": None,
+                "first_detected": None,
+                "last_synced": None,
+                "sub_id": sub_id,
+                "sub_name": sub_name,
+                "environment": sub_env,
+                "cloud_provider": "Azure",
+                "linked_repo": None,
+                "kind": None,
+                "parent_id": parent_asset.get("id"),
+                "parent_name": parent_asset.get("name"),
+                "parent_resource_group": parent_asset.get("resource_group"),
+                "parent_type_label": parent_asset.get("display_type_label") or parent_asset.get("type_label") or "APIM",
+                "children_count": 0,
+                "is_child": True,
+                "depth": 1,
+                "waf_mode": None,
+                "provider_key": "azure",
+                "provider_label": "Azure",
+                "tier": "backend",
+                "routing_targets": [],
+                "vnet_name": parent_asset.get("vnet_name"),
+                "vnet_resource_group": parent_asset.get("vnet_resource_group"),
+                "subnet_name": parent_asset.get("subnet_name"),
+                "subnet_id": parent_asset.get("subnet_id"),
+                "network": dict(parent_asset.get("network") or {}),
+            })
+
+    if synthetic_apim_api_assets:
+        assets.extend(synthetic_apim_api_assets)
+    if synthetic_apim_backend_assets:
+        assets.extend(synthetic_apim_backend_assets)
+
     by_id = {str(asset["id"]).lower(): asset for asset in assets if asset.get("id") is not None}
     by_key: dict[tuple[str, str, str, str], dict] = {}
     for asset in assets:
@@ -15305,6 +15507,13 @@ def _build_subscription_architecture_payload(
         )
     
     for asset in assets:
+        asset_type_lower = (asset.get("type") or "").lower()
+        is_apim_backend_target = (
+            "apim backend target" in asset_type_lower
+            or "apimbackendtarget" in asset_type_lower
+            or "apim backend pool" in asset_type_lower
+            or "apimbackendpool" in asset_type_lower
+        )
         if asset.get("parent_id"):
             # Edge from parent to child - start hidden
             is_child = bool(asset.get("is_child") or asset.get("depth", 0) > 0)
@@ -15325,8 +15534,7 @@ def _build_subscription_architecture_payload(
                     },
                 }
             )
-        asset_type_lower = (asset.get("type") or "").lower()
-        if "apim backend target" in asset_type_lower or "apimbackendtarget" in asset_type_lower or "apim backend pool" in asset_type_lower or "apimbackendpool" in asset_type_lower:
+        if is_apim_backend_target:
             parent_apim_key = asset.get("parent_apim_key")
             if isinstance(parent_apim_key, tuple) and len(parent_apim_key) == 2:
                 parent_id = next(
@@ -16373,6 +16581,184 @@ def api_cloud_resource_details():
             )
             if waf_details:
                 return jsonify(waf_details)
+
+        lookup_type_lc = lookup_type.lower()
+        if "apim backend target" in lookup_type_lc or "apimbackendtarget" in lookup_type_lc or "apim backend pool" in lookup_type_lc or "apimbackendpool" in lookup_type_lc:
+            def _host_from_url(url: str | None) -> str:
+                text = str(url or "").strip()
+                if not text:
+                    return ""
+                try:
+                    from urllib.parse import urlsplit as _urlsplit
+                    host = (_urlsplit(text).hostname or "").strip().lower()
+                    if host:
+                        return host
+                except Exception:
+                    pass
+                return text.split("/", 1)[0].split(":", 1)[0].strip().lower()
+
+            def _norm(value: str | None) -> str:
+                return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+            backend_rows: list[sqlite3.Row] = []
+            if _table_exists(conn, "apim_backends"):
+                backend_rows = conn.execute(
+                    """
+                    SELECT apim_name, backend_id, title, description, url, protocol
+                    FROM apim_backends
+                    WHERE subscription_id = ?
+                    """,
+                    (resolved_sub_id or lookup_sub or "",),
+                ).fetchall()
+
+            lookup_tokens = {
+                _norm(resource_id),
+                _norm(lookup_name),
+                _norm(lookup_rg),
+                _norm(lookup_type),
+            }
+            lookup_hosts = {
+                _host_from_url(resource_id),
+                _host_from_url(lookup_name),
+                _host_from_url(lookup_rg),
+            }
+            matched_backend = None
+            for backend_row in backend_rows:
+                backend_id = str(backend_row["backend_id"] or "").strip()
+                title = str(backend_row["title"] or "").strip()
+                url = str(backend_row["url"] or "").strip()
+                apim_name = str(backend_row["apim_name"] or "").strip()
+                backend_tokens = {
+                    _norm(backend_id),
+                    _norm(title),
+                    _norm(url),
+                    _norm(apim_name),
+                    _norm(f"{apim_name}::{backend_id}") if apim_name and backend_id else "",
+                }
+                backend_hosts = {
+                    _host_from_url(url),
+                    _host_from_url(title),
+                }
+                if lookup_tokens.intersection(backend_tokens) or lookup_hosts.intersection(backend_hosts):
+                    matched_backend = backend_row
+                    break
+                if lookup_name and url and _host_from_url(url) == _host_from_url(lookup_name):
+                    matched_backend = backend_row
+                    break
+
+            if matched_backend:
+                apim_name = str(matched_backend["apim_name"] or "").strip()
+                backend_id = str(matched_backend["backend_id"] or "").strip()
+                backend_title = str(matched_backend["title"] or backend_id or "").strip()
+                backend_url = str(matched_backend["url"] or "").strip()
+
+                parent_row = None
+                if apim_name and _table_exists(conn, "provisioned_assets"):
+                    parent_row = conn.execute(
+                        """
+                        SELECT id, name, type, resource_group, location, sku, fqdn, raw_json
+                        FROM provisioned_assets
+                        WHERE subscription_id = ?
+                          AND LOWER(name) = LOWER(?)
+                          AND LOWER(type) LIKE '%apimanagement/service%'
+                        ORDER BY last_synced DESC
+                        LIMIT 1
+                        """,
+                        (resolved_sub_id or lookup_sub or "", apim_name),
+                    ).fetchone()
+
+                parent_resource = None
+                parent_raw = {}
+                if parent_row:
+                    try:
+                        parent_raw = json.loads(parent_row["raw_json"] or "{}") if isinstance(parent_row["raw_json"], str) else (parent_row["raw_json"] or {})
+                    except Exception:
+                        parent_raw = {}
+                    parent_location = parent_row["location"] if "location" in parent_row.keys() else None
+                    parent_sku = parent_row["sku"] if "sku" in parent_row.keys() else None
+                    parent_fqdn = parent_row["fqdn"] if "fqdn" in parent_row.keys() else None
+                    parent_vnet, parent_subnet = _resolve_associated_vnet_subnet(
+                        conn,
+                        str(resolved_sub_id or lookup_sub or ""),
+                        str(parent_row["name"] or ""),
+                        str(parent_row["resource_group"] or ""),
+                        parent_raw if isinstance(parent_raw, dict) else {},
+                        str(parent_row["type"] or ""),
+                    )
+                    parent_resource = {
+                        "id": parent_row["id"],
+                        "name": parent_row["name"],
+                        "type": parent_row["type"],
+                        "type_label": _friendly_type(parent_row["type"]),
+                        "resource_group": parent_row["resource_group"],
+                        "icon_path": _resource_icon_path(parent_row["type"] or ""),
+                        **({"location": parent_location} if parent_location else {}),
+                        **({"sku": parent_sku} if parent_sku else {}),
+                        **({"fqdn": parent_fqdn} if parent_fqdn else {}),
+                        **({"network": {"vnet": parent_vnet, "subnet": parent_subnet}} if (parent_vnet or parent_subnet) else {}),
+                    }
+
+                routing_targets: list[dict] = []
+                if _table_exists(conn, "apim_api_routes") and apim_name:
+                    try:
+                        backend_urls = conn.execute(
+                            """
+                            SELECT api_name, api_display_name, api_path, backend_url, service_url, requires_subscription
+                            FROM apim_api_routes
+                            WHERE subscription_id = ? AND LOWER(apim_name) = LOWER(?)
+                            """,
+                            (resolved_sub_id or lookup_sub or "", apim_name),
+                        ).fetchall()
+                        backend_url_norm = _host_from_url(backend_url) or backend_url.lower().rstrip("/")
+                        for row in backend_urls:
+                            row_backend = str(row["backend_url"] or row["service_url"] or "").strip()
+                            if not row_backend:
+                                continue
+                            row_norm = _host_from_url(row_backend) or row_backend.lower().rstrip("/")
+                            if row_norm != backend_url_norm:
+                                continue
+                            routing_targets.append({
+                                "api_name": row["api_name"],
+                                "api_display_name": row["api_display_name"],
+                                "api_path": row["api_path"],
+                                "backend_url": row["backend_url"] or row["service_url"],
+                                "requires_subscription": bool(row["requires_subscription"]),
+                            })
+                    except Exception:
+                        pass
+
+                return jsonify({
+                    "id": resource_id,
+                    "name": backend_title or lookup_name or backend_id or resource_id,
+                    "type": "APIM Backend Target",
+                    "type_label": "APIM Backend Target",
+                    "is_virtual": True,
+                    "subscription": sub_row["display_name"] if sub_row else lookup_sub,
+                    "environment": sub_row["environment"] if sub_row else "",
+                    "resource_group": parent_resource["resource_group"] if parent_resource else lookup_rg or "",
+                    "configuration": {
+                        "apim_name": apim_name,
+                        "backend_id": backend_id,
+                        "title": backend_title,
+                        "description": str(matched_backend["description"] or "").strip() or None,
+                        "url": backend_url or None,
+                        "protocol": str(matched_backend["protocol"] or "").strip() or None,
+                    },
+                    "security": {
+                        "is_public": False,
+                        "public_network_access": "Private",
+                        "waf_enabled": False,
+                        "waf_mode": None,
+                        "is_restricted": True,
+                    },
+                    "network": {
+                        "vnet": parent_resource.get("network", {}).get("vnet") if parent_resource else None,
+                        "subnet": parent_resource.get("network", {}).get("subnet") if parent_resource else None,
+                        "routing_targets": routing_targets,
+                        "dns_names": [backend_url] if backend_url else [],
+                    },
+                    "parent_resource": parent_resource,
+                })
 
         # Regular provisioned asset
         asset_row = None
@@ -18485,9 +18871,14 @@ def _trace_subscription_endpoint(
             return True
         if _normalize_host_key(pattern_l) == _normalize_host_key(host_l):
             return True
+        if _dns_equivalent_host_key(pattern_l) == _dns_equivalent_host_key(host_l):
+            return True
         if pattern_l.startswith("*.") and host_l.endswith(pattern_l[1:]):
             return True
         return bool(_fnmatch(host_l, pattern_l))
+
+    def _dns_equivalent_host_key(value: str | None) -> str:
+        return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
 
     def _route_score(host_value: str | None, path_value: str | None) -> int:
         host_l = str(host_value or "").strip().lower().rstrip(".")
@@ -18608,9 +18999,16 @@ def _trace_subscription_endpoint(
                 continue
             matches = [row_host] if row_host else []
             matches.extend(alias.lower().rstrip(".") for alias in aliases)
-            if backend_host not in matches and not any(_normalize_host_key(alias) == _normalize_host_key(backend_host) for alias in matches if alias):
+            if backend_host not in matches and not any(
+                _normalize_host_key(alias) == _normalize_host_key(backend_host)
+                or _dns_equivalent_host_key(alias) == _dns_equivalent_host_key(backend_host)
+                for alias in matches
+                if alias
+            ):
                 continue
             score = 1000 if row_host == backend_host else 900
+            if row_host != backend_host and _dns_equivalent_host_key(row_host) == _dns_equivalent_host_key(backend_host):
+                score = 950
             score += len(str(row["path"] or "").strip())
             if score > best_score:
                 best = row
@@ -18658,7 +19056,12 @@ def _trace_subscription_endpoint(
                 if backend_host_l in candidates or any(_host_matches(candidate, backend_host_l) for candidate in candidates):
                     apim_row = row
                     break
-                if any(backend_host_l == cand or backend_host_l.endswith(f".{cand}") for cand in candidates):
+                if any(
+                    backend_host_l == cand
+                    or backend_host_l.endswith(f".{cand}")
+                    or _dns_equivalent_host_key(backend_host_l) == _dns_equivalent_host_key(cand)
+                    for cand in candidates
+                ):
                     apim_row = row
                     break
 
@@ -18760,7 +19163,11 @@ def _trace_subscription_endpoint(
                     if backend_url and row_url == backend_url.lower().rstrip("/"):
                         backend_row = row
                         break
-                    if backend_url_key and (row_host == backend_url_key or backend_url_key == row_host):
+                    if backend_url_key and (
+                        row_host == backend_url_key
+                        or backend_url_key == row_host
+                        or _dns_equivalent_host_key(row_host) == _dns_equivalent_host_key(backend_url_key)
+                    ):
                         backend_row = row
                         break
                 if not backend_row and backend_rows:
@@ -18807,7 +19214,10 @@ def _trace_subscription_endpoint(
                     _normalize_host_key(row["name"] or ""),
                 }
                 candidates = {candidate for candidate in candidates if candidate}
-                if backend_host_l in candidates:
+                if backend_host_l in candidates or any(
+                    _dns_equivalent_host_key(candidate) == _dns_equivalent_host_key(backend_host_l)
+                    for candidate in candidates
+                ):
                     return chain_prefix + [
                         _node(
                             "workload",
@@ -18950,6 +19360,48 @@ def _trace_subscription_endpoint(
         reverse=True,
     )
 
+    if not matches:
+        direct_matches: list[dict] = []
+        direct_prefix = [_node("internet", "internet", "🌐 Internet")]
+        for sub_row in subscription_rows:
+            sub_id = str(sub_row["id"] or "").strip()
+            if not sub_id:
+                continue
+            direct_chain = _trace_backend_target(sub_id, host, direct_prefix)
+            if len(direct_chain) > len(direct_prefix):
+                direct_matches.append({
+                    "subscription_id": sub_id,
+                    "subscription_name": str(sub_row["display_name"] or sub_id).strip(),
+                    "route_trace": {
+                        "route": {
+                            "hostname": host,
+                            "url_path": path,
+                            "backend_pool_name": None,
+                            "backend_fqdns": [],
+                            "http_settings_name": None,
+                            "backend_port": None,
+                            "backend_protocol": None,
+                            "host_override": None,
+                            "waf_policy_name": None,
+                            "exposure_level": None,
+                            "rule_name": "direct backend lookup",
+                        },
+                        "chain": direct_chain,
+                        "resolved_backend": host,
+                        "mermaid": _render_mermaid(direct_chain),
+                        "depth": len(direct_chain),
+                        "score": len(direct_chain),
+                    },
+                })
+        direct_matches.sort(
+            key=lambda item: (
+                int(item["route_trace"].get("depth") or 0),
+                int(item["route_trace"].get("score") or 0),
+            ),
+            reverse=True,
+        )
+        matches = direct_matches
+
     best = matches[0]["route_trace"] if matches else None
     return {
         "endpoint": endpoint,
@@ -18979,6 +19431,18 @@ def _build_apim_api_visual_rows(rows: list, apim_api_rows: list | None) -> list[
 
     synthetic_rows: list[list] = []
     seen: set[tuple[str, str]] = set()
+
+    def _prefer_api_name(api_name: str, api_display_name: str) -> str:
+        display = str(api_display_name or "").strip()
+        if not display:
+            return api_name
+        display_lc = display.lower()
+        if display_lc.startswith(("http://", "https://")):
+            return api_name
+        if "." in display_lc or display_lc.endswith(".azure-api.net"):
+            return api_name
+        return display
+
     for row in apim_api_rows:
         try:
             apim_name = str(row["apim_name"] or "").strip().lower()
@@ -18996,7 +19460,7 @@ def _build_apim_api_visual_rows(rows: list, apim_api_rows: list | None) -> list[
         api_path = str(row["api_path"] or "").strip()
         apim_resource_id = str(row["apim_resource_id"] or "").strip()
         api_node_name = f"{apim_name}::{api_name}"
-        api_label = api_name
+        api_label = _prefer_api_name(api_name, api_display_name)
 
         synthetic_rows.append([
             api_node_name,
@@ -20185,7 +20649,7 @@ _SUBSCRIPTION_DIAGRAM_CACHE: dict[str, tuple[float, str, dict]] = {}
 _SUBSCRIPTION_DIAGRAM_CACHE_TTL = 600  # 10 minutes
 # Bump this whenever diagram rendering logic changes (listener icons, pool icons, edge labels, etc.)
 # so the DB cache is automatically invalidated for all subscriptions.
-_DIAGRAM_CODE_VERSION = "v31"  # Mermaid payload now omits separate AKS service nodes
+_DIAGRAM_CODE_VERSION = "v33"  # Mermaid APIM API nodes now prefer the API name when display names are host-like
 
 
 def _subscription_diagram_cache_signature(conn, sub_id: str) -> tuple[str | None, tuple[str, str] | None]:
@@ -22176,7 +22640,10 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     "synthetic_backend_name": synthetic_backend_name,
                     "_extra": {
                         "display_label": backend_title,
-                        **backend_network,
+                        "vnet_name": backend_network.get("vnet_name"),
+                        "vnet_resource_group": backend_network.get("vnet_resource_group"),
+                        "subnet_name": backend_network.get("subnet_name"),
+                        "subnet_id": backend_network.get("subnet_id"),
                     },
                 }),
                 None,
@@ -24153,10 +24620,6 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             item.get("parent_bastion_key")
             or item.get("parent_lb_key")
             or item.get("collapse_into_apim")
-            or "apim backend target" in type_key
-            or "apimbackendtarget" in type_key
-            or "apim backend pool" in type_key
-            or "apimbackendpool" in type_key
         ):
             return
         group_key = _network_group_key(item)
@@ -25144,7 +25607,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 _metadata_json = _metadata_json[:_max_metadata_len] + '..."}'
             
             _add_link(
-                f'    %% {_metadata_json}\n    {_target_nid} -->|"{_edge_label}"| {_source_nid}',
+                f'    %% {_metadata_json}\n    {_source_nid} -->|"{_edge_label}"| {_target_nid}',
                 "orange",
             )
      
@@ -26202,7 +26665,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         # Use the resource name for individual nodes and the label for grouped
         # nodes. This prevents internal group keys like "Key Vault_ds_group"
         # from appearing as the drill-down panel heading.
-        title = item.get("label") if item.get("is_group") else (item.get("name") or item.get("label") or item.get("type") or node_id)
+        title = item.get("label") if item.get("is_group") else (item.get("label") or item.get("name") or item.get("type") or node_id)
         node_drilldown_map[node_id] = {
             "title": title,
             "arm_type": item.get("arm_type") or item.get("type"),
@@ -28370,4 +28833,4 @@ if __name__ == "__main__":
     
     debug_env = os.getenv("TRIAGE_DEBUG", "0").lower()
     debug = debug_env in ("1", "true", "yes", "on")
-    app.run(debug=debug, host="0.0.0.0", port=9000, threaded=True)
+    app.run(debug=debug, host=_web_host(), port=_web_port(), threaded=True)

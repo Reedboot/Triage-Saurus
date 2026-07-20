@@ -110,7 +110,7 @@ async def run(base_url: str, subscription: str, output_dir: Path, headed: bool) 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate a Cloud subscription diagram with Playwright")
     parser.add_argument("--subscription", required=True, help="Subscription display name or ID")
-    parser.add_argument("--base-url", default="http://127.0.0.1:9000", help="Triage-Saurus base URL")
+    parser.add_argument("--base-url", default="http://127.0.0.1:9001", help="Triage-Saurus base URL")
     parser.add_argument("--output", type=Path, default=Path("Output/Audit/CloudSubscriptionDiagram"), help="Output directory")
     parser.add_argument("--headed", action="store_true", help="Run Chromium headed")
     args = parser.parse_args()

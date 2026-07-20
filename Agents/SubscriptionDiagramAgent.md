@@ -2,7 +2,7 @@
 
 **Trigger:** On-demand — invoke manually for a specific subscription when you want to audit its diagrams.
 
-**Input:** `subscription_id` (required), `base_url` (optional, default `http://127.0.0.1:9000`)
+**Input:** `subscription_id` (required), `base_url` (optional, default `http://127.0.0.1:9001`)
 
 **Output artifacts** (written under `Output/Audit/SubscriptionDiagramCheck_<sub_id>_<timestamp>/`):
 - `report.md` — full findings report with pass/fail per check and recommended fixes
@@ -44,7 +44,7 @@ Every rendered node must correspond to a real harvested asset. Every public asse
 
 1. Web UI is running:
    ```bash
-   curl -sf http://127.0.0.1:9000 > /dev/null || echo "NOT RUNNING"
+   curl -sf http://127.0.0.1:9001 > /dev/null || echo "NOT RUNNING"
    ```
 2. Playwright is installed:
    ```bash

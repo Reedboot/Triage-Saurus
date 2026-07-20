@@ -9,7 +9,7 @@ Trace a route using the DB-backed trace API in `web/app.py`.
 
 1. The web UI must be running:
    ```bash
-   curl -sf http://127.0.0.1:9000 > /dev/null || echo "Server not running"
+   curl -sf http://127.0.0.1:9001 > /dev/null || echo "Server not running"
    ```
 2. The subscription must have been harvested so `appgw_routing_rules`, `apim_api_routes`, `apim_backends`, and `aks_routes` exist.
 
@@ -18,13 +18,13 @@ Trace a route using the DB-backed trace API in `web/app.py`.
 Trace an endpoint directly:
 
 ```bash
-curl -s "http://127.0.0.1:9000/api/cloud/route-trace?sub=<subscription_id>&endpoint=https://events.mydomain.co.uk" | jq
+curl -s "http://127.0.0.1:9001/api/cloud/route-trace?sub=<subscription_id>&endpoint=https://events.mydomain.co.uk" | jq
 ```
 
 Or, when the subscription id is already known:
 
 ```bash
-curl -s "http://127.0.0.1:9000/api/subscriptions/<subscription_id>/trace-route?endpoint=https://events.mydomain.co.uk" | jq
+curl -s "http://127.0.0.1:9001/api/subscriptions/<subscription_id>/trace-route?endpoint=https://events.mydomain.co.uk" | jq
 ```
 
 ## What it returns

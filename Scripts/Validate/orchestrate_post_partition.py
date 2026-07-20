@@ -71,7 +71,7 @@ def get_completed_experiments(agg_file: Path) -> list[str]:
         return []
 
 
-async def validate_experiment_diagrams(exp_id: str, base_url: str = "http://127.0.0.1:9000") -> bool:
+async def validate_experiment_diagrams(exp_id: str, base_url: str = "http://127.0.0.1:9001") -> bool:
     """Validate diagrams for a single experiment."""
     output_dir = Path("Output/Audit/diagram-validation")
     result = subprocess.run(

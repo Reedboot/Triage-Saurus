@@ -10,7 +10,7 @@ This skill audits the **actual rendered React Flow diagrams in the browser**, no
 ## Prerequisites
 
 1. Web UI reachable:
-   curl -sf http://127.0.0.1:9000 > /dev/null || echo "Server not running"
+   curl -sf http://127.0.0.1:9001 > /dev/null || echo "Server not running"
 
 2. Playwright installed:
    python3 -m playwright install chromium
@@ -23,7 +23,7 @@ If not running:
 ## Inputs
 
 - subscription_id (required)
-- base_url (default http://127.0.0.1:9000)
+- base_url (default http://127.0.0.1:9001)
 
 ## Audit Principles
 
