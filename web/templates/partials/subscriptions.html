@@ -27,8 +27,23 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
     </table>
   </div>
 
+  <div id="subscription-preview-panel" hidden style="margin-top:16px;">
+    <div class="cloud-arch-view-toggle" id="subscription-diagram-mode-host" role="group" aria-label="Diagram view mode">
+      <button type="button" data-cloud-arch-view="mermaid" class="diagram-mode-btn is-active">Overview</button>
+      <button type="button" data-cloud-arch-view="reactflow" class="diagram-mode-btn">Attack paths</button>
+    </div>
+    <div id="ingress-diagram-div-target-filter" hidden style="display:inline-flex; align-items:center; gap:6px; padding:4px 8px; margin:12px 0; border:1px solid var(--border); border-radius:999px; background:var(--bg-base); color:var(--text-muted); font-size:0.75rem;">Target filter</div>
+    <div id="ingress-diagram-div" style="margin-top:12px;"></div>
+  </div>
+
+  <div id="drilldown-modal" hidden style="position:fixed; inset:0; z-index:1000; background:rgba(0,0,0,0.6); padding:24px; overflow:auto;">
+    <div class="modal-content" style="width:98vw; max-width:min(98vw, 1600px); margin:0 auto; background:var(--bg-surface); border:1px solid var(--border); border-radius:12px; padding:16px;">
+      <div id="drilldown-modal-body"></div>
+    </div>
+  </div>
+
 
 </div>
 
 
-<script src="/static/js/subscriptions-page.js?v=1"></script>
+<script src="/static/js/subscriptions-page.js?v=2"></script>

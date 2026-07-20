@@ -13602,6 +13602,7 @@ def _build_subscription_architecture_payload(
             route_asset = {
                 "id": f"aks-ingress::{cluster_asset.get('id')}::{namespace or 'default'}::{ingress_label}::{host_str or 'host'}",
                 "name": ingress_label,
+                "resource_name": ingress_label,
                 "type": "microsoft.kubernetes/ingresses",
                 "type_label": "Kubernetes Ingress",
                 "display_type_label": "Kubernetes Ingress",
@@ -13632,11 +13633,7 @@ def _build_subscription_architecture_payload(
                 "provider_key": "azure",
                 "provider_label": "Azure",
                 "tier": "entry" if str(exposure_level or "").strip().lower() == "public" else "backend",
-                "routing_targets": [{
-                    "target_resource_id": str(cluster_asset.get("id") or "").strip(),
-                    "target": str(cluster_asset.get("name") or "").strip(),
-                    "name": str(cluster_asset.get("name") or "").strip(),
-                }],
+                "routing_targets": [],
                 "vnet_name": cluster_asset.get("vnet_name"),
                 "vnet_resource_group": cluster_asset.get("vnet_resource_group"),
                 "subnet_name": cluster_asset.get("subnet_name"),
@@ -22421,6 +22418,66 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 "source_labels": pod_template_labels,
                 "node_variant": "aks_ingress",
             })
+            if service_name:
+                service_asset_id = f"aks-service::{cluster_asset.get('id')}::{namespace or 'default'}::{service_name}::{service_port or 'svc'}"
+                service_asset = {
+                    "id": service_asset_id,
+                    "name": service_name,
+                    "resource_name": service_name,
+                    "type": "microsoft.kubernetes/services",
+                    "type_label": "Kubernetes Service",
+                    "display_type_label": "Kubernetes Service",
+                    "resource_group": str(resource_group or cluster_asset.get("resource_group") or "").strip(),
+                    "location": cluster_asset.get("location"),
+                    "sku": str(service_port or "svc").strip(),
+                    "fqdn": "",
+                    "is_public": False,
+                    "status": "active",
+                    "pipeline_tag": None,
+                    "first_detected": None,
+                    "last_synced": None,
+                    "sub_id": sub_id,
+                    "sub_name": sub_name,
+                    "environment": sub_env,
+                    "cloud_provider": "Azure",
+                    "linked_repo": None,
+                    "kind": "Kubernetes Service",
+                    "parent_id": cluster_asset.get("id"),
+                    "parent_name": cluster_asset.get("name"),
+                    "parent_resource_group": cluster_asset.get("resource_group"),
+                    "parent_type_label": cluster_asset.get("display_type_label") or cluster_asset.get("type_label"),
+                    "children_count": 0,
+                    "is_child": True,
+                    "depth": 1,
+                    "is_restricted": False,
+                    "waf_mode": None,
+                    "provider_key": "azure",
+                    "provider_label": "Azure",
+                    "tier": "backend",
+                    "routing_targets": [{
+                        "target_resource_id": str(cluster_asset.get("id") or "").strip(),
+                        "target": str(cluster_asset.get("name") or "").strip(),
+                        "name": str(cluster_asset.get("name") or "").strip(),
+                    }],
+                    "vnet_name": cluster_asset.get("vnet_name"),
+                    "vnet_resource_group": cluster_asset.get("vnet_resource_group"),
+                    "subnet_name": cluster_asset.get("subnet_name"),
+                    "subnet_id": cluster_asset.get("subnet_id"),
+                    "network": dict(cluster_asset.get("network") or {}),
+                    "source_namespace": namespace,
+                    "source_service": service_name,
+                    "source_service_port": service_port,
+                    "source_deployment": deployment_name,
+                    "source_repo": git_repository,
+                    "source_labels": pod_template_labels,
+                    "node_variant": "aks_service",
+                }
+                route_asset["routing_targets"] = [{
+                    "target_resource_id": service_asset_id,
+                    "target": service_name,
+                    "name": service_name,
+                }]
+                assets.append(service_asset)
 
             # Only render the Kubernetes Service when the harvest has a concrete
             # ingress hop that routes to it. Service-only rows with no ingress
@@ -23106,6 +23163,10 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             force_individual = category in {"App Service", "Function App", "APIM Backend Target", "Kubernetes Service"}
             if force_individual or len(items) <= NAME_THRESHOLD:
                 for item in items:
+                    if category in {"App Service", "Function App"} and (
+                        (str(item.get("rg") or "").strip().lower(), str(item.get("name") or "").strip().lower()) in hosted_site_keys
+                    ):
+                        continue
                     item_fqdns = list(item.get("fqdns") or ([item["fqdn"]] if item.get("fqdn") else []))
                     label = str(item.get("label") or _short_name(item["name"]))
                     if category == "APIM":
@@ -24339,14 +24400,14 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             return "WAF + IP restricted", "#f97316"
         if has_waf:
             if "prevention" in waf_mode:
-                return "WAF (Prev) 🛡️", "#f97316"
+                return "WAF (Prev)", "#f97316"
             if "detection" in waf_mode:
-                return "WAF (Det) ⚠️", "#f59e0b"
+                return "WAF (Det)", "#f59e0b"
             if "waf_v2" in waf_mode or "policyattached" in waf_mode:
                 # WAF_v2 SKU confirmed active — mode (Prevention/Detection) not in DB yet.
                 # Keep label generic so SKU text does not appear in diagrams.
-                return "WAF 🛡️", "#f97316"
-            return "WAF 🛡️", "#f97316"
+                return "WAF", "#f97316"
+            return "WAF", "#f97316"
         if restricted:
             return _allowlist_target_label(item), "#f59e0b"
         # No WAF and no IP restriction — flag as unprotected

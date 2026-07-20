@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Cloud Architecture — Triage-Saurus</title>
   <link rel="stylesheet" href="/static/tailwind.css?v=1" />
-  <link rel="stylesheet" href="/static/app.css?v=8" />
+  <link rel="stylesheet" href="/static/app.css?v=9" />
   <link rel="stylesheet" href="/static/vendor/reactflow.css" />
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
   <script src="/static/js/mermaid-loader.js"></script>
@@ -840,14 +840,15 @@
         <span class="emoji">☁️</span>
         <span>Cloud Architecture</span>
       </div>
-      <div class="cloud-arch-view-toggle" role="group" aria-label="Diagram view mode">
-        <button type="button" data-cloud-arch-view="mermaid" class="is-active">Mermaid</button>
-        <button type="button" data-cloud-arch-view="reactflow">React Flow</button>
+      <div class="cloud-arch-view-toggle" id="subscription-diagram-mode-host" role="group" aria-label="Diagram view mode">
+        <button type="button" data-cloud-arch-view="mermaid" class="diagram-mode-btn is-active">Overview</button>
+        <button type="button" data-cloud-arch-view="reactflow" class="diagram-mode-btn">Attack paths</button>
       </div>
       <form class="cloud-arch-form" id="cloud-arch-form">
         <input class="cloud-arch-input" id="subscription-input" name="sub" list="cloud-arch-subscription-options" value="{{ initial_subscription }}" placeholder="Subscription name" autocomplete="off" />
         <button class="btn-diagram" type="submit">Load architecture</button>
       </form>
+      <div id="ingress-diagram-div-target-filter" hidden style="display:inline-flex; align-items:center; gap:6px; padding:4px 8px; border:1px solid var(--border); border-radius:999px; background:var(--bg-base); color:var(--text-muted); font-size:0.75rem;">Target filter</div>
     </header>
 
     <main class="cloud-arch-main">
@@ -913,8 +914,10 @@
               </svg>
             </button>
           </div>
+          <div id="ingress-diagram-div">
           <div id="cloud-arch-mermaid-scroll">
             <div id="cloud-arch-mermaid-root" role="img" aria-label="Architecture diagram"></div>
+          </div>
           </div>
         </div>
         <div class="cloud-arch-view" id="cloud-arch-root" style="top: 0; left: 0; right: 0; bottom: 0;"></div>
@@ -995,9 +998,26 @@
     // window.__triageCloudArchLoadMermaid is defined before ReactFlow mounts
     // and calls loadGraph.
     if (needsMermaid) {
-      await import('/static/js/cloud-architecture-mermaid.js?v=15');
+      await import('/static/js/cloud-architecture-mermaid.js?v=16');
     }
-    import('/static/js/cloud-architecture-reactflow.js?v=15');
+    import('/static/js/cloud-architecture-reactflow.js?v=16');
+  </script>
+  <script>
+    (function () {
+      const host = document.getElementById('subscription-diagram-mode-host');
+      const targetFilter = document.getElementById('ingress-diagram-div-target-filter');
+      if (!host || !targetFilter) return;
+      const sync = (mode) => {
+        targetFilter.hidden = mode !== 'reactflow';
+      };
+      host.querySelectorAll('[data-cloud-arch-view]').forEach((btn) => {
+        btn.addEventListener('click', () => sync(btn.getAttribute('data-cloud-arch-view') || ''));
+      });
+      const active = host.querySelector('.is-active');
+      if (active) {
+        sync(active.getAttribute('data-cloud-arch-view') || '');
+      }
+    })();
   </script>
 </body>
 </html>

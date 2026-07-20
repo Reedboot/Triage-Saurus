@@ -177,6 +177,10 @@ function syncViewButtons() {
     button.classList.toggle("is-active", isActive);
     button.setAttribute("aria-pressed", isActive ? "true" : "false");
   }
+  const targetFilter = document.getElementById("ingress-diagram-div-target-filter");
+  if (targetFilter) {
+    targetFilter.hidden = activeViewMode !== "reactflow";
+  }
 }
 
 function ProviderIcon({ providerKey, iconPath }) {
@@ -1941,7 +1945,7 @@ for (const button of viewButtons) {
     
     // Load Mermaid support when switching to mermaid mode
     if (mode === "mermaid" && !window.__triageCloudArchLoadMermaid) {
-      import("./cloud-architecture-mermaid.js?v=14").then(() => {
+      import("./cloud-architecture-mermaid.js?v=16").then(() => {
         if (typeof window.__triageCloudArchLoad === "function") {
           window.__triageCloudArchLoad((subscriptionInput.value || "").trim(), activeViewMode);
         }
