@@ -385,6 +385,26 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
             "short_name": subscription_short_name(name or "resource"),
             "auth_methods": auth_methods,
         }
+        if (
+            not asset.get("routing_targets")
+            and str(rtype or "").strip().lower() == "apim backend target"
+            and isinstance(parsed_raw, dict)
+        ):
+            backend_target = (
+                parsed_raw.get("target_resource_id")
+                or parsed_raw.get("resource_id")
+                or parsed_raw.get("backend_url")
+                or parsed_raw.get("backend_target")
+                or parsed_raw.get("target")
+                or parsed_raw.get("hostname")
+                or parsed_raw.get("name")
+            )
+            if backend_target:
+                asset["routing_targets"] = [{
+                    "target": str(backend_target).strip(),
+                    "name": str(parsed_raw.get("backend_id") or parsed_raw.get("name") or "").strip(),
+                    "target_resource_id": str(parsed_raw.get("target_resource_id") or "").strip(),
+                }]
         if isinstance(parsed_raw, dict):
             public_ip_resource_ids = _extract_public_ip_ids(parsed_raw)
             if public_ip_resource_ids:
@@ -939,6 +959,8 @@ def subscription_apply_plan_hierarchy(assets: list[dict], plan_links: list | Non
         asset_copy = dict(asset)
         key = _key(asset_copy)
         children = hosted_by_parent.get(key)
+        if children and _is_site_type(asset_copy):
+            continue
         if children and any(token in _type(asset_copy) for token in ("serverfarms", "hostingenvironment")):
             is_ase = "hostingenvironment" in _type(asset_copy)
             # For App Service Environments, do NOT inherit child app FQDNs — routing
@@ -1659,6 +1681,10 @@ def build_subscription_diagrams_by_rg(
         entries = [a for a in visible_rg_assets if a.get("tier") == "entry"]
         apis = [a for a in visible_rg_assets if a.get("tier") == "api"]
         backends = [a for a in visible_rg_assets if a.get("tier") == "backend"]
+        routing_backends = [
+            a for a in visible_rg_assets
+            if a.get("tier") == "backend" or str(a.get("arm_type") or "").strip().lower() == "apim backend target"
+        ]
         data = [a for a in visible_rg_assets if a.get("tier") == "data"]
         public_assets = [a for a in visible_rg_assets if a.get("public")]
 
@@ -1868,11 +1894,11 @@ def build_subscription_diagrams_by_rg(
 
         cluster_assets = [
             asset
-            for asset in backends
+            for asset in routing_backends
             if any(t in (asset.get("arm_type") or "").lower() for t in _cluster_arm_types)
         ]
 
-        for backend in backends:
+        for backend in routing_backends:
             if (backend.get("node_variant") or "") in {"aks_ingress", "aks_service"}:
                 continue
             targets = _parse_routing_targets(backend.get("routing_targets"))

@@ -6,7 +6,6 @@ from __future__ import annotations
 import json
 import html
 import ipaddress
-import contextvars
 import hashlib
 import re
 import sqlite3
@@ -25,7 +24,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
-from flask import Flask, Response, render_template, request, stream_with_context, jsonify, redirect
+from flask import Response, render_template, request, stream_with_context, jsonify, redirect
 
 try:
     from web.subscription_diagram_helpers import (
@@ -45,48 +44,6 @@ except ImportError:
         subscription_apply_plan_hierarchy as _shared_subscription_apply_plan_hierarchy,
         subscription_primary_fqdn as _shared_subscription_primary_fqdn,
     )
-
-app = Flask(__name__)
-
-
-def _web_host() -> str:
-    host = (os.getenv("TRIAGE_WEB_HOST") or os.getenv("HOST") or "0.0.0.0").strip()
-    return host or "0.0.0.0"
-
-
-def _web_port() -> int:
-    for var in ("TRIAGE_WEB_PORT", "PORT", "FLASK_RUN_PORT"):
-        raw = (os.getenv(var) or "").strip()
-        if not raw:
-            continue
-        try:
-            port = int(raw)
-        except ValueError:
-            continue
-        if 1 <= port <= 65535:
-            return port
-    return 9000
-
-# Jinja2 custom filters
-import os as _os
-from markupsafe import Markup as _Markup
-app.jinja_env.filters["basename"] = lambda p: _os.path.basename(p or "") if p else ""
-
-def _format_list_text(text):
-    """Convert semicolon-separated text to HTML list if it contains multiple items."""
-    if not text or not isinstance(text, str):
-        return text
-    # Check if text contains semicolons (likely a list)
-    if ';' in text:
-        items = [item.strip() for item in text.split(';') if item.strip()]
-        if len(items) > 1:
-            # Render as list
-            list_items = ''.join(f"<li>{_html.escape(item)}</li>" for item in items)
-            return _Markup(f"<ul style=\"margin: 6px 0; padding-left: 20px;\">{list_items}</ul>")
-    return text
-
-import html as _html
-app.jinja_env.filters["format_list"] = _format_list_text
 
 try:
     from web.config import (
@@ -131,14 +88,127 @@ except ImportError:
         _SEARCH_ROOTS,
     )
 
+try:
+    from web.core.runtime import create_flask_app, _web_host, _web_port
+    from web.core.jinja_filters import register_jinja_filters
+    from web.core.db import (
+        configure_db_path,
+        _get_db,
+        _get_db_with_schema,
+        table_exists as _db_table_exists,
+        table_columns as _db_table_columns,
+    )
+    from web.core.http import _analysis_mode_from_request, _force_rerun_requested
+    from web.core.caching import (
+        configure_repo_root,
+        _DOCKERFILE_CACHE,
+        _DOCKERFILE_CACHE_MAX,
+        _RESOLVED_REPOS_CACHE,
+        _AI_ANALYSIS_JOBS,
+        _AI_ANALYSIS_LOCK,
+        _ACTIVE_AI_JOB_KEY,
+        _ai_job_key,
+        _ai_raw_output_file,
+        _touch_ai_job_activity,
+    )
+    from web.core.parsing import parse_json_list, parse_json_string_list
+except ImportError:
+    from core.runtime import create_flask_app, _web_host, _web_port  # type: ignore
+    from core.jinja_filters import register_jinja_filters  # type: ignore
+    from core.db import (  # type: ignore
+        configure_db_path,
+        _get_db,
+        _get_db_with_schema,
+        table_exists as _db_table_exists,
+        table_columns as _db_table_columns,
+    )
+    from core.http import _analysis_mode_from_request, _force_rerun_requested  # type: ignore
+    from core.caching import (  # type: ignore
+        configure_repo_root,
+        _DOCKERFILE_CACHE,
+        _DOCKERFILE_CACHE_MAX,
+        _RESOLVED_REPOS_CACHE,
+        _AI_ANALYSIS_JOBS,
+        _AI_ANALYSIS_LOCK,
+        _ACTIVE_AI_JOB_KEY,
+        _ai_job_key,
+        _ai_raw_output_file,
+        _touch_ai_job_activity,
+    )
+    from core.parsing import parse_json_list, parse_json_string_list  # type: ignore
 
-def _analysis_mode_from_request() -> str:
-    return (request.args.get("mode") or "").strip().lower()
+try:
+    from web.routes import RouteCollector, register_route_blueprints
+except ImportError:
+    from routes import RouteCollector, register_route_blueprints  # type: ignore
+
+try:
+    from web.services.ai_service import (
+        fetch_prior_ai_input_fingerprint,
+        launch_analysis_job_if_idle,
+        resolve_repo_for_experiment,
+    )
+    from web.services.diagram_service import (
+        diagram_icon_provider_mismatch,
+        edge_count as _diagram_edge_count,
+        normalize_diagrams_payload,
+        parse_diagram_request_args,
+    )
+    from web.services.cloud_service import (
+        apim_child_apis_payload,
+        cloud_architecture_payload,
+        group_members_payload,
+        resource_children_payload,
+    )
+    from web.services.repo_service import (
+        available_subscriptions as repo_available_subscriptions,
+        link_repo_subscription,
+        linked_repo_subscriptions,
+        subscription_env_badge as repo_subscription_env_badge,
+        subscription_summary_rows,
+        unlink_repo_subscription,
+    )
+    from web.services.view_tabs_service import default_view_tabs
+except ImportError:
+    from services.ai_service import (  # type: ignore
+        fetch_prior_ai_input_fingerprint,
+        launch_analysis_job_if_idle,
+        resolve_repo_for_experiment,
+    )
+    from services.diagram_service import (  # type: ignore
+        diagram_icon_provider_mismatch,
+        edge_count as _diagram_edge_count,
+        normalize_diagrams_payload,
+        parse_diagram_request_args,
+    )
+    from services.cloud_service import (  # type: ignore
+        apim_child_apis_payload,
+        cloud_architecture_payload,
+        group_members_payload,
+        resource_children_payload,
+    )
+    from services.repo_service import (  # type: ignore
+        available_subscriptions as repo_available_subscriptions,
+        link_repo_subscription,
+        linked_repo_subscriptions,
+        subscription_env_badge as repo_subscription_env_badge,
+        subscription_summary_rows,
+        unlink_repo_subscription,
+    )
+    from services.view_tabs_service import default_view_tabs  # type: ignore
 
 
-def _force_rerun_requested() -> bool:
-    raw = (request.args.get("force") or "").strip().lower()
-    return raw in {"1", "true", "yes", "on", "enabled"}
+def create_app():
+    flask_app = create_flask_app(__name__)
+    register_jinja_filters(flask_app)
+    return flask_app
+
+
+app = create_app()
+configure_db_path(DB_PATH)
+configure_repo_root(REPO_ROOT)
+_ROUTE_COLLECTOR = RouteCollector()
+app.route = _ROUTE_COLLECTOR.route  # type: ignore[method-assign]
 
 
 def _overview_reviewer_agents() -> list[tuple[str, str, str]]:
@@ -261,32 +331,6 @@ except Exception as e:
     PROMPT_BUILDER_AVAILABLE = False
 
 # Cache of parsed Dockerfile base images: {abs_path: (mtime_ns, size, ((image, line), ...))}
-_DOCKERFILE_CACHE: dict[str, tuple[int, int, tuple[tuple[str, int | None], ...]]] = {}
-_DOCKERFILE_CACHE_MAX = 512
-_RESOLVED_REPOS_CACHE: dict[str, object] = {"sig": None, "entries": []}
-_AI_ANALYSIS_JOBS: dict[str, dict] = {}
-_AI_ANALYSIS_LOCK = threading.Lock()
-_ACTIVE_AI_JOB_KEY: contextvars.ContextVar[str | None] = contextvars.ContextVar("ACTIVE_AI_JOB_KEY", default=None)
-
-
-def _ai_job_key(experiment_id: str, repo_name: str) -> str:
-    return f"{experiment_id}:{repo_name.lower()}"
-
-
-def _ai_raw_output_file(key: str) -> Path:
-    """Return the per-job raw Copilot output file."""
-    safe_key = re.sub(r"[^A-Za-z0-9_.-]", "_", key)
-    return REPO_ROOT / "Output" / "AILogs" / f"{safe_key}-raw.txt"
-
-
-def _touch_ai_job_activity(key: str) -> None:
-    """Record that a job is still actively producing output."""
-    with _AI_ANALYSIS_LOCK:
-        job = _AI_ANALYSIS_JOBS.get(key)
-        if not job:
-            return
-        job["last_activity_at"] = time.time()
-        _AI_ANALYSIS_JOBS[key] = job
 
 
 def _extract_rules_from_llm_output(text: str) -> list[dict]:
@@ -1681,37 +1725,6 @@ def _get_base_images_from_dockerfile(df_path: Path) -> list[dict]:
     return [{"image": img, "line": line} for img, line in serialized]
 
 
-def _get_db() -> sqlite3.Connection | None:
-    """Return a sqlite3.Connection to the learning DB, or None if unavailable."""
-    if not DB_PATH.exists():
-        return None
-    try:
-        conn = sqlite3.connect(str(DB_PATH), timeout=10)
-        conn.row_factory = sqlite3.Row
-        return conn
-    except Exception:
-        return None
-
-
-def _get_db_with_schema() -> sqlite3.Connection | None:
-    """Like _get_db() but ensures the full schema (including harvest tables) exists.
-
-    Used by subscription/provisioned-asset routes which may be hit before any
-    harvest script has run, guaranteeing the tables are present.
-    """
-    if not DB_PATH.exists():
-        return None
-    try:
-        conn = sqlite3.connect(str(DB_PATH), timeout=30)
-        conn.row_factory = sqlite3.Row
-        from Scripts.Persist import db_helpers
-
-        db_helpers._ensure_schema(conn)
-        return conn
-    except Exception:
-        return None
-
-
 def _sanitize_mermaid(code: str) -> str:
     """Fix CSS property names and known syntax issues in generated Mermaid code.
 
@@ -3023,39 +3036,8 @@ def api_experiment_repo(experiment_id: str):
     if conn is None:
         return jsonify({"repo_name": "", "repo_path": "", "error": "DB unavailable"}), 503
 
-    repo_name = ""
-    repo_path = ""
     try:
-        # Primary source: repositories table.
-        row = conn.execute(
-            """
-            SELECT repo_name
-            FROM repositories
-            WHERE experiment_id = ?
-              AND COALESCE(repo_name, '') <> ''
-            ORDER BY scanned_at DESC
-            LIMIT 1
-            """,
-            (experiment_id,),
-        ).fetchone()
-        if row:
-            repo_name = (row["repo_name"] or "").strip()
-
-        # Fallback source: experiments.repos JSON metadata.
-        if not repo_name:
-            exp_row = conn.execute(
-                "SELECT repos FROM experiments WHERE id = ? LIMIT 1",
-                (experiment_id,),
-            ).fetchone()
-            if exp_row:
-                try:
-                    repos_raw = exp_row["repos"]
-                    repos_list = json.loads(repos_raw) if isinstance(repos_raw, str) else (repos_raw or [])
-                    if repos_list:
-                        repo_path = str(repos_list[0]).strip()
-                        repo_name = Path(repo_path).name
-                except Exception:
-                    pass
+        repo_name, repo_path = resolve_repo_for_experiment(conn, experiment_id)
     except Exception as exc:
         conn.close()
         return jsonify({"repo_name": "", "repo_path": "", "error": str(exc)}), 500
@@ -3088,28 +3070,7 @@ def api_analysis_start(experiment_id: str, repo_name: str):
     if not force_rerun:
         current_fp = _compute_ai_input_fingerprint(resolved_exp_id, repo_name)
         db_status = _get_db_job_status(resolved_exp_id, repo_name)
-        prior_fp = None
-        conn_fp = _get_db()
-        if conn_fp:
-            try:
-                row = conn_fp.execute(
-                    """
-                    SELECT value FROM context_metadata
-                    WHERE experiment_id = ? AND namespace = 'ai_overview'
-                      AND key = 'ai_input_fingerprint'
-                      AND repo_id = (
-                        SELECT id FROM repositories
-                        WHERE experiment_id = ? AND LOWER(repo_name) = LOWER(?) LIMIT 1
-                      )
-                    LIMIT 1
-                    """,
-                    (resolved_exp_id, resolved_exp_id, repo_name),
-                ).fetchone()
-                prior_fp = (row["value"] if row else None)
-            except Exception:
-                prior_fp = None
-            finally:
-                conn_fp.close()
+        prior_fp = fetch_prior_ai_input_fingerprint(_get_db, resolved_exp_id, repo_name)
         if (
             db_status
             and db_status.get("status") == "completed"
@@ -3126,17 +3087,16 @@ def api_analysis_start(experiment_id: str, repo_name: str):
                 }
             )
     
-    with _AI_ANALYSIS_LOCK:
-        existing = _AI_ANALYSIS_JOBS.get(key)
-        if existing and existing.get("status") == "running":
-            return jsonify({"status": "running", "experiment_id": resolved_exp_id, "repo_name": repo_name}), 202
-
-        thread = threading.Thread(
-            target=_run_ai_analysis_job,
-            args=(resolved_exp_id, repo_name),
-            daemon=True,
-        )
-        thread.start()
+    launched = launch_analysis_job_if_idle(
+        lock=_AI_ANALYSIS_LOCK,
+        jobs=_AI_ANALYSIS_JOBS,
+        key=key,
+        target=_run_ai_analysis_job,
+        experiment_id=resolved_exp_id,
+        repo_name=repo_name,
+    )
+    if not launched:
+        return jsonify({"status": "running", "experiment_id": resolved_exp_id, "repo_name": repo_name}), 202
 
     return jsonify({"status": "started", "experiment_id": resolved_exp_id, "repo_name": repo_name})
 
@@ -3164,17 +3124,16 @@ def api_analysis_resume(experiment_id: str, repo_name: str):
     # Check what can be resumed
     resume_state = _detect_resume_state(resolved_exp_id, repo_name, key)
     
-    with _AI_ANALYSIS_LOCK:
-        existing = _AI_ANALYSIS_JOBS.get(key)
-        if existing and existing.get("status") == "running":
-            return jsonify({"status": "running", "experiment_id": resolved_exp_id, "repo_name": repo_name}), 202
-
-        thread = threading.Thread(
-            target=_run_ai_analysis_job,
-            args=(resolved_exp_id, repo_name),
-            daemon=True,
-        )
-        thread.start()
+    launched = launch_analysis_job_if_idle(
+        lock=_AI_ANALYSIS_LOCK,
+        jobs=_AI_ANALYSIS_JOBS,
+        key=key,
+        target=_run_ai_analysis_job,
+        experiment_id=resolved_exp_id,
+        repo_name=repo_name,
+    )
+    if not launched:
+        return jsonify({"status": "running", "experiment_id": resolved_exp_id, "repo_name": repo_name}), 202
 
     return jsonify({
         "status": "started",
@@ -5218,137 +5177,29 @@ def api_diagrams(experiment_id: str):
     if 'Scripts.Generate.icon_resolver' in sys.modules:
         del sys.modules['Scripts.Generate.icon_resolver']
     
-    repo_name = (request.args.get("repo_name") or "").strip()
-    include_api_operations_raw = (request.args.get("include_api_operations") or "").strip().lower()
-    include_api_operations_override: bool | None = None
-    if include_api_operations_raw in {"1", "true", "yes", "on"}:
-        include_api_operations_override = True
-    elif include_api_operations_raw in {"0", "false", "no", "off"}:
-        include_api_operations_override = False
-    force_regenerate = include_api_operations_override is not None
-
-    def _edge_count(code: str) -> int:
-        if not code:
-            return 0
-        return sum(1 for ln in code.splitlines() if ("-->" in ln or "-.>" in ln))
-
-    def _diagram_has_icon_classes(code: str) -> bool:
-        return ":::icon-" in (code or "")
-
-    def _diagram_has_icon_defs(code: str, css_code: str) -> bool:
-        merged = f"{code or ''}\n{css_code or ''}"
-        return "classDef icon-" in merged
-
-    def _normalize_diagram_payload(diagrams: list[dict]) -> list[dict]:
-        normalized: list[dict] = []
-        for d in diagrams:
-            code = d.get("mermaid_code") or ""
-            css_code = d.get("css_code") or ""
-            provider_key = _canonical_provider_key(d.get("provider"))
-
-            if repo_name and provider_key not in ("", "unknown") and (
-                not d.get("views")
-                or (
-                    code
-                    and _diagram_has_icon_classes(code)
-                    and not _diagram_has_icon_defs(code, css_code)
-                )
-            ):
-                try:
-                    from Scripts.Generate.generate_diagram import generate_architecture_diagram_bundle_with_css  # type: ignore
-                    regenerated = generate_architecture_diagram_bundle_with_css(
-                        experiment_id,
-                        repo_name=repo_name,
-                        provider=provider_key,
-                        include_operation_resources=include_api_operations_override,
-                        use_embedded_icons=True,
-                    )
-                    regenerated_code = regenerated.get("code")
-                    if regenerated_code:
-                        d = dict(d)
-                        d["mermaid_code"] = regenerated_code
-                        d["css_code"] = regenerated.get("css_code", "") or ""
-                        d["views"] = regenerated.get("views") or {}
-                        d["default_view"] = regenerated.get("default_view") or "connectivity"
-                        d["attack_paths"] = regenerated.get("attack_paths") or []
-                        d["asset_summary"] = regenerated.get("asset_summary") or {}
-                except Exception:
-                    pass
-
-            normalized.append(d)
-        return normalized
+    repo_name, include_api_operations_override, force_regenerate = parse_diagram_request_args(request.args)
 
     def _response_payload(diagrams: list[dict]) -> dict:
-        diagrams = _normalize_diagram_payload(diagrams)
-        response_diagrams: list[dict] = []
-        for d in diagrams:
-            raw_code = d.get("mermaid_code") or ""
-            try:
-                sanitized_code = _sanitize_mermaid(raw_code) if raw_code else raw_code
-            except Exception:
-                sanitized_code = raw_code
+        def _regenerate_bundle(exp_id: str, repo: str, provider: str, include_ops: bool | None) -> dict:
+            from Scripts.Generate.generate_diagram import generate_architecture_diagram_bundle_with_css  # type: ignore
 
-            raw_views = d.get("views") if isinstance(d.get("views"), dict) else {}
-            sanitized_views: dict[str, dict] = {}
-            for view_name, view_payload in raw_views.items():
-                if not isinstance(view_payload, dict):
-                    continue
-                view_code = view_payload.get("code") or view_payload.get("mermaid") or ""
-                try:
-                    sanitized_view_code = _sanitize_mermaid(view_code) if view_code else view_code
-                except Exception:
-                    sanitized_view_code = view_code
-                sanitized_views[view_name] = {
-                    "code": sanitized_view_code,
-                    "css_code": view_payload.get("css_code", ""),
-                    "title": view_payload.get("title", ""),
-                    "description": view_payload.get("description", ""),
-                    "legend": view_payload.get("legend") or [],
-                    "attack_paths": view_payload.get("attack_paths") or [],
-                    "asset_summary": view_payload.get("asset_summary") or {},
-                    "nodes": view_payload.get("nodes") or [],
-                    "edges": view_payload.get("edges") or [],
-                    "type": view_payload.get("type") or "",
-                }
-
-            response_diagrams.append(
-                {
-                    "title": d.get("diagram_title"),
-                    "code": sanitized_code,
-                    "css_code": d.get("css_code", ""),
-                    "views": sanitized_views,
-                    "default_view": d.get("default_view") or ("connectivity" if sanitized_views else ""),
-                    "attack_paths": d.get("attack_paths") or [],
-                    "asset_summary": d.get("asset_summary") or {},
-                }
+            return generate_architecture_diagram_bundle_with_css(
+                exp_id,
+                repo_name=repo,
+                provider=provider,
+                include_operation_resources=include_ops,
+                use_embedded_icons=True,
             )
 
-        return {
-            "diagrams": [d for d in response_diagrams if d.get("code")]
-        }
-
-    def _diagram_icon_provider_mismatch(diagrams: list[dict]) -> bool:
-        """Detect persisted diagrams embedding icon paths for a different provider."""
-        provider_re = re.compile(r"/static/assets/icons/([^/]+)/", re.IGNORECASE)
-        for d in diagrams or []:
-            expected = _canonical_provider_key((d.get("provider") or "").lower())
-            if expected in {"", "unknown", "kubernetes"}:
-                continue
-            code = d.get("mermaid_code") or ""
-            seen = {
-                _canonical_provider_key(m.group(1).lower())
-                for m in provider_re.finditer(code)
-            }
-            seen.discard("")
-            seen.discard("unknown")
-            if not seen:
-                continue
-            if expected not in seen:
-                return True
-            foreign = seen - {expected, "kubernetes"}
-            if foreign:
-                return True
-        return False
+        return normalize_diagrams_payload(
+            diagrams=diagrams,
+            experiment_id=experiment_id,
+            repo_name=repo_name,
+            include_api_operations_override=include_api_operations_override,
+            canonical_provider_key=_canonical_provider_key,
+            sanitize_mermaid=_sanitize_mermaid,
+            regenerate_bundle=_regenerate_bundle,
+        )
 
     try:
         sys.path.insert(0, str(REPO_ROOT))
@@ -5361,16 +5212,16 @@ def api_diagrams(experiment_id: str):
                 db_diagrams = get_cloud_diagrams(experiment_id, repo_name=repo_name)
                 has_sparse_alicloud_or_oci = any(
                     _canonical_provider_key((d.get("provider") or d.get("diagram_title") or "").lower()) in {"alicloud", "oci"}
-                    and _edge_count(d.get("mermaid_code") or "") == 0
+                    and _diagram_edge_count(d.get("mermaid_code") or "") == 0
                     for d in (db_diagrams or [])
                 )
-                has_provider_icon_mismatch = _diagram_icon_provider_mismatch(db_diagrams or [])
+                has_provider_icon_mismatch = diagram_icon_provider_mismatch(db_diagrams or [], _canonical_provider_key)
                 if (
                     db_diagrams
                     and not force_regenerate
                     and not has_sparse_alicloud_or_oci
                     and not has_provider_icon_mismatch
-                    and max((_edge_count(d.get("mermaid_code") or "") for d in db_diagrams), default=0) > 0
+                    and max((_diagram_edge_count(d.get("mermaid_code") or "") for d in db_diagrams), default=0) > 0
                 ):
                     return jsonify(_response_payload(db_diagrams))
 
@@ -5484,7 +5335,7 @@ def api_diagrams(experiment_id: str):
         # (diagrams may not have been persisted yet)
 
         # If persisted diagrams are missing/skeletal for this repo, regenerate from DB topology.
-        if repo_name and (force_regenerate or not db_diagrams or max((_edge_count(d.get("mermaid_code") or "") for d in db_diagrams), default=0) == 0):
+        if repo_name and (force_regenerate or not db_diagrams or max((_diagram_edge_count(d.get("mermaid_code") or "") for d in db_diagrams), default=0) == 0):
             try:
                 from Scripts.Generate.generate_diagram import HierarchicalDiagramBuilder  # type: ignore
 
@@ -6000,25 +5851,12 @@ def _db_render(template_name: str, **ctx):
 
 def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
     """Return True when a table exists in the connected SQLite database."""
-    try:
-        row = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
-            (table_name,),
-        ).fetchone()
-        return bool(row)
-    except Exception:
-        return False
+    return _db_table_exists(conn, table_name)
 
 
 def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
     """Return the set of column names for a SQLite table, or empty set."""
-    if not _table_exists(conn, table_name):
-        return set()
-    try:
-        rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-        return {str(r[1]) for r in rows}
-    except Exception:
-        return set()
+    return _db_table_columns(conn, table_name)
 
 
 def _get_experiment_for_repo(conn, repo_name: str, experiment_id: str = "") -> str:
@@ -6058,18 +5896,7 @@ def _get_experiment_for_repo(conn, repo_name: str, experiment_id: str = "") -> s
 def api_view_tabs(experiment_id: str, repo_name: str):
     """Return the list of available tabs for this experiment/repo."""
     try:
-        tabs = [
-            {"key": "tldr",       "label": "📊 TL;DR"},
-            {"key": "overview",   "label": "📝 Overview"},
-            {"key": "assets",     "label": "🗂️ Assets"},
-            {"key": "findings",   "label": "🔎 Findings"},
-            {"key": "containers", "label": "☸️ Kubernetes"},
-            {"key": "roles",      "label": "🧑‍💼 Roles & Permissions"},
-            {"key": "traffic",    "label": "📶 Traffic"},
-            {"key": "subscription", "label": "🌐 Global Knowledge Q&A"},
-        ]
-
-        return jsonify({"tabs": tabs})
+        return jsonify({"tabs": default_view_tabs()})
     except Exception as e:
         # Return a JSON error so the UI can parse and show a message instead of failing silently
         return jsonify({"tabs": [], "error": str(e)}), 500
@@ -6885,14 +6712,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
     def _table_exists(table_name: str) -> bool:
         if table_name in table_exists_cache:
             return table_exists_cache[table_name]
-        try:
-            row = conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
-                (table_name,),
-            ).fetchone()
-            exists = bool(row)
-        except Exception:
-            exists = False
+        exists = _db_table_exists(conn, table_name)
         table_exists_cache[table_name] = exists
         return exists
 
@@ -6902,11 +6722,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
         if not _table_exists(table_name):
             table_columns_cache[table_name] = set()
             return set()
-        try:
-            rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-            cols = {str(r[1]) for r in rows}
-        except Exception:
-            cols = set()
+        cols = _db_table_columns(conn, table_name)
         table_columns_cache[table_name] = cols
         return cols
 
@@ -6921,6 +6737,18 @@ def api_view_overview(experiment_id: str, repo_name: str):
             return conn.execute(sql, params).fetchone()
         except sqlite3.OperationalError:
             return None
+
+    json_decode_cache: dict[str, object | None] = {}
+
+    def _json_load_cached(text: str) -> object | None:
+        if text in json_decode_cache:
+            return json_decode_cache[text]
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            parsed = None
+        json_decode_cache[text] = parsed
+        return parsed
 
     module_deps_data: list[dict] = []
     available_repos: list[str] = []
@@ -7022,11 +6850,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
 
                 # ai_finding_themes: render as hypothesis cards with confirmable Y/N/DK buttons
                 if row["key"] == "ai_finding_themes":
-                    themes_parsed = None
-                    try:
-                        themes_parsed = json.loads(val)
-                    except Exception:
-                        pass
+                    themes_parsed = _json_load_cached(val)
                     if isinstance(themes_parsed, list) and themes_parsed:
                         # Load existing answers
                         theme_answers: dict[str, dict] = {}
@@ -7118,11 +6942,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
                     continue
 
                 if row["key"] == "ai_attack_paths":
-                    parsed_paths = None
-                    try:
-                        parsed_paths = json.loads(val)
-                    except Exception:
-                        parsed_paths = None
+                    parsed_paths = _json_load_cached(val)
 
                     normalized_paths = _normalize_attack_paths(parsed_paths)
                     if normalized_paths:
@@ -7167,11 +6987,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
                     continue
                 
                 if row["key"] == "ai_deployment_footprint":
-                    footprint_data = None
-                    try:
-                        footprint_data = json.loads(val)
-                    except Exception:
-                        footprint_data = None
+                    footprint_data = _json_load_cached(val)
                     
                     if isinstance(footprint_data, dict) and (footprint_data.get("categories") or footprint_data.get("providers")):
                         # Build provider summary
@@ -7210,11 +7026,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
                 if row["key"] in list_fields:
                     # Actions may be stored as structured JSON for rich rendering.
                     if row["key"] == "ai_action_items":
-                        parsed_actions = None
-                        try:
-                            parsed_actions = json.loads(val)
-                        except Exception:
-                            parsed_actions = None
+                        parsed_actions = _json_load_cached(val)
 
                         if isinstance(parsed_actions, list) and parsed_actions and all(isinstance(x, dict) for x in parsed_actions):
                             blocks = []
@@ -7259,11 +7071,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
                     else:
                         # Open questions may be stored as structured JSON for richer rendering.
                         if row["key"] == "ai_open_questions":
-                            parsed_q = None
-                            try:
-                                parsed_q = json.loads(val)
-                            except Exception:
-                                parsed_q = None
+                            parsed_q = _json_load_cached(val)
 
                             if isinstance(parsed_q, list) and parsed_q and all(isinstance(x, dict) for x in parsed_q):
                                 # Run auto-resolver for any unanswered questions (idempotent)
@@ -7367,11 +7175,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
 
                         # Observations stored as JSON: list of {title, detail, target, references}
                         if row["key"] == "ai_observations":
-                            parsed_o = None
-                            try:
-                                parsed_o = json.loads(val)
-                            except Exception:
-                                parsed_o = None
+                            parsed_o = _json_load_cached(val)
 
                             if isinstance(parsed_o, list) and parsed_o and all(isinstance(x, dict) for x in parsed_o):
                                 li = []
@@ -7425,11 +7229,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
 
                         # Asset visibility suggestions stored as JSON: list of {resource_type, resource_name, decision, reason}
                         if row["key"] == "ai_asset_visibility":
-                            parsed_v = None
-                            try:
-                                parsed_v = json.loads(val)
-                            except Exception:
-                                parsed_v = None
+                            parsed_v = _json_load_cached(val)
 
                             if isinstance(parsed_v, list) and parsed_v and all(isinstance(x, dict) for x in parsed_v):
                                 li = []
@@ -7452,11 +7252,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
 
                         # Learning suggestions stored as JSON: list of {kind, target, rationale, example_evidence, proposed_change}
                         if row["key"] == "ai_learning_suggestions":
-                            parsed_l = None
-                            try:
-                                parsed_l = json.loads(val)
-                            except Exception:
-                                parsed_l = None
+                            parsed_l = _json_load_cached(val)
 
                             if isinstance(parsed_l, list) and parsed_l and all(isinstance(x, dict) for x in parsed_l):
                                 blocks = []
@@ -7481,11 +7277,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
                                 if blocks:
                                     ai_sections.append(f"<h3>{esc(label)}</h3><div class=\"ai-actions\">" + ''.join(blocks) + "</div>")
                                     continue
-                            parsed_v = None
-                            try:
-                                parsed_v = json.loads(val)
-                            except Exception:
-                                parsed_v = None
+                            parsed_v = _json_load_cached(val)
 
                             if isinstance(parsed_v, list) and parsed_v and all(isinstance(x, dict) for x in parsed_v):
                                 li = []
@@ -7505,11 +7297,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
                                 if li:
                                     ai_sections.append(f"<h3>{esc(label)}</h3><ul>" + ''.join(li) + "</ul>")
                                     continue
-                            parsed_o = None
-                            try:
-                                parsed_o = json.loads(val)
-                            except Exception:
-                                parsed_o = None
+                            parsed_o = _json_load_cached(val)
 
                             if isinstance(parsed_o, list) and parsed_o and all(isinstance(x, dict) for x in parsed_o):
                                 li = []
@@ -7525,11 +7313,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
                                 if li:
                                     ai_sections.append(f"<h3>{esc(label)}</h3><ul>" + ''.join(li) + "</ul>")
                                     continue
-                            parsed_q = None
-                            try:
-                                parsed_q = json.loads(val)
-                            except Exception:
-                                parsed_q = None
+                            parsed_q = _json_load_cached(val)
 
                             if isinstance(parsed_q, list) and parsed_q and all(isinstance(x, dict) for x in parsed_q):
                                 li = []
@@ -8206,7 +7990,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
                 if _k.startswith('module.mapping.'):
                     _modname = _k.split('module.mapping.', 1)[1]
                     try:
-                        existing_mappings[_modname] = json.loads(_mr['value'])
+                        existing_mappings[_modname] = _json_load_cached(_mr['value']) if isinstance(_mr['value'], str) else _mr['value']
                     except Exception:
                         existing_mappings[_modname] = _mr['value']
 
@@ -8249,11 +8033,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
             module_line = None
 
             if raw_value:
-                parsed_value = None
-                try:
-                    parsed_value = json.loads(raw_value)
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    parsed_value = None
+                parsed_value = _json_load_cached(raw_value)
 
                 if isinstance(parsed_value, dict):
                     source = str(parsed_value.get('source') or '').strip()
@@ -12263,13 +12043,7 @@ def api_analysis_stop(experiment_id: str, repo_name: str):
 # ---------------------------------------------------------------------------
 
 def _get_subscription_env_badge(environment: str) -> str:
-    badges = {
-        "prod": "danger",
-        "staging": "warning",
-        "dev": "info",
-        "shared": "secondary",
-    }
-    return badges.get(environment or "unknown", "secondary")
+    return repo_subscription_env_badge(environment)
 
 
 @app.route("/api/repo-subscriptions/<experiment_id>/<path:repo_name>")
@@ -12279,43 +12053,8 @@ def api_repo_subscriptions_get(experiment_id: str, repo_name: str):
     if conn is None:
         return jsonify({"error": "DB unavailable"}), 503
     try:
-        repo = conn.execute(
-            "SELECT id FROM repositories WHERE experiment_id=? AND repo_name=?",
-            (experiment_id, repo_name),
-        ).fetchone()
-        if not repo:
-            return jsonify({"linked": [], "available": _get_available_subscriptions(conn)})
-
-        rows = conn.execute(
-            """
-            SELECT rs.subscription_id, rs.deploy_role, rs.notes, rs.created_at,
-                   s.display_name, s.environment, s.state, s.last_synced,
-                   COUNT(DISTINCT pa.id) AS asset_count
-            FROM repository_subscriptions rs
-            JOIN subscriptions s ON s.id = rs.subscription_id
-            LEFT JOIN provisioned_assets pa ON pa.subscription_id = s.id
-            WHERE rs.repository_id = ?
-            GROUP BY rs.subscription_id
-            ORDER BY rs.deploy_role, s.display_name
-            """,
-            (repo[0],),
-        ).fetchall()
-
-        linked = [
-            {
-                "subscription_id": r[0],
-                "deploy_role": r[1] or "primary",
-                "notes": r[2],
-                "created_at": r[3],
-                "display_name": r[4],
-                "environment": r[5] or "unknown",
-                "env_badge": _get_subscription_env_badge(r[5]),
-                "state": r[6],
-                "last_synced": r[7],
-                "asset_count": r[8] or 0,
-            }
-            for r in rows
-        ]
+        linked_data = linked_repo_subscriptions(conn, experiment_id, repo_name)
+        linked = linked_data.get("linked", [])
         return jsonify({"linked": linked, "available": _get_available_subscriptions(conn)})
     finally:
         conn.close()
@@ -12334,23 +12073,16 @@ def api_repo_subscriptions_add(experiment_id: str, repo_name: str):
     if not sub_id:
         return jsonify({"error": "subscription_id required"}), 400
     try:
-        repo = conn.execute(
-            "SELECT id FROM repositories WHERE experiment_id=? AND repo_name=?",
-            (experiment_id, repo_name),
-        ).fetchone()
-        if not repo:
-            return jsonify({"error": "Repository not found"}), 404
-        conn.execute(
-            """
-            INSERT INTO repository_subscriptions (repository_id, subscription_id, deploy_role, notes)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(repository_id, subscription_id) DO UPDATE SET
-                deploy_role = excluded.deploy_role,
-                notes = excluded.notes
-            """,
-            (repo[0], sub_id, deploy_role, notes),
+        linked = link_repo_subscription(
+            conn,
+            experiment_id=experiment_id,
+            repo_name=repo_name,
+            subscription_id=sub_id,
+            deploy_role=deploy_role,
+            notes=notes,
         )
-        conn.commit()
+        if not linked:
+            return jsonify({"error": "Repository not found"}), 404
         return jsonify({"status": "linked"})
     finally:
         conn.close()
@@ -12363,17 +12095,14 @@ def api_repo_subscriptions_remove(experiment_id: str, repo_name: str, sub_id: st
     if conn is None:
         return jsonify({"error": "DB unavailable"}), 503
     try:
-        repo = conn.execute(
-            "SELECT id FROM repositories WHERE experiment_id=? AND repo_name=?",
-            (experiment_id, repo_name),
-        ).fetchone()
-        if not repo:
-            return jsonify({"error": "Repository not found"}), 404
-        conn.execute(
-            "DELETE FROM repository_subscriptions WHERE repository_id=? AND subscription_id=?",
-            (repo[0], sub_id),
+        unlinked = unlink_repo_subscription(
+            conn,
+            experiment_id=experiment_id,
+            repo_name=repo_name,
+            subscription_id=sub_id,
         )
-        conn.commit()
+        if not unlinked:
+            return jsonify({"error": "Repository not found"}), 404
         return jsonify({"status": "unlinked"})
     finally:
         conn.close()
@@ -12381,18 +12110,7 @@ def api_repo_subscriptions_remove(experiment_id: str, repo_name: str, sub_id: st
 
 def _get_available_subscriptions(conn) -> list:
     """Return all harvested subscriptions for dropdown population."""
-    rows = conn.execute(
-        "SELECT id, display_name, environment FROM subscriptions ORDER BY environment, display_name"
-    ).fetchall()
-    return [
-        {
-            "id": r[0],
-            "display_name": r[1] or r[0],
-            "environment": r[2] or "unknown",
-            "env_badge": _get_subscription_env_badge(r[2]),
-        }
-        for r in rows
-    ]
+    return repo_available_subscriptions(conn)
 
 
 def _compute_cloud_posture(conn, experiment_id: str, repo_name: str) -> dict:
@@ -16121,6 +15839,92 @@ def _build_cloud_architecture_payload(conn, experiment_id: str, repo_name: str |
         graph_nodes.extend(external_nodes.values())
         provider_counts["external"] += len(external_nodes)
 
+    if _table_exists(conn, "aks_routes"):
+        aks_rows = conn.execute(
+            """
+            SELECT
+                cluster_name, namespace, ingress_name, host, path, service_name,
+                service_port, deployment_name, git_repository, resource_group,
+                pod_template_labels
+            FROM aks_routes
+            WHERE subscription_id = ?
+            ORDER BY cluster_name, namespace, ingress_name, host, service_port
+            """,
+            (experiment_id,),
+        ).fetchall()
+        seen_aks_nodes: set[tuple[str, str, str]] = set()
+        for row in aks_rows:
+            cluster_name = str(row["cluster_name"] or "").strip()
+            namespace = str(row["namespace"] or "").strip()
+            ingress_name = str(row["ingress_name"] or row["host"] or "ingress").strip()
+            service_name = str(row["service_name"] or row["deployment_name"] or "").strip()
+            if not cluster_name or not ingress_name:
+                continue
+            ingress_id = f"aks-ingress::{cluster_name}::{namespace}::{ingress_name}"
+            service_id = f"aks-service::{cluster_name}::{namespace}::{service_name or ingress_name}"
+            ingress_key = ("kubernetes", ingress_id, ingress_name)
+            service_key = ("kubernetes", service_id, service_name or ingress_name)
+            if ingress_key not in seen_aks_nodes:
+                seen_aks_nodes.add(ingress_key)
+                graph_nodes.append(
+                    {
+                        "id": ingress_id,
+                        "resource_name": ingress_name,
+                        "resource_type": "kubernetes_ingress",
+                        "provider_key": "kubernetes",
+                        "provider_label": _cloud_provider_display("kubernetes"),
+                        "type_label": "Kubernetes Ingress",
+                        "repo_name": row["git_repository"] or "",
+                        "parent_resource_id": None,
+                        "source_file": "",
+                        "discovered_by": "aks_routes",
+                        "discovery_method": "harvest",
+                        "status": "active",
+                        "first_seen": None,
+                        "last_seen": None,
+                        "public": False,
+                        "_synthetic": True,
+                    }
+                )
+            if service_name and service_key not in seen_aks_nodes:
+                seen_aks_nodes.add(service_key)
+                graph_nodes.append(
+                    {
+                        "id": service_id,
+                        "resource_name": service_name,
+                        "resource_type": "kubernetes_service",
+                        "provider_key": "kubernetes",
+                        "provider_label": _cloud_provider_display("kubernetes"),
+                        "type_label": "Kubernetes Service",
+                        "repo_name": row["git_repository"] or "",
+                        "parent_resource_id": None,
+                        "source_file": "",
+                        "discovered_by": "aks_routes",
+                        "discovery_method": "harvest",
+                        "status": "active",
+                        "first_seen": None,
+                        "last_seen": None,
+                        "public": False,
+                        "_synthetic": True,
+                    }
+                )
+                graph_edges.append(
+                    {
+                        "id": f"edge-aks-{cluster_name}-{namespace}-{ingress_name}",
+                        "source": ingress_id,
+                        "target": service_id,
+                        "label": "routes to",
+                        "data": {
+                            "connection_type": "aks_route",
+                            "protocol": "",
+                            "port": row["service_port"],
+                            "auth_method": "",
+                            "is_encrypted": False,
+                            "is_cross_repo": False,
+                        },
+                    }
+                )
+
     provider_groups: dict[str, list[dict]] = defaultdict(list)
     for item in graph_nodes:
         provider_groups[item["provider_key"]].append(item)
@@ -16203,25 +16007,16 @@ def api_cloud_architecture():
         experiment_id = (request.args.get("experiment_id") or "").strip()
         repo_name = (request.args.get("repo_name") or "").strip() or None
 
-        view_mode = requested_view_mode
-        if view_mode == "mermaid":
-            view_mode = "full"
-        elif view_mode == "overview":
-            view_mode = "overview"
-        elif view_mode in {"reactflow", "full"}:
-            view_mode = "full"
-        else:
-            view_mode = "overview"
-
-        if subscription_selector or not experiment_id:
-            payload = _build_subscription_architecture_payload(conn, subscription_selector, view_mode=view_mode)
-            return jsonify(payload)
-
-        if not experiment_id:
-            experiment_id = _cloud_latest_experiment_id(conn) or ""
-        if not experiment_id:
-            return jsonify({"experiment_id": "", "repo_name": repo_name or "", "summary": {"resource_count": 0, "connection_count": 0, "provider_counts": []}, "nodes": [], "edges": [], "message": "No cloud resources found."})
-        payload = _build_cloud_architecture_payload(conn, experiment_id, repo_name)
+        payload = cloud_architecture_payload(
+            conn=conn,
+            subscription_selector=subscription_selector,
+            requested_view_mode=requested_view_mode,
+            experiment_id=experiment_id,
+            repo_name=repo_name,
+            build_subscription_payload=_build_subscription_architecture_payload,
+            latest_experiment_id=_cloud_latest_experiment_id,
+            build_experiment_payload=_build_cloud_architecture_payload,
+        )
         return jsonify(payload)
     finally:
         conn.close()
@@ -17467,24 +17262,15 @@ def _extract_private_endpoints(raw_json: dict) -> list[str]:
 
 def _parse_json_list_field(value: object) -> list[object]:
     """Parse a stored JSON list or return a single-item list when needed."""
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return value
+    parsed = parse_json_list(value)
+    if parsed:
+        return parsed
     if isinstance(value, dict):
         return [value]
-    text = str(value).strip()
+    text = str(value or "").strip()
     if not text:
         return []
-    try:
-        parsed = json.loads(text)
-    except Exception:
-        return [item.strip() for item in text.split(",") if item.strip()]
-    if isinstance(parsed, list):
-        return parsed
-    if isinstance(parsed, dict):
-        return [parsed]
-    return []
+    return [item.strip() for item in text.split(",") if item.strip()]
 
 
 def _lookup_appgw_waf_policy_details(
@@ -18847,18 +18633,7 @@ def _trace_subscription_endpoint(
         return host, path
 
     def _parse_json_list(value) -> list[str]:
-        if not value:
-            return []
-        if isinstance(value, list):
-            return [str(item or "").strip() for item in value if str(item or "").strip()]
-        if isinstance(value, str):
-            try:
-                parsed = json.loads(value)
-            except Exception:
-                return []
-            if isinstance(parsed, list):
-                return [str(item or "").strip() for item in parsed if str(item or "").strip()]
-        return []
+        return parse_json_string_list(value)
 
     def _host_matches(pattern: str | None, host: str | None) -> bool:
         pattern_l = str(pattern or "").strip().lower().rstrip(".")
@@ -19610,429 +19385,43 @@ def api_cloud_route_trace(sub_id: str | None = None):
 def get_group_members():
     """Get members of a resource group node."""
     group_id = request.args.get("group_id", "").strip()
-    
-    if not group_id or not group_id.startswith("group::"):
-        return jsonify({"error": "Invalid group_id"}), 400
-    
     conn = _get_db_with_schema()
-    
-    # Parse group ID: group::{tier}::{type}::{access}
-    parts = group_id.split("::")
-    if len(parts) < 4:
-        return jsonify({"error": "Malformed group_id"}), 400
-    
-    tier = parts[1]
-    asset_type = parts[2]
-    access_level = parts[3]
-    
-    # Determine query conditions based on access level
-    is_public = 1 if access_level == "Public" else 0
-    is_restricted = 1 if access_level == "IP Restricted" else 0
-    
-    # Query for matching resources
-    if access_level == "Private":
-        # Private means NOT public AND NOT restricted
-        members = conn.execute(
-            """
-            SELECT 
-                id, name, type, resource_group, location, sku,
-                fqdn, is_public, is_restricted, status
-            FROM provisioned_assets
-            WHERE type = ? AND is_public = 0 AND is_restricted = 0
-            ORDER BY name
-            LIMIT 500
-            """,
-            (asset_type,),
-        ).fetchall()
-    else:
-        members = conn.execute(
-            """
-            SELECT 
-                id, name, type, resource_group, location, sku,
-                fqdn, is_public, is_restricted, status
-            FROM provisioned_assets
-            WHERE type = ? AND is_public = ? AND is_restricted = ?
-            ORDER BY name
-            LIMIT 500
-            """,
-            (asset_type, is_public, is_restricted),
-        ).fetchall()
-    
-    # Format members
-    formatted_members = [
-        {
-            "id": row["id"],
-            "name": row["name"],
-            "type": row["type"],
-            "icon": "📦",
-            "details": {
-                "resource_group": row["resource_group"] or "N/A",
-                "location": row["location"] or "N/A",
-                "sku": row["sku"] or "N/A",
-                "fqdn": row["fqdn"] or "N/A",
-                "status": row["status"] or "active",
-            }
-        }
-        for row in members
-    ]
-    
-    return jsonify({
-        "group_id": group_id,
-        "group_type": asset_type,
-        "access_level": access_level,
-        "members": formatted_members,
-        "member_count": len(formatted_members),
-    })
+    try:
+        payload, status = group_members_payload(conn, group_id)
+        return jsonify(payload), status
+    finally:
+        if conn:
+            conn.close()
 
 
 @app.route("/api/cloud/resource-children")
 def get_resource_children():
     """Get child resources for a parent resource (App Gateway listeners, SQL databases, etc.)."""
     resource_id = request.args.get("resource_id", "").strip()
-    
-    if not resource_id:
-        return jsonify({"error": "Missing resource_id parameter"}), 400
-    
     conn = _get_db_with_schema()
-    
-    # Get parent resource
-    parent_row = conn.execute(
-        """
-        SELECT 
-            pa.id, pa.name, pa.type, pa.subscription_id, pa.resource_group,
-            s.display_name AS sub_name
-        FROM provisioned_assets pa
-        JOIN subscriptions s ON s.id = pa.subscription_id
-        WHERE pa.id = ?
-        """,
-        (resource_id,),
-    ).fetchone()
-    
-    if not parent_row:
-        return jsonify({"error": "Resource not found"}), 404
-    
-    parent_type = parent_row["type"].lower()
-    parent_name = parent_row["name"]
-    subscription_id = parent_row["subscription_id"]
-    resource_group = parent_row["resource_group"]
-    
-    children = []
-    
-    # App Gateway → HTTP Listeners
-    if "applicationgateways" in parent_type or "applicationgateway" in parent_type:
-        listener_rows = conn.execute(
-            """
-            SELECT DISTINCT
-                listener_name,
-                hostname,
-                protocol,
-                backend_port,
-                backend_protocol,
-                backend_pool_name,
-                waf_policy_name,
-                exposure_level
-            FROM appgw_routing_rules
-            WHERE gateway_name = ? AND subscription_id = ?
-            ORDER BY listener_name
-            """,
-            (parent_name, subscription_id),
-        ).fetchall()
-        
-        for row in listener_rows:
-            frontend_port = 443 if row["protocol"] == "Https" else 80
-            children.append({
-                "id": f"{resource_id}::listener::{row['listener_name']}",
-                "name": row["listener_name"],
-                "type": "HTTP Listener",
-                "icon": "🎧",
-                "details": {
-                    "hostname": row["hostname"] or "All",
-                    "protocol": row["protocol"] or "HTTP",
-                    "frontend_port": frontend_port,
-                    "backend_port": row["backend_port"] or "Unknown",
-                    "backend_protocol": row["backend_protocol"] or "HTTP",
-                    "backend_pool": row["backend_pool_name"] or "None",
-                    "waf_policy": row["waf_policy_name"] or "None",
-                    "exposure": row["exposure_level"] or "Unknown",
-                }
-            })
-    
-    # SQL Server → Databases
-    elif "sql/servers" in parent_type and "/databases" not in parent_type:
-        db_rows = conn.execute(
-            """
-            SELECT 
-                id, name, sku, status
-            FROM provisioned_assets
-            WHERE subscription_id = ? 
-            AND type LIKE '%Sql/servers/%/databases%'
-            AND id LIKE ?
-            AND name NOT IN ('master', 'model', 'msdb', 'tempdb')
-            ORDER BY name
-            """,
-            (subscription_id, f"%{parent_name}/databases%"),
-        ).fetchall()
-        
-        for row in db_rows:
-            children.append({
-                "id": row["id"],
-                "name": row["name"],
-                "type": "SQL Database",
-                "icon": "🗄️",
-                "details": {
-                    "sku": row["sku"] or "Unknown",
-                    "status": row["status"] or "active",
-                }
-            })
-    
-    # AKS → Namespaces (if we have that data - placeholder)
-    elif "kubernetes" in parent_type or "containerservice" in parent_type:
-        # Placeholder for AKS namespaces - would need separate harvesting
-        children.append({
-            "id": f"{resource_id}::namespace::default",
-            "name": "default",
-            "type": "Namespace",
-            "icon": "📦",
-            "details": {"note": "Namespace data requires separate harvesting"}
-        })
-    
-    # APIM → APIs (reuse the existing logic)
-    elif "apimanagement/service" in parent_type:
-        api_rows = conn.execute(
-            """
-            SELECT DISTINCT
-                api_name,
-                api_display_name,
-                api_path,
-                api_protocols,
-                backend_url,
-                exposure_level,
-                requires_subscription
-            FROM apim_api_routes
-            WHERE apim_name = ? AND subscription_id = ?
-            ORDER BY api_display_name
-            """,
-            (parent_name, subscription_id),
-        ).fetchall()
-        
-        for row in api_rows:
-            protocols_list = json.loads(row["api_protocols"] or "[]")
-            children.append({
-                "id": f"{resource_id}::api::{row['api_name']}",
-                "name": row["api_display_name"] or row["api_name"],
-                "type": "API",
-                "icon": "🔌",
-                "details": {
-                    "path": row["api_path"] or "/",
-                    "protocols": ", ".join(protocols_list) if protocols_list else "HTTPS",
-                    "backend": row["backend_url"] or "Unknown",
-                    "exposure": row["exposure_level"] or "Unknown",
-                    "requires_subscription": bool(row["requires_subscription"]),
-                }
-            })
-
-    # App Service / Function App → deployment slots
-    elif "sites" in parent_type and "slots" not in parent_type:
-        slot_rows = conn.execute(
-            """
-            SELECT
-                s.name,
-                s.resource_group,
-                s.fqdn,
-                s.is_public,
-                s.is_restricted,
-                s.raw_json
-            FROM provisioned_assets s
-            WHERE s.subscription_id = ?
-              AND LOWER(COALESCE(s.type, '')) LIKE '%/sites/slots%'
-              AND (
-                    LOWER(COALESCE(json_extract(s.raw_json, '$._extra.slot_parent'), '')) = LOWER(?)
-                    OR LOWER(COALESCE(s.id, '')) LIKE '%' || LOWER(?) || '/slots/%'
-                  )
-            ORDER BY s.name
-            LIMIT 50
-            """,
-            (subscription_id, parent_name, parent_name),
-        ).fetchall()
-
-        for row in slot_rows:
-            try:
-                slot_raw = json.loads(row["raw_json"] or "{}") if isinstance(row["raw_json"], str) else (row["raw_json"] or {})
-            except Exception:
-                slot_raw = {}
-            kind = str(slot_raw.get("kind") or "").strip()
-            kind_label = "Function App Slot" if "functionapp" in kind.lower() or "function app" in kind.lower() else "App Service Slot"
-            children.append({
-                "id": f"{resource_id}::slot::{row['name']}",
-                "name": row["name"],
-                "type": kind_label,
-                "icon": "🌐",
-                "details": {
-                    "resource_group": row["resource_group"] or "N/A",
-                    "fqdn": row["fqdn"] or "N/A",
-                    "exposure": "Public" if row["is_public"] else ("IP Restricted" if row["is_restricted"] else "Private"),
-                    "kind": kind or "—",
-                    "parent_app": parent_name,
-                },
-            })
-
-    return jsonify({
-        "parent_id": resource_id,
-        "parent_name": parent_name,
-        "parent_type": parent_row["type"],
-        "children": children,
-        "child_count": len(children),
-    })
+    try:
+        payload, status = resource_children_payload(
+            conn,
+            resource_id,
+            friendly_type=_friendly_type,
+        )
+        return jsonify(payload), status
+    finally:
+        if conn:
+            conn.close()
 
 
 @app.route("/api/cloud/apim-child-apis")
 def get_apim_child_apis():
     """Get child APIs for an APIM instance."""
     resource_id = request.args.get("resource_id", "").strip()
-    
-    if not resource_id:
-        return jsonify({"error": "Missing resource_id parameter"}), 400
-    
     conn = _get_db_with_schema()
-    
-    # Get APIM resource
-    apim_row = conn.execute(
-        """
-        SELECT 
-            pa.id, pa.name, pa.type, pa.subscription_id, pa.raw_json,
-            s.display_name AS sub_name
-        FROM provisioned_assets pa
-        JOIN subscriptions s ON s.id = pa.subscription_id
-        WHERE pa.id = ? AND pa.type LIKE '%ApiManagement/service%'
-        """,
-        (resource_id,),
-    ).fetchone()
-    
-    if not apim_row:
-        return jsonify({"error": "APIM resource not found"}), 404
-    
-    apim_name = apim_row["name"]
-    subscription_id = apim_row["subscription_id"]
-    
-    # Try to get APIs from apim_api_routes table
-    api_rows = conn.execute(
-        """
-        SELECT DISTINCT
-            api_name,
-            api_display_name,
-            api_path,
-            api_protocols,
-            backend_url,
-            service_url,
-            exposure_level,
-            requires_subscription
-        FROM apim_api_routes
-        WHERE apim_name = ? AND subscription_id = ?
-        ORDER BY api_display_name
-        """,
-        (apim_name, subscription_id),
-    ).fetchall()
-    
-    child_apis = []
-    
-    if api_rows:
-        # Use real data from database
-        for row in api_rows:
-            protocols_list = json.loads(row["api_protocols"] or "[]")
-            child_apis.append({
-                "id": f"{resource_id}::api::{row['api_name']}",
-                "name": row["api_display_name"] or row["api_name"],
-                "api_name": row["api_name"],
-                "path": row["api_path"] or "/",
-                "protocols": protocols_list,
-                "backend_url": row["backend_url"],
-                "service_url": row["service_url"],
-                "exposure": row["exposure_level"] or "Unknown",
-                "requires_subscription": bool(row["requires_subscription"]),
-            })
-    else:
-        # Parse from raw_json as fallback or return empty
-        raw_json_text = apim_row["raw_json"] or "{}"
-        try:
-            raw_json = json.loads(raw_json_text)
-            # Try to extract APIs from properties (this is a simplified extraction)
-            # Real APIM APIs would need separate API calls to Azure
-            props = raw_json.get("properties", {})
-            # For now, return empty if no database data
-            # In production, you would make Azure API calls here
-        except:
-            pass
-    
-    # Get operations for each API
-    for api in child_apis:
-        api_name = api["api_name"]
-        operations = conn.execute(
-            """
-            SELECT 
-                operation_id,
-                display_name,
-                method,
-                url_template,
-                description,
-                requires_subscription
-            FROM apim_api_operations
-            WHERE apim_name = ? AND api_name = ? AND subscription_id = ?
-            ORDER BY method, url_template
-            LIMIT 50
-            """,
-            (apim_name, api_name, subscription_id),
-        ).fetchall()
-        
-        api["operations"] = [
-            {
-                "id": op["operation_id"],
-                "name": op["display_name"] or op["operation_id"],
-                "method": op["method"] or "GET",
-                "path": op["url_template"] or "/",
-                "description": op["description"] or "",
-                "requires_subscription": bool(op["requires_subscription"]),
-            }
-            for op in operations
-        ]
-        api["operation_count"] = len(api["operations"])
-
-    columns = [
-        "API",
-        "Path",
-        "Protocols",
-        "Exposure",
-        "Subscription Key",
-        "Operations",
-        "Backend URL",
-        "Service URL",
-    ]
-    rows = [
-        [
-            api["name"],
-            api["path"],
-            ", ".join(api["protocols"]) if api["protocols"] else "—",
-            api["exposure"],
-            "Required" if api["requires_subscription"] else "Not required",
-            api.get("operation_count", 0),
-            api["backend_url"] or "—",
-            api["service_url"] or "—",
-        ]
-        for api in child_apis
-    ]
-
-    return jsonify({
-        "id": resource_id,
-        "title": f"{apim_name} — APIs",
-        "name": apim_name,
-        "type_label": "API Management",
-        "resource_group": "",
-        "view_type": "table",
-        "columns": columns,
-        "rows": rows,
-        "empty_message": "No APIs were found for this APIM instance.",
-        "api_count": len(child_apis),
-        "child_apis": child_apis,
-    })
+    try:
+        payload, status = apim_child_apis_payload(conn, resource_id)
+        return jsonify(payload), status
+    finally:
+        if conn:
+            conn.close()
 
 
 @app.route("/cloud/architecture")
@@ -20505,19 +19894,7 @@ def api_subscriptions_list():
             ORDER BY s.environment, s.display_name
             """
         ).fetchall()
-        subs = []
-        for r in rows:
-            subs.append({
-                "id": r[0],
-                "display_name": r[1],
-                "environment": r[2] or "unknown",
-                "env_badge": _get_subscription_env_badge(r[2]),
-                "provider": "Azure",
-                "state": r[3],
-                "last_synced": r[4],
-                "asset_count": r[5] or 0,
-                "public_count": r[6] or 0,
-            })
+        subs = subscription_summary_rows(rows)
         return jsonify({"subscriptions": subs})
     finally:
         conn.close()
@@ -20931,6 +20308,9 @@ def api_subscription_diagram(sub_id: str):
         # in APIM routing as potentially unprotected.
         apim_backend_urls: set[str] = set()
         apim_route_map: dict[str, list[str]] = {}  # apim_name (lower) → [backend_urls]
+        apim_api_rows: list = []
+        backend_route_rows: list[tuple[str, str, str]] = []
+        apim_open_api_count: int = 0
         try:
             apim_rows = conn.execute(
                 "SELECT url FROM apim_backends WHERE subscription_id = ? AND url IS NOT NULL LIMIT 50",
@@ -20943,16 +20323,44 @@ def api_subscription_diagram(sub_id: str):
 
         try:
             if _table_exists(conn, "apim_api_routes"):
-                for _apim_n, _be_url in conn.execute(
-                    "SELECT DISTINCT apim_name, COALESCE(backend_url, service_url) "
-                    "FROM apim_api_routes "
-                    "WHERE subscription_id=? AND (backend_url IS NOT NULL OR service_url IS NOT NULL)",
+                apim_route_rows = conn.execute(
+                    """
+                    SELECT apim_name, apim_resource_id, api_name, api_display_name, api_path,
+                           backend_id, backend_url, service_url,
+                           COALESCE(backend_url, service_url) AS target_url,
+                           COALESCE(requires_subscription, 0) AS requires_subscription
+                    FROM apim_api_routes
+                    WHERE subscription_id=?
+                    """,
                     (sub_id,),
-                ).fetchall():
+                ).fetchall()
+                for api_row in apim_route_rows:
+                    _apim_n = api_row["apim_name"]
+                    _target = api_row["target_url"]
                     _key = str(_apim_n or "").strip().lower()
-                    _u = str(_be_url or "").strip()
+                    _u = str(_target or "").strip()
                     if _key and _u:
                         apim_route_map.setdefault(_key, []).append(_u)
+
+                    apim_api_rows.append(
+                        {
+                            "apim_name": api_row["apim_name"],
+                            "apim_resource_id": api_row["apim_resource_id"],
+                            "api_name": api_row["api_name"],
+                            "api_display_name": api_row["api_display_name"],
+                            "api_path": api_row["api_path"],
+                        }
+                    )
+                    if not bool(api_row["requires_subscription"]):
+                        apim_open_api_count += 1
+
+                    backend_route_rows.append(
+                        (
+                            api_row["apim_name"],
+                            api_row["backend_id"],
+                            api_row["target_url"],
+                        )
+                    )
         except Exception:
             pass  # Non-critical
 
@@ -20967,32 +20375,6 @@ def api_subscription_diagram(sub_id: str):
                     """,
                     (sub_id,),
                 ).fetchall()
-        except Exception:
-            pass  # Non-critical
-
-        apim_api_rows: list = []
-        try:
-            if _table_exists(conn, "apim_api_routes"):
-                apim_api_rows = conn.execute(
-                    """
-                    SELECT apim_name, apim_resource_id, api_name, api_display_name, api_path
-                    FROM apim_api_routes
-                    WHERE subscription_id=?
-                    """,
-                    (sub_id,),
-                ).fetchall()
-        except Exception:
-            pass  # Non-critical
-
-        # Count APIM APIs that require no subscription key (unauthenticated / open).
-        apim_open_api_count: int = 0
-        try:
-            _open_row = conn.execute(
-                "SELECT COUNT(*) FROM apim_api_routes WHERE subscription_id=? AND requires_subscription=0",
-                (sub_id,),
-            ).fetchone()
-            if _open_row:
-                apim_open_api_count = int(_open_row[0])
         except Exception:
             pass  # Non-critical
 
@@ -21069,19 +20451,6 @@ def api_subscription_diagram(sub_id: str):
 
         apim_route_targets: dict[str, set[str]] = {}
         backend_targets: dict[tuple[str, str], set[str]] = {}
-        backend_route_rows: list[tuple[str, str, str]] = []
-        try:
-            if _table_exists(conn, "apim_api_routes"):
-                backend_route_rows = conn.execute(
-                    """
-                    SELECT apim_name, backend_id, COALESCE(backend_url, service_url) AS target_url
-                    FROM apim_api_routes
-                    WHERE subscription_id=? AND (backend_id IS NOT NULL OR backend_url IS NOT NULL OR service_url IS NOT NULL)
-                    """,
-                    (sub_id,),
-                ).fetchall()
-        except Exception:
-            pass  # Non-critical
 
         for row in backend_route_rows:
             apim_name = str(row[0] or "").strip().lower()
@@ -23126,7 +22495,10 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     for _item in entry_points:
         _arm_l = (_item.get("arm_type") or _item.get("type") or "").lower()
         if "applicationgateway" in _arm_l:
-            _item["public"] = _gw_public.get((_item.get("name") or "").lower(), False)
+            _item["public"] = bool(
+                _item.get("harvest_is_public")
+                or _gw_public.get((_item.get("name") or "").lower(), False)
+            )
         else:
             _fqdn = _item.get("fqdn") or _fqdn_for_type(_item.get("name", ""), _arm_l)
             if _fqdn:
@@ -24426,6 +23798,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         arm_type = item.get("arm_type")
         arm_type_lc = (arm_type or "").lower()
         if "eventhub" in arm_type_lc or "servicebus" in arm_type_lc:
+            if item.get("short_name") or item.get("name"):
+                label = str(item.get("short_name") or item.get("name") or label).strip()
             if item.get("public"):
                 exposure_txt = "Public"
             elif item.get("is_restricted"):
@@ -24890,11 +24264,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         """Protocol-appropriate 🔴 label for direct Internet exposure arrows."""
         t = (arm_type or "").lower()
         if "apimanagement" in t:
-            # "API Product" was misleading — it echoes the APIM sub-resource type
-            # (azurerm_api_management_product) rather than the gateway itself.
-            # APIM public access is governed by virtualNetworkType (External/None = public,
-            # Internal = private), not by a public IP, so label it accordingly.
-            return "APIM Gateway" if count == 1 else f"APIM Gateway x{count}"
+            return 'API "Product"' if count == 1 else 'API "Product" x{count}'
         if "eventhub" in t or "servicebus" in t:
             proto = "AMQP"
         elif "keyvault" in t or "storage" in t or "appconfiguration" in t:
@@ -24914,7 +24284,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     def _allowlist_target_label(item: dict) -> str:
         """Label IP-allowlisted edges with the concrete resource family."""
         family = str(item.get("type") or item.get("label") or _friendly_type(item.get("arm_type") or "")).strip()
-        return f"IP restricted ({family})" if family else "IP restricted"
+        return f"IP allowlist ({family})" if family else "IP allowlist"
 
     def _is_allowlist_target(item: dict) -> bool:
         """Only show allowlist edges for endpoints that actually accept inbound traffic."""
@@ -28824,6 +28194,9 @@ def debug_routes():
         "cloud_routes": cloud_routes,
         "all_routes": routes,
     })
+
+
+register_route_blueprints(app, sys.modules[__name__], _ROUTE_COLLECTOR)
 
 
 if __name__ == "__main__":
