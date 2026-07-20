@@ -25857,13 +25857,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         if item.get("rbac_label") and any(token in arm_type for token in ("keyvault", "storage", "appconfiguration", "documentdb")):
             return f"{item['rbac_label']} · {label}"
         if "apimanagement" in arm_type:
-            # Prefer the FQDN (already in `label`) so reviewers can verify the endpoint.
-            # Avoid "API Product" which mirrors the APIM sub-resource type and suggests
-            # the wrong cause; APIM accessibility is determined by virtualNetworkType
-            # (None/External = internet-reachable, Internal = VNet-only).
-            if fqdns:
-                return label  # FQDN-based label computed above
-            return "APIM Gateway"
+            return 'API "Product"'
         return label
 
     for item in shown_backend:
