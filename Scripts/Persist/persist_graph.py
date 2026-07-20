@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 import sys
+import sqlite3
 
 from models import RepositoryContext, Relationship, RelationshipType
 # Prefer the repo-root cozo_helpers shim when pycozo is unavailable.
@@ -44,12 +45,14 @@ except ImportError:
     import db_helpers as _db_helpers  # type: ignore
 DB_PATH = _db_helpers.DB_PATH
 
+try:
+    from Scripts.Persist.sqlite_utils import open_sqlite_connection
+except Exception:
+    from sqlite_utils import open_sqlite_connection  # type: ignore
+
 
 def _get_conn(db_path: Path = DB_PATH) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    return open_sqlite_connection(db_path, timeout=30)
 
 
 _LINK_CONFIDENCE_RANK = {"low": 1, "medium": 2, "high": 3}

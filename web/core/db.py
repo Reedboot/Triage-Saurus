@@ -4,6 +4,11 @@ import sqlite3
 import threading
 from pathlib import Path
 
+try:
+    from Scripts.Persist.sqlite_utils import open_sqlite_connection
+except Exception:
+    from sqlite_utils import open_sqlite_connection  # type: ignore
+
 _DB_PATH: Path | None = None
 _SCHEMA_CACHE_LOCK = threading.Lock()
 _SCHEMA_CACHE: dict[int, dict[str, object]] = {}
@@ -19,9 +24,7 @@ def _get_db() -> sqlite3.Connection | None:
     if _DB_PATH is None or not _DB_PATH.exists():
         return None
     try:
-        conn = sqlite3.connect(str(_DB_PATH), timeout=10)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return open_sqlite_connection(_DB_PATH, timeout=10)
     except Exception:
         return None
 
@@ -31,8 +34,7 @@ def _get_db_with_schema() -> sqlite3.Connection | None:
     if _DB_PATH is None or not _DB_PATH.exists():
         return None
     try:
-        conn = sqlite3.connect(str(_DB_PATH), timeout=30)
-        conn.row_factory = sqlite3.Row
+        conn = open_sqlite_connection(_DB_PATH, timeout=30)
         from Scripts.Persist import db_helpers
 
         db_helpers._ensure_schema(conn)

@@ -15,6 +15,11 @@ import json
 from pathlib import Path
 from typing import Optional
 
+try:
+    from Scripts.Persist.sqlite_utils import open_sqlite_connection
+except Exception:
+    from sqlite_utils import open_sqlite_connection  # type: ignore
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DB_PATH = REPO_ROOT / "Output" / "Data" / "cozo.db"
 
@@ -48,7 +53,7 @@ def register_shared_resource(
     Returns:
         Database ID of the shared resource
     """
-    with sqlite3.connect(str(DB_PATH)) as conn:
+    with open_sqlite_connection(DB_PATH) as conn:
         # Check if already exists
         existing = conn.execute("""
             SELECT id, reference_count FROM shared_resources 
@@ -96,7 +101,7 @@ def link_repo_to_shared_resource(
         local_resource_id: ID of the local resource that references the shared one
         reference_type: Type of reference ("references", "depends_on", "uses_auth_from", etc.)
     """
-    with sqlite3.connect(str(DB_PATH)) as conn:
+    with open_sqlite_connection(DB_PATH) as conn:
         conn.execute("""
             INSERT OR IGNORE INTO shared_resource_references
             (shared_resource_id, repo_name, experiment_id, local_resource_id, reference_type)
@@ -113,7 +118,7 @@ def get_shared_resource(provider: str, resource_type: str, resource_identifier: 
                             category, reference_count, variable_name, properties
     Returns None if not found.
     """
-    with sqlite3.connect(str(DB_PATH)) as conn:
+    with open_sqlite_connection(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute("""
             SELECT * FROM shared_resources
@@ -134,7 +139,7 @@ def get_repos_using_shared_resource(shared_resource_id: int) -> list[dict]:
     
     Returns list of dicts with keys: repo_name, experiment_id, reference_type, discovered_at
     """
-    with sqlite3.connect(str(DB_PATH)) as conn:
+    with open_sqlite_connection(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("""
             SELECT repo_name, experiment_id, reference_type, discovered_at
@@ -152,7 +157,7 @@ def get_shared_resources_for_repo(repo_name: str) -> list[dict]:
     
     Returns list of dicts combining shared_resources and reference details.
     """
-    with sqlite3.connect(str(DB_PATH)) as conn:
+    with open_sqlite_connection(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("""
             SELECT 
@@ -181,7 +186,7 @@ def get_all_shared_resources(provider: str = None) -> list[dict]:
     
     Returns list of dicts with shared resource details and reference counts.
     """
-    with sqlite3.connect(str(DB_PATH)) as conn:
+    with open_sqlite_connection(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         
         if provider:

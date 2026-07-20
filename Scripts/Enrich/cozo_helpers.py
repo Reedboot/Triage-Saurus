@@ -4,6 +4,11 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import sqlite3
+
+try:
+    from Scripts.Persist.sqlite_utils import open_sqlite_connection
+except Exception:
+    from sqlite_utils import open_sqlite_connection  # type: ignore
 try:
     from pycozo import Client
 except Exception:  # pragma: no cover - optional dependency
@@ -29,7 +34,7 @@ def _insert_relationship_audit(from_node: str, to_node: str, rel_type: str, acti
 
 def _execute_sql(sql: str, params: tuple = ()) -> None:
     """Execute SQL directly against the Cozo sqlite DB for simple graph ops."""
-    conn = sqlite3.connect(str(COZO_DB_PATH))
+    conn = open_sqlite_connection(COZO_DB_PATH, timeout=30)
     try:
         cur = conn.cursor()
         cur.execute(sql, params)

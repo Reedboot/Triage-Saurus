@@ -14,6 +14,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+try:
+    from Scripts.Persist.sqlite_utils import open_sqlite_connection
+except Exception:
+    from sqlite_utils import open_sqlite_connection  # type: ignore
+
 ROOT = Path(__file__).resolve().parents[2]
 DB_PATH = ROOT / "Output" / "Data" / "cozo.db"
 
@@ -35,9 +40,7 @@ CREATE TABLE IF NOT EXISTS experiments (
 
 
 def _connect() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH), timeout=30)
-    conn.row_factory = sqlite3.Row
+    conn = open_sqlite_connection(DB_PATH, timeout=30)
     conn.execute(_CREATE_TABLE)
     conn.commit()
     return conn

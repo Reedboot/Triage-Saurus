@@ -24,6 +24,11 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
+# Ensure repo-root imports work when this file is executed directly.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from flask import Response, render_template, request, stream_with_context, jsonify, redirect
 
 try:
@@ -11415,12 +11420,15 @@ def experiment_diagram_redirect(experiment_id: str | None = None):
 @app.route("/scan-001-diagram")
 def scan_001_diagram():
     """Display the Scan 001 Azure architecture diagram generated from database."""
+    conn = None
     try:
         import sqlite3
         from Scripts.Generate.generate_diagram import get_friendly_type
         
         # Query database for main resources (simplified, no nesting)
-        conn = sqlite3.connect('Output/Data/cozo.db')
+        conn = _get_db()
+        if conn is None:
+            return "Database unavailable", 500
         cursor = conn.cursor()
         
         # Get main resources (exclude containers, blobs, etc.)
@@ -11853,6 +11861,12 @@ def scan_001_diagram():
         return html
     except Exception as e:
         return f"Error generating diagram: {str(e)}", 500
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 @app.route("/diagrams/<experiment_id>")

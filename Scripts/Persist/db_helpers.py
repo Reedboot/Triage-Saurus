@@ -1890,12 +1890,13 @@ def _ensure_schema(conn: sqlite3.Connection):
 def get_db_connection(db_path: Optional[Path] = None):
     """Context manager for database connections."""
     path = db_path or DB_PATH
-    # Ensure parent directory exists so sqlite can create the DB file if needed
     p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(p), timeout=30)
-    conn.execute("PRAGMA busy_timeout = 30000;")
-    conn.row_factory = sqlite3.Row  # Access columns by name
+    try:
+        from Scripts.Persist.sqlite_utils import open_sqlite_connection
+    except Exception:
+        from sqlite_utils import open_sqlite_connection  # type: ignore
+
+    conn = open_sqlite_connection(p, timeout=30)
     # Ensure schema with retries to avoid concurrent migration lock errors
     for attempt in range(6):
         try:
