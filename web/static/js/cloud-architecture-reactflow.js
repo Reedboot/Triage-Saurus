@@ -93,7 +93,7 @@ function buildHierarchyContext(nodes) {
   for (const node of nodes) {
     const id = String(node?.id || "").trim();
     if (!id) continue;
-    const parentId = String(node?.data?.parentNodeId || "").trim();
+    const parentId = String(node?.data?.layoutParentId || node?.data?.parentNodeId || "").trim();
     if (!parentId || parentId === id || !nodeById.has(parentId)) continue;
     if ((providerById.get(parentId) || "unknown") !== (providerById.get(id) || "unknown")) continue;
     let cursor = parentId;
@@ -321,6 +321,127 @@ function layoutReactFlowNodes(rawNodes) {
     });
   }
 
+  const isApimServiceNode = (node) => {
+    const haystack = [
+      node?.data?.resourceType,
+      node?.data?.typeLabel,
+      node?.data?.label,
+      node?.data?.name,
+      node?.data?.type,
+    ]
+      .map((value) => String(value || "").toLowerCase())
+      .join(" ");
+    return haystack.includes("apimanagement") || haystack.includes("api management") || haystack === "apim";
+  };
+
+  const isApimApiNode = (node) => {
+    const haystack = [
+      node?.data?.resourceType,
+      node?.data?.typeLabel,
+      node?.data?.label,
+      node?.data?.name,
+      node?.data?.type,
+    ]
+      .map((value) => String(value || "").toLowerCase())
+      .join(" ");
+    return haystack.includes("apim api");
+  };
+
+  const isApimBackendTargetNode = (node) => {
+    const haystack = [
+      node?.data?.resourceType,
+      node?.data?.typeLabel,
+      node?.data?.label,
+      node?.data?.name,
+      node?.data?.type,
+    ]
+      .map((value) => String(value || "").toLowerCase())
+      .join(" ");
+    return haystack.includes("apim backend target") || haystack.includes("apim backend pool");
+  };
+
+  const apimPlacementByParent = new Map();
+  for (const node of nodes) {
+    const id = String(node?.id || "").trim();
+    if (!id) continue;
+    const anchorId = String(node?.data?.apimAnchorId || "").trim();
+    if (!anchorId) continue;
+    const parent = nodeById.get(anchorId);
+    if (!parent || !isApimServiceNode(parent)) continue;
+    const kind = isApimApiNode(node) ? "api" : (isApimBackendTargetNode(node) ? "backend" : null);
+    if (!kind) continue;
+    if (!apimPlacementByParent.has(anchorId)) {
+      apimPlacementByParent.set(anchorId, { api: [], backend: [] });
+    }
+    apimPlacementByParent.get(anchorId)[kind].push({
+      node,
+      layoutParentId: String(node?.data?.layoutParentId || node?.data?.parentNodeId || "").trim(),
+    });
+  }
+
+  for (const [parentId, buckets] of apimPlacementByParent.entries()) {
+    const parentBase = basePositionById.get(parentId) || { x: 0, y: 0 };
+    const stepY = 160;
+    const apiX = parentBase.x - 420;
+    const backendX = parentBase.x + 420;
+
+    const apiNodes = [...buckets.api].sort((a, b) => {
+      const aLabel = String(a?.node?.data?.label || a?.node?.id || "");
+      const bLabel = String(b?.node?.data?.label || b?.node?.id || "");
+      return aLabel.localeCompare(bLabel);
+    });
+    const backendNodes = [...buckets.backend].sort((a, b) => {
+      const aLabel = String(a?.node?.data?.label || a?.node?.id || "");
+      const bLabel = String(b?.node?.data?.label || b?.node?.id || "");
+      return aLabel.localeCompare(bLabel);
+    });
+
+    const apiStartY = parentBase.y - (((apiNodes.length - 1) * stepY) / 2);
+    const backendStartY = parentBase.y - (((backendNodes.length - 1) * stepY) / 2);
+
+    apiNodes.forEach((entry, index) => {
+      const node = entry.node;
+      const id = String(node?.id || "").trim();
+      if (!id) return;
+      const y = Math.round(apiStartY + (index * stepY));
+      const layoutParentBase = basePositionById.get(entry.layoutParentId) || { x: 0, y: 0 };
+      const absolute = { x: apiX, y };
+      node.position = {
+        x: Math.round(absolute.x - layoutParentBase.x),
+        y: Math.round(absolute.y - layoutParentBase.y),
+      };
+      node.parentNode = entry.layoutParentId || undefined;
+      node.extent = entry.layoutParentId ? "parent" : undefined;
+      node.data = {
+        ...(node.data || {}),
+        layoutParentId: entry.layoutParentId || node.data?.layoutParentId || null,
+        apimAnchorId: parentId,
+      };
+      basePositionById.set(id, absolute);
+    });
+
+    backendNodes.forEach((entry, index) => {
+      const node = entry.node;
+      const id = String(node?.id || "").trim();
+      if (!id) return;
+      const y = Math.round(backendStartY + (index * stepY));
+      const layoutParentBase = basePositionById.get(entry.layoutParentId) || { x: 0, y: 0 };
+      const absolute = { x: backendX, y };
+      node.position = {
+        x: Math.round(absolute.x - layoutParentBase.x),
+        y: Math.round(absolute.y - layoutParentBase.y),
+      };
+      node.parentNode = entry.layoutParentId || undefined;
+      node.extent = entry.layoutParentId ? "parent" : undefined;
+      node.data = {
+        ...(node.data || {}),
+        layoutParentId: entry.layoutParentId || node.data?.layoutParentId || null,
+        apimAnchorId: parentId,
+      };
+      basePositionById.set(id, absolute);
+    });
+  }
+
   const rectFromNode = (id, position) => {
     const size = sizeById.get(id) || { width: 340, height: 132 };
     return {
@@ -429,6 +550,90 @@ function layoutReactFlowNodes(rawNodes) {
     }
   }
 
+  const apimPlacementByAnchor = new Map();
+  for (const node of nodes) {
+    const id = String(node?.id || "").trim();
+    if (!id) continue;
+    const anchorId = String(node?.data?.apimAnchorId || "").trim();
+    if (!anchorId) continue;
+    const anchor = nodeById.get(anchorId);
+    if (!anchor || !isApimServiceNode(anchor)) continue;
+    const kind = isApimApiNode(node) ? "api" : (isApimBackendTargetNode(node) ? "backend" : null);
+    if (!kind) continue;
+    if (!apimPlacementByAnchor.has(anchorId)) {
+      apimPlacementByAnchor.set(anchorId, { api: [], backend: [] });
+    }
+    apimPlacementByAnchor.get(anchorId)[kind].push({
+      node,
+      layoutParentId: String(node?.data?.layoutParentId || node?.data?.parentNodeId || "").trim(),
+    });
+  }
+
+  for (const [anchorId, buckets] of apimPlacementByAnchor.entries()) {
+    const anchorBase = basePositionById.get(anchorId) || { x: 0, y: 0 };
+    const stepY = 160;
+    const apiX = anchorBase.x - 420;
+    const backendX = anchorBase.x + 420;
+
+    const apiNodes = [...buckets.api].sort((a, b) => {
+      const aLabel = String(a?.node?.data?.label || a?.node?.id || "");
+      const bLabel = String(b?.node?.data?.label || b?.node?.id || "");
+      return aLabel.localeCompare(bLabel);
+    });
+    const backendNodes = [...buckets.backend].sort((a, b) => {
+      const aLabel = String(a?.node?.data?.label || a?.node?.id || "");
+      const bLabel = String(b?.node?.data?.label || b?.node?.id || "");
+      return aLabel.localeCompare(bLabel);
+    });
+
+    const apiStartY = anchorBase.y - (((apiNodes.length - 1) * stepY) / 2);
+    const backendStartY = anchorBase.y - (((backendNodes.length - 1) * stepY) / 2);
+
+    apiNodes.forEach((entry, index) => {
+      const node = entry.node;
+      const id = String(node?.id || "").trim();
+      if (!id) return;
+      const y = Math.round(apiStartY + (index * stepY));
+      const layoutParentBase = basePositionById.get(entry.layoutParentId) || { x: 0, y: 0 };
+      const absolute = { x: apiX, y };
+      node.position = {
+        x: Math.round(absolute.x - layoutParentBase.x),
+        y: Math.round(absolute.y - layoutParentBase.y),
+      };
+      node.parentNode = entry.layoutParentId || undefined;
+      node.extent = entry.layoutParentId ? "parent" : undefined;
+      node.data = {
+        ...(node.data || {}),
+        parentNodeId: String(nodeById.get(id)?.data?.parentNodeId || "").trim() || null,
+        layoutParentId: entry.layoutParentId || null,
+        apimAnchorId: anchorId,
+      };
+      basePositionById.set(id, absolute);
+    });
+
+    backendNodes.forEach((entry, index) => {
+      const node = entry.node;
+      const id = String(node?.id || "").trim();
+      if (!id) return;
+      const y = Math.round(backendStartY + (index * stepY));
+      const layoutParentBase = basePositionById.get(entry.layoutParentId) || { x: 0, y: 0 };
+      const absolute = { x: backendX, y };
+      node.position = {
+        x: Math.round(absolute.x - layoutParentBase.x),
+        y: Math.round(absolute.y - layoutParentBase.y),
+      };
+      node.parentNode = entry.layoutParentId || undefined;
+      node.extent = entry.layoutParentId ? "parent" : undefined;
+      node.data = {
+        ...(node.data || {}),
+        parentNodeId: String(nodeById.get(id)?.data?.parentNodeId || "").trim() || null,
+        layoutParentId: entry.layoutParentId || null,
+        apimAnchorId: anchorId,
+      };
+      basePositionById.set(id, absolute);
+    });
+  }
+
   return orderedNodes.length ? orderedNodes : nodes;
 }
 
@@ -487,6 +692,19 @@ function reflowVisibleTree(nodes, expandedNodes) {
       height: Number(node?.style?.minHeight || node?.style?.height || 132),
     });
   }
+
+  const isApimServiceNode = (node) => {
+    const haystack = [
+      node?.data?.resourceType,
+      node?.data?.typeLabel,
+      node?.data?.label,
+      node?.data?.name,
+      node?.data?.type,
+    ]
+      .map((value) => String(value || "").toLowerCase())
+      .join(" ");
+    return haystack.includes("apimanagement") || haystack.includes("api management") || haystack === "apim";
+  };
 
   const subtreeSize = (id) => {
     if (subtreeSizeById.has(id)) {

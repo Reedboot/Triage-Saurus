@@ -35,6 +35,7 @@ AZURE_RESOURCE_TYPE_TO_ICON = {
     'azurerm_anomaly_detector': ('ai_machine_learning', 'anomaly-detector'),
     'azurerm_api_center': ('web', 'api-center'),
     'azurerm_api_connections': ('web', 'api-connections'),
+    'azurerm_api_management_api': ('web', 'api-center'),
     'azurerm_api_for_fhir': ('integration', 'api-for-fhir'),
     'azurerm_api_proxy': ('identity', 'api-proxy'),
     'azurerm_apim': ('web', 'apim'),
@@ -1516,6 +1517,7 @@ OTHER_RESOURCE_TYPE_TO_ICON: dict = {
     'alicloud_fc_function':           ('alicloud', 'compute/function'),
     'alicloud_log_project':           ('alicloud', 'storage/log-project'),
     'alicloud_log_store':             ('alicloud', 'storage/log-store'),
+    'apim api':                       ('azure', 'web/api-center'),
     # ── Oracle Cloud Infrastructure ──────────────────────────────────────────
     'oci_objectstorage_bucket':       ('oci', 'storage/object-storage'),
     'oci_file_storage_file_system':   ('oci', 'storage/file-storage'),
@@ -1582,6 +1584,8 @@ def get_icon_class(resource_type: str, provider: str = 'azure') -> str:
         'icon-azurerm-app-service', 'icon-google-compute-instance')
     """
     rtype = (resource_type or '').lower().replace('_', '-')
+    if rtype in {'apim api', 'microsoft.apimanagement/service/apis'}:
+        return 'icon-azurerm-api-center'
     return f"icon-{rtype}"
 
 

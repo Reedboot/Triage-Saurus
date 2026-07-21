@@ -1791,6 +1791,213 @@ function buildTriggersSection(data) {
   `;
 }
 
+function isApimServiceDetails(data) {
+  const typeText = String(firstNonEmpty(data?.arm_type, data?.type, data?.resourceType, data?.type_label, "")).toLowerCase();
+  return typeText.includes("apimanagement") || typeText.includes("api management");
+}
+
+function buildApimBackendsSection(data) {
+  const apis = Array.isArray(data?.apis) ? data.apis.filter(Boolean) : [];
+  const backends = Array.isArray(data?.backends) ? data.backends.filter(Boolean) : [];
+  if (!apis.length && !backends.length) return "";
+
+  const isApiMode = apis.length > 0;
+  const rows = [...(isApiMode ? apis : backends)].sort((a, b) => {
+    const aKey = isApiMode
+      ? `${firstNonEmpty(a?.api_display_name, a?.api_name, "")} ${firstNonEmpty(a?.backend_target, "")}`
+      : `${firstNonEmpty(a?.name, a?.backend_id, "")} ${firstNonEmpty(a?.type, "")}`;
+    const bKey = isApiMode
+      ? `${firstNonEmpty(b?.api_display_name, b?.api_name, "")} ${firstNonEmpty(b?.backend_target, "")}`
+      : `${firstNonEmpty(b?.name, b?.backend_id, "")} ${firstNonEmpty(b?.type, "")}`;
+    return aKey.localeCompare(bKey);
+  });
+
+  const renderRuntimeUrl = (value) => {
+    const url = String(value || "").trim();
+    if (!url || url === "—") return "—";
+    const escaped = escapeHtml(url);
+    if (/^https?:\/\//i.test(url)) {
+      return `<a href="${escaped}" target="_blank" rel="noopener noreferrer"><code>${escaped}</code></a>`;
+    }
+    return `<code>${escaped}</code>`;
+  };
+
+  const renderApiTarget = (api) => {
+    const target = firstNonEmpty(api?.backend_target, api?.backend_id, api?.backend_url, api?.service_url, "—");
+    const backendUrl = firstNonEmpty(api?.backend_url, "");
+    const serviceUrl = firstNonEmpty(api?.service_url, "");
+    const bits = [];
+    if (backendUrl && backendUrl !== "—") bits.push(`<div style="color:var(--text-muted);font-size:0.75rem;"><code>${escapeHtml(backendUrl)}</code></div>`);
+    if (serviceUrl && serviceUrl !== "—" && serviceUrl !== backendUrl) bits.push(`<div style="color:var(--text-faint);font-size:0.75rem;"><code>${escapeHtml(serviceUrl)}</code></div>`);
+    return `<div><strong>${escapeHtml(target)}</strong>${bits.join("")}</div>`;
+  };
+
+  return `
+    <div class="cloud-arch-modal-section" data-apim-section>
+      <div class="cloud-arch-modal-section-title">
+        <span class="cloud-arch-modal-section-icon">🔌</span>
+        ${isApiMode ? "APIs and Backend Targets" : "Backends"}
+      </div>
+      <div class="cloud-arch-modal-subtitle" style="margin-bottom:10px;">
+        ${isApiMode ? "Search by API name or backend target." : "Search by backend name or URL."}
+      </div>
+      <div style="margin-bottom:10px;">
+        <input
+          type="search"
+          data-apim-search
+          placeholder="${isApiMode ? "Filter APIs or backend targets…" : "Filter backends…"}"
+          style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-base);color:var(--text);"
+        />
+      </div>
+      <div style="overflow:auto;border:1px solid var(--border);border-radius:8px;">
+        <table style="width:100%;border-collapse:collapse;font-size:0.84rem;">
+          <thead>
+            <tr>
+              ${(isApiMode
+                ? ["API", "Path", "Backend Target", "Subscription"]
+                : ["Backend Name", "Description", "Type", "Runtime URL"]
+              ).map(
+                (col) => `<th style="padding:8px 10px;text-align:left;background:var(--bg-base);border-bottom:1px solid var(--border);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.03em;color:var(--text-muted);">${escapeHtml(col)}</th>`
+              ).join("")}
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((item) => {
+              if (isApiMode) {
+                const apiName = firstNonEmpty(item?.api_display_name, item?.api_name, "—");
+                const apiPath = firstNonEmpty(item?.api_path, "—");
+                const backendTarget = firstNonEmpty(item?.backend_target, item?.backend_id, item?.backend_url, item?.service_url, "—");
+                const subscription = item?.requires_subscription ? "Required" : "Not required";
+                const searchText = [
+                  apiName,
+                  item?.api_name,
+                  apiPath,
+                  backendTarget,
+                  item?.backend_url,
+                  item?.service_url,
+                  subscription,
+                ]
+                  .map((value) => String(value || "").toLowerCase())
+                  .join(" ");
+                return `
+                  <tr data-apim-row data-search-text="${escapeHtml(searchText)}" style="border-bottom:1px solid var(--border);">
+                    <td style="padding:8px 10px;vertical-align:top;"><strong>${escapeHtml(apiName)}</strong></td>
+                    <td style="padding:8px 10px;vertical-align:top;"><code>${escapeHtml(apiPath)}</code></td>
+                    <td style="padding:8px 10px;vertical-align:top;">${renderApiTarget(item)}</td>
+                    <td style="padding:8px 10px;vertical-align:top;">${subscription}</td>
+                  </tr>
+                `;
+              }
+              return `
+                <tr data-apim-row data-search-text="${escapeHtml([
+                  item?.name,
+                  item?.backend_id,
+                  item?.description,
+                  item?.type,
+                  item?.runtime_url,
+                  item?.url,
+                  item?.protocol,
+                ].map((value) => String(value || "").toLowerCase()).join(" "))}" style="border-bottom:1px solid var(--border);">
+                  <td style="padding:8px 10px;vertical-align:top;"><strong>${escapeHtml(firstNonEmpty(item?.name, item?.backend_id, "—"))}</strong></td>
+                  <td style="padding:8px 10px;vertical-align:top;color:var(--text-muted);">${escapeHtml(firstNonEmpty(item?.description, "—"))}</td>
+                  <td style="padding:8px 10px;vertical-align:top;"><code>${escapeHtml(firstNonEmpty(item?.type, "Custom URL"))}</code></td>
+                  <td style="padding:8px 10px;vertical-align:top;">${renderRuntimeUrl(firstNonEmpty(item?.runtime_url, item?.url, "—"))}</td>
+                </tr>
+              `;
+            }).join("")}
+          </tbody>
+        </table>
+      </div>
+      ${isApiMode ? '<div data-apim-empty-filter class="cloud-arch-modal-empty" style="display:none;margin-top:10px;">No APIs match this filter.</div>' : ""}
+    </div>
+  `;
+}
+
+function bindApimSectionSearch() {
+  if (!modalBody) return;
+  const search = modalBody.querySelector("[data-apim-search]");
+  const rows = Array.from(modalBody.querySelectorAll("[data-apim-row]"));
+  const empty = modalBody.querySelector("[data-apim-empty-filter]");
+  if (!search || !rows.length) return;
+
+  const update = () => {
+    const query = String(search.value || "").trim().toLowerCase();
+    let visible = 0;
+    for (const row of rows) {
+      const searchText = String(row.dataset.searchText || "").toLowerCase();
+      const show = !query || searchText.includes(query);
+      row.hidden = !show;
+      if (show) visible += 1;
+    }
+    if (empty) {
+      empty.style.display = visible ? "none" : "block";
+    }
+  };
+
+  search.addEventListener("input", update);
+  update();
+}
+
+function isApimBackendTargetDetails(data) {
+  const typeText = String(firstNonEmpty(data?.type_label, data?.type, data?.resourceType, data?.configuration?.type, "")).toLowerCase();
+  return typeText.includes("apim backend target") || typeText.includes("apim backend pool");
+}
+
+function buildApimBackendUsageSection(data) {
+  const apimName = firstNonEmpty(
+    data?.configuration?.apim_name,
+    data?.parent_resource?.name,
+    data?.parent_resource?.label
+  );
+  const routes = Array.isArray(data?.network?.routing_targets)
+    ? data.network.routing_targets.filter(Boolean)
+    : [];
+  if (!routes.length) return "";
+
+  const rows = [...routes].sort((a, b) => {
+    const aKey = `${firstNonEmpty(a?.api_display_name, a?.api_name, "")} ${firstNonEmpty(a?.api_path, "")}`;
+    const bKey = `${firstNonEmpty(b?.api_display_name, b?.api_name, "")} ${firstNonEmpty(b?.api_path, "")}`;
+    return aKey.localeCompare(bKey);
+  });
+
+  return `
+    <div class="cloud-arch-modal-section">
+      <div class="cloud-arch-modal-section-title">
+        <span class="cloud-arch-modal-section-icon">🧭</span>
+        APIs Using This Backend
+      </div>
+      ${apimName ? `<div class="cloud-arch-modal-subtitle" style="margin-bottom:10px;">APIM: ${escapeHtml(apimName)}</div>` : ""}
+      <div style="overflow:auto;border:1px solid var(--border);border-radius:8px;">
+        <table style="width:100%;border-collapse:collapse;font-size:0.84rem;">
+          <thead>
+            <tr>
+              ${["API", "Display Name", "Path", "Requires Subscription"].map(
+                (col) => `<th style="padding:8px 10px;text-align:left;background:var(--bg-base);border-bottom:1px solid var(--border);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.03em;color:var(--text-muted);">${escapeHtml(col)}</th>`
+              ).join("")}
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((route) => {
+              const apiName = firstNonEmpty(route?.api_name, route?.name, "—");
+              const apiDisplayName = firstNonEmpty(route?.api_display_name, apiName, "—");
+              const apiPath = firstNonEmpty(route?.api_path, "—");
+              const requiresSubscription = route?.requires_subscription ? "Yes" : "No";
+              return `
+                <tr style="border-bottom:1px solid var(--border);">
+                  <td style="padding:8px 10px;vertical-align:top;"><strong>${escapeHtml(apiName)}</strong></td>
+                  <td style="padding:8px 10px;vertical-align:top;">${escapeHtml(apiDisplayName)}</td>
+                  <td style="padding:8px 10px;vertical-align:top;"><code>${escapeHtml(apiPath)}</code></td>
+                  <td style="padding:8px 10px;vertical-align:top;">${requiresSubscription}</td>
+                </tr>
+              `;
+            }).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
 /**
  * Build the Traffic Flow HTML section (ingress/egress table) from diagram node data.
  * Returns an empty string when both arrays are empty.
@@ -1971,7 +2178,7 @@ function renderTabularModalContent(data) {
           </div>
         `;
       })
-      .join("")}${buildTrafficFlowSection(data)}`;
+      .join("")}`;
     return;
   }
 
@@ -1980,7 +2187,7 @@ function renderTabularModalContent(data) {
     modalBody.innerHTML = `<div class="cloud-arch-modal-empty">${escapeHtml(data.empty_message || "No data available.")}</div>`;
     return;
   }
-  modalBody.innerHTML = `${parentResourceSection}${buildTable(rows)}${buildTrafficFlowSection(data)}`;
+  modalBody.innerHTML = `${parentResourceSection}${buildTable(rows)}`;
 }
 
 function renderModalContent(data) {
@@ -2205,6 +2412,26 @@ function renderModalContent(data) {
     sections.push({ title: "Network", icon: "🌐", fields: networkFields });
   }
 
+  const apimBackendsSection = isApimServiceDetails(data) ? buildApimBackendsSection(data) : "";
+  if (apimBackendsSection) {
+    sections.push({
+      title: "",
+      icon: "",
+      fields: [],
+      __rawHtml: apimBackendsSection,
+    });
+  }
+
+  const apimBackendUsageSection = isApimBackendTargetDetails(data) ? buildApimBackendUsageSection(data) : "";
+  if (apimBackendUsageSection) {
+    sections.push({
+      title: "",
+      icon: "",
+      fields: [],
+      __rawHtml: apimBackendUsageSection,
+    });
+  }
+
   const listenerTable = isAppGatewayDetails(data) ? buildAppGatewayListenerTable(data) : "";
   if (listenerTable) {
     sections.push({
@@ -2252,17 +2479,6 @@ function renderModalContent(data) {
     });
   }
 
-  // Traffic Flow — ingress (what routes TO this node) and egress (what this node routes TO)
-  const trafficFlowHtml = buildTrafficFlowSection(data);
-  if (trafficFlowHtml) {
-    sections.push({
-      title: "",  // rendered directly by buildTrafficFlowSection
-      icon: "",
-      fields: [],
-      __rawHtml: trafficFlowHtml,
-    });
-  }
-
   if (!sections.length && !parentResourceSection) {
     modalBody.innerHTML = '<div class="cloud-arch-modal-empty">No core resource details found for this node.</div>';
     return;
@@ -2296,6 +2512,7 @@ function renderModalContent(data) {
       }
     )
     .join("")}`;
+  bindApimSectionSearch();
 }
 
 function renderSummary(payload, subscriptionName, viewMode) {

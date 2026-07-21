@@ -2505,9 +2505,23 @@ class TestIngressDiagramGeneration:
 
         result = self._call(rows=rows)
         mermaid = result.get("mermaid", "")
+        node_map = result.get("node_drilldown_map", {})
+        api_node = next(
+            value
+            for value in node_map.values()
+            if value.get("arm_type") == "APIM API"
+        )
+        apim_node = next(
+            value
+            for value in node_map.values()
+            if value.get("arm_type") == "Microsoft.ApiManagement/service"
+        )
         assert "Catalog API" in mermaid, mermaid
         assert 'Catalog API -->|"hosted in"| grp_APIM_Public' in mermaid or "hosted in" in mermaid, mermaid
         assert 'Catalog API -->|"Routing"| grp_APIM_Public' not in mermaid, mermaid
+        assert apim_node.get("title") == "APIM", apim_node
+        assert api_node.get("icon_path", "").endswith("api-center.svg"), api_node
+        assert api_node.get("icon_class") == "icon-azurerm-api-center", api_node
 
     def test_network_attached_services_render_inside_vnet_and_subnet_groups(self):
         """Network-aware services should be nested under VNet and subnet subgraphs."""
@@ -8268,6 +8282,187 @@ class TestCloudPosture:
         assert any(node["data"].get("typeLabel") == "WAF Policy" for node in data["nodes"])
         assert any(node["data"].get("typeLabel") == "Network Firewall" for node in data["nodes"])
 
+    def test_api_cloud_architecture_apim_children_layout_in_subnet(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT,
+                last_synced TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            CREATE TABLE apim_api_routes (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                apim_name TEXT,
+                apim_resource_id TEXT,
+                api_name TEXT,
+                api_display_name TEXT,
+                api_path TEXT,
+                api_protocols TEXT,
+                backend_id TEXT,
+                backend_url TEXT,
+                service_url TEXT,
+                requires_subscription INTEGER DEFAULT 1,
+                gateway_hosts TEXT,
+                exposure_level TEXT,
+                last_synced TEXT
+            );
+            CREATE TABLE apim_backends (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                apim_name TEXT,
+                backend_id TEXT,
+                title TEXT,
+                description TEXT,
+                url TEXT,
+                protocol TEXT,
+                circuit_breaker TEXT,
+                credentials TEXT,
+                tls_validate_cert INTEGER DEFAULT 1,
+                last_synced TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+        )
+        apim_id = "/subscriptions/sub-1/resourceGroups/rg-edge/providers/Microsoft.ApiManagement/service/apim-marketlane-edge"
+        subnet_id = "/subscriptions/sub-1/resourceGroups/rg-edge/providers/Microsoft.Network/virtualNetworks/vnet-marketlane-core/subnets/snet-marketlane-apim"
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                apim_id,
+                "sub-1",
+                "rg-edge",
+                "apim-marketlane-edge",
+                "Microsoft.ApiManagement/service",
+                "uksouth",
+                "Developer",
+                "apim-marketlane.azure-api.net",
+                1,
+                "active",
+                None,
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+                json.dumps({
+                    "_extra": {
+                        "vnet_name": "vnet-marketlane-core",
+                        "vnet_resource_group": "rg-edge",
+                        "subnet_name": "snet-marketlane-apim",
+                        "subnet_id": subnet_id,
+                    }
+                }),
+                0,
+                None,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO apim_api_routes (
+                id, subscription_id, apim_name, apim_resource_id, api_name, api_display_name,
+                api_path, api_protocols, backend_id, backend_url, service_url, requires_subscription,
+                gateway_hosts, exposure_level, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "route-1",
+                "sub-1",
+                "apim-marketlane-edge",
+                apim_id,
+                "catalog-marketlane",
+                "Catalog API",
+                "/catalog",
+                json.dumps(["https"]),
+                "catalog-backend",
+                "https://store.marketlane-retail.azurewebsites.net",
+                "https://store.marketlane-retail.azurewebsites.net",
+                1,
+                json.dumps(["apim-marketlane.azure-api.net"]),
+                "Public",
+                "2026-06-01T00:00:00Z",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO apim_backends (
+                id, subscription_id, apim_name, backend_id, title, description, url, protocol,
+                circuit_breaker, credentials, tls_validate_cert, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "backend-1",
+                "sub-1",
+                "apim-marketlane-edge",
+                "catalog-backend",
+                "store-backend",
+                None,
+                "https://store.marketlane-retail.azurewebsites.net",
+                "https",
+                None,
+                None,
+                1,
+                "2026-06-01T00:00:00Z",
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/architecture?sub=sub-1&view=reactflow")
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        nodes = {node["id"]: node for node in data["nodes"]}
+        subnet_node = next(
+            node for node in data["nodes"]
+            if str((node.get("data") or {}).get("typeLabel") or "").lower() == "subnet"
+            and str((node.get("data") or {}).get("label") or "").lower() == "snet-marketlane-apim"
+        )
+        api_node = nodes["apim-api::apim-marketlane-edge::catalog-marketlane"]
+        backend_node = nodes["apim-backend::apim-marketlane-edge::store-backend"]
+        assert api_node["data"]["layoutParentId"] == subnet_node["id"]
+        assert backend_node["data"]["layoutParentId"] == subnet_node["id"]
+        assert api_node["data"]["parentNodeId"] == apim_id
+        assert backend_node["data"]["parentNodeId"] == apim_id
+
     def test_api_cloud_architecture_surfaces_missing_assets_for_overview_mode(self, monkeypatch):
         import os
         import sqlite3
@@ -9726,6 +9921,277 @@ class TestCloudPosture:
         assert data["network"]["virtual_network_type"] == "Internal"
         assert data["network"]["outbound_public_ips"] == ["20.90.204.14"]
         assert data["network"]["public_ips"] == ["20.90.204.14"]
+
+    def test_api_cloud_resource_details_includes_apim_backends(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            CREATE TABLE apim_backends (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                apim_name TEXT,
+                backend_id TEXT,
+                title TEXT,
+                description TEXT,
+                url TEXT,
+                protocol TEXT,
+                backend_type TEXT,
+                circuit_breaker TEXT,
+                credentials TEXT,
+                tls_validate_cert INTEGER,
+                last_synced TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+        apim_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/apim-prod"
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                apim_id,
+                "sub-1",
+                "rg-api",
+                "apim-prod",
+                "Microsoft.ApiManagement/service",
+                "uksouth",
+                "Premium",
+                "apim-prod.azure-api.net",
+                0,
+                "active",
+                None,
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+                json.dumps({"properties": {}}),
+                0,
+                None,
+            ),
+        )
+        conn.executemany(
+            """
+            INSERT INTO apim_backends (
+                id, subscription_id, apim_name, backend_id, title, description, url,
+                protocol, backend_type, circuit_breaker, credentials, tls_validate_cert, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    "apim-prod::orders-api",
+                    "sub-1",
+                    "apim-prod",
+                    "orders-api",
+                    "orders-api",
+                    "Orders backend",
+                    "https://orders.example.com",
+                    "https",
+                    "Custom URL",
+                    None,
+                    None,
+                    1,
+                    "2026-06-01T00:00:00Z",
+                ),
+                (
+                    "apim-prod::inventory-sf",
+                    "sub-1",
+                    "apim-prod",
+                    "inventory-sf",
+                    "inventory-sf",
+                    "Inventory service fabric backend",
+                    "fabric:/Inventory/Backend",
+                    "http",
+                    "Service Fabric",
+                    None,
+                    None,
+                    1,
+                    "2026-06-01T00:00:00Z",
+                ),
+                (
+                    "apim-prod::billing-resource",
+                    "sub-1",
+                    "apim-prod",
+                    "billing-resource",
+                    "billing-resource",
+                    "Billing API hosted in Azure App Service",
+                    "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/billing-api",
+                    "http",
+                    "Azure Resource",
+                    None,
+                    None,
+                    1,
+                    "2026-06-01T00:00:00Z",
+                ),
+            ],
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/resource-details", query_string={"id": apim_id})
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        assert [backend["name"] for backend in data["backends"]] == ["billing-resource", "inventory-sf", "orders-api"], data["backends"]
+        assert [backend["type"] for backend in data["backends"]] == ["Azure Resource", "Service Fabric", "Custom URL"], data["backends"]
+        assert data["backends"][0]["runtime_url"] == "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/billing-api"
+        assert data["backends"][2]["runtime_url"] == "https://orders.example.com"
+
+    def test_api_cloud_resource_details_includes_apim_api_targets(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            CREATE TABLE apim_api_routes (
+                apim_name TEXT,
+                subscription_id TEXT,
+                api_name TEXT,
+                api_display_name TEXT,
+                api_path TEXT,
+                backend_id TEXT,
+                backend_url TEXT,
+                service_url TEXT,
+                exposure_level TEXT,
+                requires_subscription INTEGER
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+        apim_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/apim-prod"
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                apim_id,
+                "sub-1",
+                "rg-api",
+                "apim-prod",
+                "Microsoft.ApiManagement/service",
+                "uksouth",
+                "Premium",
+                "apim-prod.azure-api.net",
+                1,
+                "active",
+                None,
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+                json.dumps({"properties": {}}),
+                0,
+                None,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO apim_api_routes (
+                apim_name, subscription_id, api_name, api_display_name, api_path,
+                backend_id, backend_url, service_url, exposure_level, requires_subscription
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "apim-prod",
+                "sub-1",
+                "orders-api",
+                "Orders API",
+                "/orders",
+                "orders-backend",
+                "https://orders.example.com",
+                "https://apim-prod.azure-api.net",
+                "Public",
+                1,
+            ),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/resource-details", query_string={"id": apim_id})
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        assert data["apis"][0]["api_display_name"] == "Orders API", data["apis"]
+        assert data["apis"][0]["backend_target"] == "orders-backend", data["apis"]
+        assert data["apis"][0]["backend_url"] == "https://orders.example.com", data["apis"]
 
     def test_api_cloud_resource_details_resolves_apim_backend_target(self, monkeypatch):
         import json
@@ -12697,10 +13163,8 @@ class TestCloudPosture:
         assert data["host"] == "napier-events.mydomain.co.uk", data
         assert data["path"] == "/", data
         kinds = [step["kind"] for step in data["resolved_chain"]]
-        assert kinds[:4] == ["internet", "listener", "appgw", "backend_pool"], data
+        assert kinds[:6] == ["internet", "listener", "appgw", "backend_pool", "apim_api", "apim_service"], data
         assert any(step["kind"] == "appgw" and step.get("waf_policy_name") for step in data["resolved_chain"]), data
-        assert "apim_service" in kinds, data
-        assert "apim_api" in kinds, data
         assert "apim_backend" in kinds, data
         assert kinds[-4:] == ["aks_ingress", "aks_service", "aks_deployment", "aks_cluster"], data
         assert "classDef entryPointProtected stroke:#ea580c,stroke-width:2px,fill:#3d1c0d;" in data["mermaid"], data["mermaid"]

@@ -1802,6 +1802,8 @@ class HierarchicalDiagramBuilder:
     def is_api_gateway(self, resource: dict) -> bool:
         """Check if resource is an API Gateway (APIM, API Gateway, etc)."""
         rtype = (resource.get('resource_type') or '').lower()
+        if self._is_apim_service_resource_type(rtype):
+            return False
         return any(tok in rtype for tok in [
             'api_management_api', 
             'apim', 
@@ -2030,6 +2032,8 @@ class HierarchicalDiagramBuilder:
     def is_network_resource(self, resource: dict) -> bool:
         """Check if resource is a networking resource (VPC, subnet, security group, etc.)."""
         rtype = (resource.get('resource_type') or '').lower()
+        if self._is_apim_service_resource_type(rtype):
+            return True
         net_tokens = ['vpc', 'vnet', 'subnet', 'network', 'network_interface', 'security_group', 
                       'security_group_rule', 'internet_gateway', 'nat_gateway', 'route_table', 
                       'network_acl', 'load_balancer', 'firewall', 'availability_zone',
@@ -2051,7 +2055,12 @@ class HierarchicalDiagramBuilder:
             'api_management_product',
         )):
             return False
-        return 'api_management' in rtype or rtype in {'apim', 'azurerm_apim'}
+        return (
+            'api_management' in rtype
+            or 'apimanagement' in rtype
+            or 'api management' in rtype
+            or rtype in {'apim', 'azurerm_apim'}
+        )
 
     def _is_apim_public_ip_resource(self, resource: dict) -> bool:
         """Return True for Public IP resources that should collapse into APIM details."""
@@ -2781,6 +2790,41 @@ class HierarchicalDiagramBuilder:
             self.emitted_nodes.add(gw['resource_name'])
             self._tier_nodes['network_tier'].append(gw['resource_name'])
             return lines
+
+        def _render_api_management_service(apim: dict, indent: str) -> List[str]:
+            """Render an API Management service with its APIM hierarchy nested inside."""
+            if apim['resource_name'] in self.emitted_nodes:
+                return []
+
+            apim_rtype = (apim.get('resource_type') or '').lower()
+            if not self._is_apim_service_resource_type(apim_rtype):
+                return []
+
+            if getattr(self, '_apim_rendered_in_network', False):
+                return [self.render_node(apim, indent=indent)]
+
+            apim_api_resources = list(getattr(self, '_apim_apis', []))
+            apim_product_resources = list(getattr(self, '_apim_products', []))
+            apim_lines = self.render_apim_hierarchy(apim_api_resources, apim_product_resources)
+
+            apim_node_id = self._get_node_id(apim)
+            apim_label = self._wrap_mermaid_label(apim['resource_name'])
+            lines: List[str] = [f'{indent}subgraph {apim_node_id}[{self._quote_mermaid_label(apim_label)}]']
+            self._emitted_mermaid_ids.add(apim_node_id)
+            self._node_id_first_owner[apim_node_id] = str(apim.get('id', ''))
+            self.subgraph_nodes.add(apim['resource_name'])
+            self.node_id_override[apim['resource_name']] = apim_node_id
+
+            if apim_lines:
+                lines.extend([indent + "  " + ln for ln in apim_lines])
+                self._apim_rendered_in_network = True
+            else:
+                lines.append(self.render_node(apim, indent=indent + "  "))
+
+            lines.append(f'{indent}end')
+            self.emitted_nodes.add(apim['resource_name'])
+            self._tier_nodes['network_tier'].append(apim['resource_name'])
+            return lines
         
         # Group resources by type
         # Match VPC-like resources across providers: vpc, vnet, virtual_network, compute_network (GCP)
@@ -2794,7 +2838,8 @@ class HierarchicalDiagramBuilder:
                            and 'association' not in (r.get('resource_type') or '').lower()]
         security_group_rules = [r for r in network_resources if 'security_group_rule' in (r.get('resource_type') or '').lower()]
         gateways = [r for r in network_resources if any(x in (r.get('resource_type') or '').lower() 
-                    for x in ['gateway', 'firewall', 'nat', 'load_balancer'])]
+                    for x in ['gateway', 'firewall', 'nat', 'load_balancer'])
+                    or self._is_apim_service_resource_type(r.get('resource_type') or '')]
         # Separate IGWs out — they are rendered as outer wrappers around VPCs, not as
         # standalone gateway nodes. AWS IGW is 1:1 with a VPC; it IS the internet boundary.
         igws = [r for r in network_resources if 'internet_gateway' in (r.get('resource_type') or '').lower()]
@@ -2905,6 +2950,10 @@ class HierarchicalDiagramBuilder:
                     c for c in subnet_children
                     if (c.get('resource_type') or '').lower() == 'azurerm_application_gateway'
                 ]
+                subnet_apim_services = [
+                    c for c in subnet_children
+                    if self._is_apim_service_resource_type(c.get('resource_type') or '')
+                ]
 
                 # Azure: NICs are children of the subnet. Find VMs linked to those NICs.
                 subnet_nics = [
@@ -2979,7 +3028,7 @@ class HierarchicalDiagramBuilder:
                         if sg['resource_name'] not in self.emitted_nodes:
                             sgs_for_subnet.append(sg)
 
-                if subnet_computes or sgs_for_subnet or subnet_clusters or subnet_nics or subnet_bastions or subnet_gateways:
+                if subnet_computes or sgs_for_subnet or subnet_clusters or subnet_nics or subnet_bastions or subnet_gateways or subnet_apim_services:
                     subnet_label = self._wrap_mermaid_label(subnet['resource_name'])
                     lines.append(f'{i1}subgraph {subnet_node_id}[{self._quote_mermaid_label(subnet_label)}]')
                     self._emitted_mermaid_ids.add(subnet_node_id)
@@ -3067,10 +3116,15 @@ class HierarchicalDiagramBuilder:
                         if gateway['resource_name'] not in self.emitted_nodes:
                             lines.extend(_render_application_gateway(gateway, i2))
 
+                    # Render APIM services inside the subnet they are deployed into.
+                    for apim in subnet_apim_services:
+                        if apim['resource_name'] not in self.emitted_nodes:
+                            lines.extend(_render_api_management_service(apim, i2))
+
                     lines.append(f'{i1}end')
                 else:
                     # Subnet has NICs or other children — render as subgraph but with leaf node content
-                    if subnet_nics or subnet_bastions or subnet_gateways:
+                    if subnet_nics or subnet_bastions or subnet_gateways or subnet_apim_services:
                         subnet_label = self._wrap_mermaid_label(subnet['resource_name'])
                         lines.append(f'{i1}subgraph {subnet_node_id}[{self._quote_mermaid_label(subnet_label)}]')
                         self._emitted_mermaid_ids.add(subnet_node_id)
@@ -3086,6 +3140,9 @@ class HierarchicalDiagramBuilder:
                         for gateway in subnet_gateways:
                             if gateway['resource_name'] not in self.emitted_nodes:
                                 lines.extend(_render_application_gateway(gateway, i2))
+                        for apim in subnet_apim_services:
+                            if apim['resource_name'] not in self.emitted_nodes:
+                                lines.extend(_render_api_management_service(apim, i2))
                         lines.append(f'{i1}end')
                     else:
                         lines.append(self.render_node(subnet, indent=i1))
@@ -3239,6 +3296,12 @@ class HierarchicalDiagramBuilder:
                 gw_rtype = (gw.get('resource_type') or '').lower()
                 if gw_rtype == 'azurerm_application_gateway':
                     gateway_lines = _render_application_gateway(gw, "    ")
+                    if gateway_lines:
+                        lines.extend(gateway_lines)
+                    else:
+                        lines.append(self.render_node(gw, indent="    "))
+                elif self._is_apim_service_resource_type(gw_rtype):
+                    gateway_lines = _render_api_management_service(gw, "    ")
                     if gateway_lines:
                         lines.extend(gateway_lines)
                     else:
@@ -5677,6 +5740,11 @@ class HierarchicalDiagramBuilder:
         # Don't filter monitoring by all_children either - render as dedicated subgraph
         monitoring_resources = [r for r in self.resources if self.is_monitoring(r)
                                 and not r.get('resource_name', '').startswith('${var.') and not r.get('resource_name', '').startswith('${local.')]
+
+        # Preserve the filtered APIM lists so the network-tier APIM wrapper can reuse
+        # the same curated hierarchy without re-introducing helper/join rows.
+        self._apim_apis = apim_apis
+        self._apim_products = apim_products
         
         # Collect IDs that will be rendered in subgraphs
         apim_related_ids = set()
@@ -6000,8 +6068,12 @@ class HierarchicalDiagramBuilder:
             for k8s in k8s_resources:
                 self.emitted_nodes.add(k8s['resource_name'])
         
-        # Render APIM hierarchy
-        apim_lines = self.render_apim_hierarchy(apim_apis, apim_products)
+        # Render APIM hierarchy unless it was already nested under an APIM service
+        # inside the network tier. The network pass sets this flag when it emits the
+        # APIM service container and its nested API hierarchy.
+        apim_lines = []
+        if not getattr(self, '_apim_rendered_in_network', False):
+            apim_lines = self.render_apim_hierarchy(apim_apis, apim_products)
         if apim_lines:
             lines.extend(apim_lines)
             lines.append("")

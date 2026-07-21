@@ -12961,6 +12961,9 @@ def _build_subscription_architecture_payload(
             apim_route_map=apim_route_map,
             apim_backend_rows=apim_backend_rows,
             apim_api_rows=apim_api_rows,
+            subscription_id=sub_id,
+            subscription_name=sub_name,
+            environment=sub_env,
         )
         resource_count = len(asset_rows)
         connection_count = len(ingress_diagram.get("attack_paths") or [])
@@ -13364,9 +13367,9 @@ def _build_subscription_architecture_payload(
                         "pipeline_tag": None,
                         "first_detected": None,
                         "last_synced": None,
-                        "sub_id": sub_id,
-                        "sub_name": sub_name,
-                        "environment": sub_env,
+                        "sub_id": subscription_id,
+                        "sub_name": subscription_name,
+                        "environment": environment,
                         "cloud_provider": "Azure",
                         "linked_repo": None,
                         "kind": None,
@@ -13872,6 +13875,14 @@ def _build_subscription_architecture_payload(
                 return api_name
             return display
 
+        def _apim_layout_parent_id(parent_asset: dict) -> str | None:
+            vnet_rg = str(parent_asset.get("vnet_resource_group") or parent_asset.get("resource_group") or "").strip()
+            vnet_name = str(parent_asset.get("vnet_name") or "").strip()
+            subnet_name = str(parent_asset.get("subnet_name") or "").strip()
+            if vnet_rg and vnet_name and subnet_name:
+                return f"synthetic-subnet::{vnet_rg.lower()}::{vnet_name.lower()}::{subnet_name.lower()}"
+            return str(parent_asset.get("parent_id") or parent_asset.get("id") or "").strip() or None
+
         apim_service_assets = [
             asset for asset in assets
             if "apimanagement" in str(asset.get("type") or "").lower()
@@ -13922,6 +13933,8 @@ def _build_subscription_architecture_payload(
                 "linked_repo": None,
                 "kind": None,
                 "parent_id": parent_asset.get("id"),
+                "layoutParentId": _apim_layout_parent_id(parent_asset),
+                "apimAnchorId": parent_asset.get("id"),
                 "parent_name": parent_asset.get("name"),
                 "parent_resource_group": parent_asset.get("resource_group"),
                 "parent_type_label": parent_asset.get("display_type_label") or parent_asset.get("type_label") or "APIM",
@@ -14018,6 +14031,8 @@ def _build_subscription_architecture_payload(
                 "linked_repo": None,
                 "kind": None,
                 "parent_id": parent_asset.get("id"),
+                "layoutParentId": _apim_layout_parent_id(parent_asset),
+                "apimAnchorId": parent_asset.get("id"),
                 "parent_name": parent_asset.get("name"),
                 "parent_resource_group": parent_asset.get("resource_group"),
                 "parent_type_label": parent_asset.get("display_type_label") or parent_asset.get("type_label") or "APIM",
@@ -14810,6 +14825,8 @@ def _build_subscription_architecture_payload(
                         "childrenCount": asset.get("children_count") if is_group_node else None,
                         "isChildNode": is_child_node,
                         "parentNodeId": str(asset.get("parent_id")) if asset.get("parent_id") else None,
+                        "layoutParentId": str(asset.get("layoutParentId") or asset.get("parent_id")) if (asset.get("layoutParentId") or asset.get("parent_id")) else None,
+                        "apimAnchorId": str(asset.get("apimAnchorId")) if asset.get("apimAnchorId") else None,
                     },
                     "style": {"width": 340, "minHeight": 132},
                 }
@@ -14842,6 +14859,49 @@ def _build_subscription_architecture_payload(
         }
     )
     provider_counts["external"] += 1
+
+    # Re-anchor APIM child nodes around their APIM parent so the invoked API
+    # sits to the left and backend targets sit to the right instead of being
+    # stacked in the generic provider list.
+    apim_step_y = 160
+    apim_child_gap_x = 360
+
+    def _node_type_label(node: dict) -> str:
+        return str((node.get("data") or {}).get("typeLabel") or "").strip().lower()
+
+    for apim_node in [node for node in nodes if _node_type_label(node) == "apim"]:
+        apim_x = float(apim_node["position"]["x"])
+        apim_y = float(apim_node["position"]["y"])
+        child_nodes = [
+            node
+            for node in nodes
+            if str((node.get("data") or {}).get("parentNodeId") or "") == str(apim_node["id"])
+            and _node_type_label(node) in {"apim api", "apim backend target"}
+        ]
+        api_nodes = sorted(
+            [node for node in child_nodes if _node_type_label(node) == "apim api"],
+            key=lambda node: str((node.get("data") or {}).get("label") or node.get("id") or ""),
+        )
+        backend_nodes = sorted(
+            [node for node in child_nodes if _node_type_label(node) == "apim backend target"],
+            key=lambda node: str((node.get("data") or {}).get("label") or node.get("id") or ""),
+        )
+
+        if api_nodes:
+            start_y = apim_y - (((len(api_nodes) - 1) * apim_step_y) / 2)
+            for idx, node in enumerate(api_nodes):
+                node["position"] = {
+                    "x": max(0, round(apim_x - apim_child_gap_x)),
+                    "y": round(start_y + (idx * apim_step_y)),
+                }
+
+        if backend_nodes:
+            start_y = apim_y - (((len(backend_nodes) - 1) * apim_step_y) / 2)
+            for idx, node in enumerate(backend_nodes):
+                node["position"] = {
+                    "x": round(apim_x + apim_child_gap_x),
+                    "y": round(start_y + (idx * apim_step_y)),
+                }
 
     edges: list[dict] = []
 
@@ -15983,6 +16043,50 @@ def _build_cloud_architecture_payload(conn, experiment_id: str, repo_name: str |
                 }
             )
 
+    # Re-anchor APIM child nodes around their APIM parent so the API sits to the
+    # left and backend targets sit to the right instead of being stacked in the
+    # generic provider list.
+    node_by_id = {str(node["id"]): node for node in nodes_out}
+    apim_step_y = 160
+    apim_child_gap_x = 360
+
+    def _node_type_label(node: dict) -> str:
+        return str((node.get("data") or {}).get("typeLabel") or "").strip().lower()
+
+    for apim_node in [node for node in nodes_out if _node_type_label(node) == "apim"]:
+        apim_x = float(apim_node["position"]["x"])
+        apim_y = float(apim_node["position"]["y"])
+        child_nodes = [
+            node
+            for node in nodes_out
+            if str((node.get("data") or {}).get("parentNodeId") or "") == str(apim_node["id"])
+            and _node_type_label(node) in {"apim api", "apim backend target"}
+        ]
+        api_nodes = sorted(
+            [node for node in child_nodes if _node_type_label(node) == "apim api"],
+            key=lambda node: str((node.get("data") or {}).get("label") or node.get("id") or ""),
+        )
+        backend_nodes = sorted(
+            [node for node in child_nodes if _node_type_label(node) == "apim backend target"],
+            key=lambda node: str((node.get("data") or {}).get("label") or node.get("id") or ""),
+        )
+
+        if api_nodes:
+            start_y = apim_y - (((len(api_nodes) - 1) * apim_step_y) / 2)
+            for idx, node in enumerate(api_nodes):
+                node["position"] = {
+                    "x": max(0, round(apim_x - apim_child_gap_x)),
+                    "y": round(start_y + (idx * apim_step_y)),
+                }
+
+        if backend_nodes:
+            start_y = apim_y - (((len(backend_nodes) - 1) * apim_step_y) / 2)
+            for idx, node in enumerate(backend_nodes):
+                node["position"] = {
+                    "x": round(apim_x + apim_child_gap_x),
+                    "y": round(start_y + (idx * apim_step_y)),
+                }
+
     summary = {
         "experiments": [experiment_id],
         "resource_count": len(resources),
@@ -17006,6 +17110,137 @@ def api_cloud_resource_details():
             details["security"]["is_public"] = apim_public
             details["security"]["public_network_access"] = _extract_public_network_access(raw_json)
             details["security"]["ip_restrictions"] = _extract_allowed_ips(raw_json)
+
+            apim_backends: list[dict] = []
+            if _table_exists(conn, "apim_backends"):
+                backend_cols = _table_columns(conn, "apim_backends")
+                select_columns = [
+                    "apim_name",
+                    "backend_id",
+                    "title",
+                    "description",
+                    "url",
+                    "protocol",
+                ]
+                if "backend_type" in backend_cols:
+                    select_columns.append("backend_type")
+                if "raw_json" in backend_cols:
+                    select_columns.append("raw_json")
+
+                backend_rows = conn.execute(
+                    f"""
+                    SELECT {', '.join(select_columns)}
+                    FROM apim_backends
+                    WHERE subscription_id = ?
+                      AND LOWER(apim_name) = LOWER(?)
+                    ORDER BY COALESCE(title, ''), COALESCE(backend_id, '')
+                    """,
+                    (str(asset_row["subscription_id"] or ""), str(asset_row["name"] or "")),
+                ).fetchall()
+
+                def _apim_backend_type(row) -> str:
+                    raw_type = ""
+                    for key in ("backend_type", "type", "kind", "protocol"):
+                        try:
+                            value = row[key] if key in row.keys() else None
+                        except Exception:
+                            value = None
+                        text = str(value or "").strip()
+                        if key == "protocol" and text.lower() in {"http", "https", "soap"}:
+                            continue
+                        if text:
+                            raw_type = text
+                            break
+
+                    haystack = " ".join(
+                        str(value or "")
+                        for value in (
+                            row["backend_id"] if "backend_id" in row.keys() else "",
+                            row["title"] if "title" in row.keys() else "",
+                            row["description"] if "description" in row.keys() else "",
+                            row["url"] if "url" in row.keys() else "",
+                            raw_type,
+                        )
+                    ).lower()
+
+                    raw_json_text = ""
+                    if "raw_json" in row.keys():
+                        raw_json_text = str(row["raw_json"] or "").strip()
+                    if raw_json_text:
+                        try:
+                            backend_raw = json.loads(raw_json_text)
+                        except Exception:
+                            backend_raw = {}
+                        if isinstance(backend_raw, dict):
+                            props = backend_raw.get("properties")
+                            if isinstance(props, dict):
+                                if props.get("resourceId") or props.get("resource_id"):
+                                    return "Azure Resource"
+                                if props.get("serviceFabricCluster") or props.get("serviceFabricClusterSettings"):
+                                    return "Service Fabric"
+                                if props.get("url") or props.get("serviceUrl"):
+                                    return "Custom URL"
+
+                    if "fabric:/" in haystack or "service fabric" in haystack or "servicefabric" in haystack:
+                        return "Service Fabric"
+                    if "/subscriptions/" in haystack or "providers/" in haystack or "resourceid" in haystack:
+                        return "Azure Resource"
+                    if raw_type:
+                        return raw_type
+                    return "Custom URL"
+
+                for row in backend_rows:
+                    backend_name = str(row["title"] or row["backend_id"] or "").strip()
+                    runtime_url = str(row["url"] or "").strip()
+                    description = str(row["description"] or "").strip()
+                    apim_backends.append(
+                        {
+                            "name": backend_name or str(row["backend_id"] or "").strip() or "—",
+                            "description": description or "—",
+                            "type": _apim_backend_type(row),
+                            "runtime_url": runtime_url or "—",
+                            "backend_id": str(row["backend_id"] or "").strip() or "",
+                            "protocol": str(row["protocol"] or "").strip() or "",
+                        }
+                    )
+
+            if apim_backends:
+                details["backends"] = apim_backends
+
+            apim_api_rows: list[sqlite3.Row] = []
+            if _table_exists(conn, "apim_api_routes"):
+                apim_api_rows = conn.execute(
+                    """
+                    SELECT apim_name, api_name, api_display_name, api_path,
+                           backend_id, backend_url, service_url, requires_subscription
+                    FROM apim_api_routes
+                    WHERE subscription_id = ? AND LOWER(apim_name) = LOWER(?)
+                    ORDER BY COALESCE(api_display_name, api_name), api_name
+                    """,
+                    (str(asset_row["subscription_id"] or ""), str(asset_row["name"] or "")),
+                ).fetchall()
+
+            apim_apis: list[dict] = []
+            for row in apim_api_rows:
+                backend_target = str(row["backend_id"] or "").strip()
+                backend_url = str(row["backend_url"] or "").strip()
+                service_url = str(row["service_url"] or "").strip()
+                if not backend_target:
+                    backend_target = backend_url or service_url or "—"
+                apim_apis.append(
+                    {
+                        "api_name": str(row["api_name"] or "").strip() or "—",
+                        "api_display_name": str(row["api_display_name"] or "").strip() or str(row["api_name"] or "").strip() or "—",
+                        "api_path": str(row["api_path"] or "").strip() or "—",
+                        "backend_target": backend_target,
+                        "backend_url": backend_url or "—",
+                        "service_url": service_url or "—",
+                        "requires_subscription": bool(row["requires_subscription"]),
+                    }
+                )
+
+            if apim_apis:
+                details["apis"] = apim_apis
 
         if str(asset_row["type"] or "").lower().startswith("microsoft.web/") or "functionapp" in asset_type_lc:
             triggers = _collect_function_app_triggers(conn, str(asset_row["subscription_id"] or ""), str(asset_row["id"] or ""))
@@ -18609,7 +18844,7 @@ def _trace_subscription_endpoint(
 
     The trace prefers confirmed, DB-backed hops in this order:
     Internet → App Gateway listener → App Gateway → backend pool → APIM API →
-    APIM backend → AKS ingress → AKS service → deployment → cluster.
+    APIM service → APIM backend → AKS ingress → AKS service → deployment → cluster.
     """
     from fnmatch import fnmatch as _fnmatch
     from urllib.parse import urlsplit as _urlsplit
@@ -18731,7 +18966,7 @@ def _trace_subscription_endpoint(
                 if previous_kind == "internet" and kind == "listener":
                     link_lines.append(f"    {previous_id} --> {node_id}")
                     link_lines.append(f"    linkStyle {edge_index} stroke:#d32f2f,stroke-width:2px")
-                elif previous_kind in {"listener", "appgw", "backend_pool"}:
+                elif previous_kind in {"listener", "appgw", "backend_pool", "apim_api", "apim_service"}:
                     link_lines.append(f"    {previous_id} --> {node_id}")
                     link_lines.append(f"    linkStyle {edge_index} stroke:#f97316,stroke-width:2px")
                 elif previous_kind in {"apim_backend", "aks_ingress"}:
@@ -18854,9 +19089,7 @@ def _trace_subscription_endpoint(
         if apim_row:
             apim_name = str(apim_row["name"] or "").strip()
             apim_fqdn = str(apim_row["fqdn"] or "").strip()
-            apim_chain = chain_prefix + [
-                _node("apim_service", f"apim_service::{apim_name}", "APIM", fqdn=apim_fqdn or None, resource_group=str(apim_row["resource_group"] or "").strip() or None, apim_name=apim_name),
-            ]
+            apim_chain = list(chain_prefix)
 
             backend_rows: list[sqlite3.Row] = []
             backend_targets: set[str] = set()
@@ -18938,6 +19171,16 @@ def _trace_subscription_endpoint(
                         route=api_path or None,
                         backend_url=backend_url or None,
                         api_display_name=api_display_name or None,
+                    )
+                )
+                apim_chain.append(
+                    _node(
+                        "apim_service",
+                        f"apim_service::{apim_name}",
+                        "APIM",
+                        fqdn=apim_fqdn or None,
+                        resource_group=str(apim_row["resource_group"] or "").strip() or None,
+                        apim_name=apim_name,
                     )
                 )
 
@@ -19890,7 +20133,7 @@ def api_settings_cloud_cache_clear():
 @app.route("/api/subscriptions")
 def api_subscriptions_list():
     """List all harvested Azure subscriptions with asset counts."""
-    conn = _get_db_with_schema()
+    conn = _get_db()
     if conn is None:
         return jsonify({"error": "DB unavailable"}), 503
     try:
@@ -20037,7 +20280,7 @@ _SUBSCRIPTION_DIAGRAM_CACHE: dict[str, tuple[float, str, dict]] = {}
 _SUBSCRIPTION_DIAGRAM_CACHE_TTL = 600  # 10 minutes
 # Bump this whenever diagram rendering logic changes (listener icons, pool icons, edge labels, etc.)
 # so the DB cache is automatically invalidated for all subscriptions.
-_DIAGRAM_CODE_VERSION = "v33"  # Mermaid APIM API nodes now prefer the API name when display names are host-like
+_DIAGRAM_CODE_VERSION = "v35"  # APIM service now wraps its API hierarchy inside the subnet container
 
 
 def _subscription_diagram_cache_signature(conn, sub_id: str) -> tuple[str | None, tuple[str, str] | None]:
@@ -20728,6 +20971,9 @@ def api_subscription_diagram(sub_id: str):
             ilb_ase_names=ilb_ase_names,
             public_appgw_names=public_appgw_names,
             servicebus_trigger_rows=servicebus_trigger_rows,
+            subscription_id=sub_id,
+            subscription_name=sub_name,
+            environment=environment,
         )
         
         payload = {
@@ -20967,7 +21213,10 @@ def _get_icon_path(resource_type: str) -> str | None:
             "microsoft.network/azurefirewalls": "azurerm_firewall",
             "microsoft.network/firewallpolicies": "azurerm_firewall_policy",
             "microsoft.apimanagement/service": "azurerm_apim",
-            "apim backend target": "azurerm_apim",
+            "microsoft.apimanagement/apis": "azurerm_api_center",
+            "azurerm_api_management_api": "azurerm_api_center",
+            "apim api": "azurerm_api_center",
+            "apim backend target": "azurerm_cloud_services_classic",
             "apim backend pool": "azurerm_apim",
             "microsoft.containerservice/managedclusters": "azurerm_aks",
             "microsoft.storage/storageaccounts": "azurerm_storage_account",
@@ -21094,7 +21343,10 @@ def _get_icon_class(resource_type: str) -> str:
             "microsoft.network/trafficmanagerprofiles": "azurerm_traffic_manager",
             "microsoft.network/routetables": "azurerm_route_table",
             "microsoft.apimanagement/service": "azurerm_apim",
-            "apim backend target": "azurerm_apim",
+            "microsoft.apimanagement/apis": "azurerm_api_center",
+            "azurerm_api_management_api": "azurerm_api_center",
+            "apim api": "azurerm_api_center",
+            "apim backend target": "azurerm_cloud_services_classic",
             "apim backend pool": "azurerm_apim",
             "microsoft.containerservice/managedclusters": "azurerm_aks",
             "microsoft.storage/storageaccounts": "azurerm_storage_account",
@@ -21684,7 +21936,25 @@ def _build_subscription_overlay_views(rows: list, plan_links: list | None = None
     )
 
 
-def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_backend_urls: set[str] | None = None, apim_route_map: dict[str, list[str]] | None = None, apim_backend_rows: list | None = None, apim_api_rows: list | None = None, apim_open_api_count: int = 0, appgw_routes: list | None = None, aks_route_rows: list | None = None, appgw_waf_policy_rows: list | None = None, firewall_policy_rows: list | None = None, ilb_ase_names: set[str] | None = None, public_appgw_names: set[str] | None = None, servicebus_trigger_rows: list | None = None) -> dict:
+def _build_ingress_diagram(
+    rows: list,
+    plan_links: list | None = None,
+    apim_backend_urls: set[str] | None = None,
+    apim_route_map: dict[str, list[str]] | None = None,
+    apim_backend_rows: list | None = None,
+    apim_api_rows: list | None = None,
+    apim_open_api_count: int = 0,
+    appgw_routes: list | None = None,
+    aks_route_rows: list | None = None,
+    appgw_waf_policy_rows: list | None = None,
+    firewall_policy_rows: list | None = None,
+    ilb_ase_names: set[str] | None = None,
+    public_appgw_names: set[str] | None = None,
+    servicebus_trigger_rows: list | None = None,
+    subscription_id: str = "",
+    subscription_name: str = "",
+    environment: str = "",
+) -> dict:
     """Build a high-level ingress flow diagram showing entry points and key services.
     
     Simplifies the architecture to: HTTP → WAF → App Gateway → APIM → Backend services
@@ -21701,6 +21971,9 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     (including APIM-to-APIM routes) that are absent from provisioned_assets routing_targets.
     """
     from collections import defaultdict as _dd
+    sub_id = subscription_id
+    sub_name = subscription_name
+    sub_env = environment
     rows = [list(row) for row in rows]
     
     # Helper to create unique node IDs using resource group + name
@@ -22390,7 +22663,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             seen_aks_ingress.add(synthetic_key)
 
             ingress_display = host_str or ingress_label
-            aks_ingress_entries.append({
+            route_asset = {
                 "name": synthetic_key,
                 "label": ingress_display,
                 "count": 1,
@@ -22431,9 +22704,10 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 "source_repo": git_repository,
                 "source_labels": pod_template_labels,
                 "node_variant": "aks_ingress",
-            })
+            }
+            aks_ingress_entries.append(route_asset)
             if service_name:
-                service_asset_id = f"aks-service::{cluster_asset.get('id')}::{namespace or 'default'}::{service_name}::{service_port or 'svc'}"
+                service_asset_id = f"aks-service::{cluster_item.get('id')}::{namespace or 'default'}::{service_name}::{service_port or 'svc'}"
                 service_asset = {
                     "id": service_asset_id,
                     "name": service_name,
@@ -22441,8 +22715,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     "type": "microsoft.kubernetes/services",
                     "type_label": "Kubernetes Service",
                     "display_type_label": "Kubernetes Service",
-                    "resource_group": str(resource_group or cluster_asset.get("resource_group") or "").strip(),
-                    "location": cluster_asset.get("location"),
+                    "resource_group": str(resource_group or cluster_item.get("resource_group") or "").strip(),
+                    "location": cluster_item.get("location"),
                     "sku": str(service_port or "svc").strip(),
                     "fqdn": "",
                     "is_public": False,
@@ -22456,10 +22730,10 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     "cloud_provider": "Azure",
                     "linked_repo": None,
                     "kind": "Kubernetes Service",
-                    "parent_id": cluster_asset.get("id"),
-                    "parent_name": cluster_asset.get("name"),
-                    "parent_resource_group": cluster_asset.get("resource_group"),
-                    "parent_type_label": cluster_asset.get("display_type_label") or cluster_asset.get("type_label"),
+                    "parent_id": cluster_item.get("id"),
+                    "parent_name": cluster_item.get("name"),
+                    "parent_resource_group": cluster_item.get("resource_group"),
+                    "parent_type_label": cluster_item.get("display_type_label") or cluster_item.get("type_label"),
                     "children_count": 0,
                     "is_child": True,
                     "depth": 1,
@@ -22469,15 +22743,15 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     "provider_label": "Azure",
                     "tier": "backend",
                     "routing_targets": [{
-                        "target_resource_id": str(cluster_asset.get("id") or "").strip(),
-                        "target": str(cluster_asset.get("name") or "").strip(),
-                        "name": str(cluster_asset.get("name") or "").strip(),
+                        "target_resource_id": str(cluster_item.get("id") or "").strip(),
+                        "target": str(cluster_item.get("name") or "").strip(),
+                        "name": str(cluster_item.get("name") or "").strip(),
                     }],
-                    "vnet_name": cluster_asset.get("vnet_name"),
-                    "vnet_resource_group": cluster_asset.get("vnet_resource_group"),
-                    "subnet_name": cluster_asset.get("subnet_name"),
-                    "subnet_id": cluster_asset.get("subnet_id"),
-                    "network": dict(cluster_asset.get("network") or {}),
+                    "vnet_name": cluster_item.get("vnet_name"),
+                    "vnet_resource_group": cluster_item.get("vnet_resource_group"),
+                    "subnet_name": cluster_item.get("subnet_name"),
+                    "subnet_id": cluster_item.get("subnet_id"),
+                    "network": dict(cluster_item.get("network") or {}),
                     "source_namespace": namespace,
                     "source_service": service_name,
                     "source_service_port": service_port,
@@ -22491,7 +22765,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     "target": service_name,
                     "name": service_name,
                 }]
-                assets.append(service_asset)
+                backends.append(service_asset)
 
             # Only render the Kubernetes Service when the harvest has a concrete
             # ingress hop that routes to it. Service-only rows with no ingress
@@ -22980,8 +23254,6 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         })
 
         def _apim_label(base_label: str, fqdns: list[str]) -> str:
-            if fqdns:
-                return f"{base_label}<br/>{fqdns[0]}"
             return base_label
 
         def _merge_public_ips(existing: list[dict], incoming: list[dict]) -> list[dict]:

@@ -14,7 +14,7 @@ const CLOUD_MERMAID_CONFIG = {
   maxEdges: 2000,
   flowchart: {
     useMaxWidth: false,
-    htmlLabels: false,
+    htmlLabels: true,
   },
   onError: (err) => console.error('[Mermaid] Rendering error:', err?.message || err),
 };
