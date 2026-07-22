@@ -2749,7 +2749,7 @@ def _build_simple_architecture_diagram(
                                 
                                 # Add arrow from operation to backend
                                 backend_node_id = backend_nodes_created[backend_label]
-                                add_link(mapping["operation_node"], backend_node_id, label="routes to")
+                                add_link(mapping["operation_node"], backend_node_id)
                         
                         # Extract backend routing info (render later outside APIM)
                         backend_url = _extract_apim_backend_url(repo_path, api_name)
@@ -2821,7 +2821,7 @@ def _build_simple_architecture_diagram(
                         # Connect operations to the app inside cluster
                         start_idx, end_idx = backend["ops_slice"]
                         for op_node in operation_nodes[start_idx:end_idx]:
-                            add_link(op_node, backend_app_node, label="routes to")
+                            add_link(op_node, backend_app_node)
                         
                         # Create Data subgraph if database or Service Bus exists
                         has_database = backend.get("database")

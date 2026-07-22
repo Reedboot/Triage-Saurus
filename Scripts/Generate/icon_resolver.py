@@ -274,6 +274,8 @@ AZURE_RESOURCE_TYPE_TO_ICON = {
     'azurerm_files': ('general', 'files'),
     'azurerm_fileshares': ('storage', 'fileshares'),
     'azurerm_firewall': ('networking', 'firewall'),
+    'azurerm_firewall_policy': ('networking', 'web-application-firewall-policies'),
+    'azurerm_web_application_firewall_policy': ('networking', 'web-application-firewall-policies'),
     'azurerm_folder_blank': ('general', 'folder-blank'),
     'azurerm_folder_website': ('general', 'folder-website'),
     'azurerm_form_recognizers': ('ai_machine_learning', 'form-recognizers'),

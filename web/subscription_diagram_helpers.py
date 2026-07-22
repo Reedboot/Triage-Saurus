@@ -1782,13 +1782,9 @@ def build_subscription_diagrams_by_rg(
             restricted = bool(asset.get("is_restricted"))
             waf_mode = (asset.get("waf_mode") or "").strip().lower()
             if protected and restricted:
-                return "WAF + IP allowlist", "#f97316"
+                return "IP allowlist", "#f97316"
             if protected:
-                if "prevention" in waf_mode:
-                    return "WAF (Prev)", "#f97316"
-                if "detection" in waf_mode:
-                    return "WAF (Det)", "#f59e0b"
-                return "WAF", "#f97316"
+                return "", "#f97316"
             if restricted:
                 return subscription_allowlist_label(asset), "#f59e0b"
             return subscription_primary_fqdn(asset) or "public edge", "#ef4444"
@@ -1847,10 +1843,10 @@ def build_subscription_diagrams_by_rg(
                         for _route_asset in _ctx_route_nodes:
                             route_nid = subscription_node_id(_route_asset, sanitise_node_id)
                             if route_nid in seen_nodes:
-                                add_edge(_sub_ctx_node_id, route_nid, "routes to", "#f97316", dasharray="6,3")
-                                add_edge(route_nid, cluster_nid, "routes to", "#f97316", dasharray="6,3")
+                                add_edge(_sub_ctx_node_id, route_nid, "", "#f97316", dasharray="6,3")
+                                add_edge(route_nid, cluster_nid, "", "#f97316", dasharray="6,3")
                     else:
-                        add_edge(_sub_ctx_node_id, cluster_nid, "routes to", "#f97316", dasharray="6,3")
+                        add_edge(_sub_ctx_node_id, cluster_nid, "", "#f97316", dasharray="6,3")
 
         def _parse_routing_targets(raw_targets: object) -> list[dict]:
             if not raw_targets:
@@ -1945,7 +1941,7 @@ def build_subscription_diagrams_by_rg(
                         matched_route_nids.update(visible_nodes_by_fqdn_normalized.get(normalized, set()))
 
             for route_nid in matched_route_nids:
-                add_edge(backend_nid, route_nid, "routes to", "#f97316", dasharray="6,3")
+                add_edge(backend_nid, route_nid, "", "#f97316", dasharray="6,3")
 
             for cluster_key in matched_cluster_keys:
                 for route_asset in route_nodes_by_cluster.get(cluster_key, []):
@@ -1953,7 +1949,7 @@ def build_subscription_diagrams_by_rg(
                         continue
                     route_nid = subscription_node_id(route_asset, sanitise_node_id)
                     if route_nid in seen_nodes:
-                        add_edge(backend_nid, route_nid, "routes to", "#f97316", dasharray="6,3")
+                        add_edge(backend_nid, route_nid, "", "#f97316", dasharray="6,3")
 
         for cluster_asset in cluster_assets:
             cluster_key = _cluster_key(cluster_asset)
@@ -1965,7 +1961,7 @@ def build_subscription_diagrams_by_rg(
                 if route_nid not in seen_nodes:
                     continue
                 if (route_asset.get("node_variant") or "") == "aks_ingress":
-                    add_edge(route_nid, cluster_nid, "routes to", "#f97316", dasharray="6,3")
+                    add_edge(route_nid, cluster_nid, "", "#f97316", dasharray="6,3")
 
         for asset in public_assets:
             if asset.get("tier") == "entry":

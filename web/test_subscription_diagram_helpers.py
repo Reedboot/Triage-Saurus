@@ -208,8 +208,8 @@ def test_aks_route_backend_prefers_ingress_hostname_over_cluster():
     )
 
     assert "production-portalui2.internal.cbinnovation.uk" in mermaid
-    assert f"{portalui_nid} -->|\"routes to\"| {ingress_nid}" in mermaid
-    assert f"{ingress_nid} -->|\"routes to\"| {cluster_nid}" in mermaid
+    assert f"{portalui_nid} --> {ingress_nid}" in mermaid
+    assert f"{ingress_nid} --> {cluster_nid}" in mermaid
     assert f"{service_nid}[" not in mermaid
 
 
@@ -357,4 +357,4 @@ def test_apim_backend_target_routes_to_target_service():
         lambda value: value.replace("-", "_").replace("/", "_").replace(".", "_"),
     )
 
-    assert f"{backend_target_nid} -->|\"routes to\"| {function_nid}" in mermaid, mermaid
+    assert f"{backend_target_nid} --> {function_nid}" in mermaid, mermaid

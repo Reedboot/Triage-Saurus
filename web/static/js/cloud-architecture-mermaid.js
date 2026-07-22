@@ -449,7 +449,7 @@ function resolveMermaidOriginalId(nodeId) {
 function attachMermaidDrilldownHandlers(svg) {
   if (!svg) return;
 
-  svg.querySelectorAll("g.node[id]").forEach((el) => {
+  svg.querySelectorAll("g.node[id], g.cluster[id]").forEach((el) => {
     const rawId = el.getAttribute("id") || "";
     const nodeId = normalizeMermaidNodeId(rawId);
     const nodeData = mermaidNodeDataById.get(nodeId);
@@ -700,6 +700,15 @@ function normalizeIconClass(resourceType, providerKey = "azure") {
   const rawType = String(resourceType || "").trim().toLowerCase();
   if (!rawType || rawType === "external_endpoint") {
     return "";
+  }
+
+  if (providerKey === "azure") {
+    if (rawType.includes("microsoft.containerservice/managedclusters")) {
+      return "icon-azurerm-aks";
+    }
+    if (rawType.includes("microsoft.kubernetes/services")) {
+      return "icon-azurerm-kubernetes-service";
+    }
   }
 
   if (
@@ -1259,9 +1268,9 @@ function renderGroupedResourcesModal(nodeData) {
     );
 
   modalOverlay.hidden = false;
-  modalTitle.textContent = title;
+  modalTitle.textContent = normalizeModalText(title);
   if (modalSubtitle) {
-    modalSubtitle.textContent = `${typeLabel}${resources.length ? ` • ${resources.length} resources` : ""}`;
+    modalSubtitle.textContent = `${normalizeModalText(typeLabel)}${resources.length ? ` • ${resources.length} resources` : ""}`;
   }
   setModalHeaderIcon(firstNonEmpty(nodeData?.icon_path, nodeData?.iconPath), "🧩");
 
@@ -1286,9 +1295,9 @@ function renderGroupedResourcesModal(nodeData) {
       <ul class="cloud-arch-modal-list">
         ${sorted
           .map((resource) => {
-            const name = escapeHtml(String(resourceLabel(resource)));
-            const rg = escapeHtml(String(resource?.rg || ""));
-            const kind = escapeHtml(String(resource?.type_label || resource?.type || resource?.arm_type || ""));
+            const name = escapeHtml(normalizeModalText(resourceLabel(resource)));
+            const rg = escapeHtml(normalizeModalText(resource?.rg || ""));
+            const kind = escapeHtml(normalizeModalText(resource?.type_label || resource?.type || resource?.arm_type || ""));
             const suffix = [rg ? `<span style="color: var(--text-muted);">(${rg})</span>` : "", kind ? `<span style="color: var(--text-faint); margin-left: 8px;">${kind}</span>` : ""].filter(Boolean).join("");
             return `<li class="cloud-arch-modal-list-item"><strong>${name}</strong>${suffix}</li>`;
           })
@@ -1314,7 +1323,7 @@ function openModal(resourceId, nodeData, lookup = {}) {
     ...payload,
     __node_id: nodeId,
     __node_children: nodeChildren,
-    __node_label: firstNonEmpty(nodeData?.title, nodeData?.label, nodeId),
+    __node_label: normalizeModalText(firstNonEmpty(nodeData?.title, nodeData?.label, nodeId)),
   });
   modalOverlay.hidden = false;
   modalTitle.textContent = "Loading details…";
@@ -1418,10 +1427,18 @@ function setModalHeaderIcon(iconPath, fallbackText = "☁") {
 function firstNonEmpty(...values) {
   for (const value of values) {
     if (typeof value === "string" && value.trim()) {
-      return value.trim();
+      return normalizeModalText(value);
     }
   }
   return "";
+}
+
+function normalizeModalText(value) {
+  return String(value || "")
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function collectPublicIps(data) {
@@ -1698,11 +1715,11 @@ function buildParentResourceFields(parentResource) {
     parentResource?.virtual_network_type
   );
 
-  if (parentResource?.name) fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Asset Name</div><div class="cloud-arch-modal-field-value">${escapeHtml(String(parentResource.name))}</div></div>`);
-  if (parentResource?.type_label || parentResource?.type) fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Service Type</div><div class="cloud-arch-modal-field-value">${escapeHtml(String(parentResource.type_label || parentResource.type))}</div></div>`);
-  if (parentResource?.resource_group) fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Resource Group</div><div class="cloud-arch-modal-field-value">${escapeHtml(String(parentResource.resource_group))}</div></div>`);
-  if (parentResource?.location) fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Location</div><div class="cloud-arch-modal-field-value">${escapeHtml(String(parentResource.location))}</div></div>`);
-  if (parentResource?.sku) fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">SKU</div><div class="cloud-arch-modal-field-value">${escapeHtml(String(parentResource.sku))}</div></div>`);
+  if (parentResource?.name) fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Asset Name</div><div class="cloud-arch-modal-field-value">${escapeHtml(normalizeModalText(parentResource.name))}</div></div>`);
+  if (parentResource?.type_label || parentResource?.type) fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Service Type</div><div class="cloud-arch-modal-field-value">${escapeHtml(normalizeModalText(parentResource.type_label || parentResource.type))}</div></div>`);
+  if (parentResource?.resource_group) fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Resource Group</div><div class="cloud-arch-modal-field-value">${escapeHtml(normalizeModalText(parentResource.resource_group))}</div></div>`);
+  if (parentResource?.location) fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Location</div><div class="cloud-arch-modal-field-value">${escapeHtml(normalizeModalText(parentResource.location))}</div></div>`);
+  if (parentResource?.sku) fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">SKU</div><div class="cloud-arch-modal-field-value">${escapeHtml(normalizeModalText(parentResource.sku))}</div></div>`);
   if (parentVnet) fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Inherited Virtual Network</div><div class="cloud-arch-modal-field-value">${escapeHtml(parentVnet)}</div></div>`);
   if (parentSubnet) fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Inherited Subnet</div><div class="cloud-arch-modal-field-value">${escapeHtml(parentSubnet)}</div></div>`);
   if (parentNetworkType) fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Inherited Virtual Network Type</div><div class="cloud-arch-modal-field-value">${escapeHtml(parentNetworkType)}</div></div>`);
@@ -1939,6 +1956,47 @@ function isApimBackendTargetDetails(data) {
   return typeText.includes("apim backend target") || typeText.includes("apim backend pool");
 }
 
+function isKubernetesServiceDetails(data) {
+  const typeText = String(firstNonEmpty(data?.type_label, data?.type, data?.resourceType, "")).toLowerCase();
+  return typeText.includes("kubernetes service") || typeText.includes("microsoft.kubernetes/services");
+}
+
+function buildKubernetesServiceInvokersSection(data) {
+  const callers = Array.isArray(data?.invoked_by) ? data.invoked_by.filter(Boolean) : [];
+  if (!callers.length) return "";
+
+  return `
+    <div class="cloud-arch-modal-section">
+      <div class="cloud-arch-modal-section-title">
+        <span class="cloud-arch-modal-section-icon">📥</span>
+        Invoked By
+      </div>
+      <div style="overflow:auto;border:1px solid var(--border);border-radius:8px;">
+        <table style="width:100%;border-collapse:collapse;font-size:0.84rem;">
+          <thead>
+            <tr>
+              ${["Caller", "Type", "Via", "Path", "Protocol"].map(
+                (col) => `<th style="padding:8px 10px;text-align:left;background:var(--bg-base);border-bottom:1px solid var(--border);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.03em;color:var(--text-muted);">${escapeHtml(col)}</th>`
+              ).join("")}
+            </tr>
+          </thead>
+          <tbody>
+            ${callers.map((caller) => `
+              <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:8px 10px;vertical-align:top;"><strong>${escapeHtml(firstNonEmpty(caller?.name, "—"))}</strong></td>
+                <td style="padding:8px 10px;vertical-align:top;">${escapeHtml(firstNonEmpty(caller?.type, "—"))}</td>
+                <td style="padding:8px 10px;vertical-align:top;">${escapeHtml(firstNonEmpty(caller?.via, "—"))}</td>
+                <td style="padding:8px 10px;vertical-align:top;"><code>${escapeHtml(firstNonEmpty(caller?.path, "—"))}</code></td>
+                <td style="padding:8px 10px;vertical-align:top;">${escapeHtml(firstNonEmpty(caller?.protocol, "—"))}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
 function buildApimBackendUsageSection(data) {
   const apimName = firstNonEmpty(
     data?.configuration?.apim_name,
@@ -2049,15 +2107,62 @@ function buildTrafficFlowSection(data) {
     </div>`;
 }
 
+function buildAksIngressServicesSection(data) {
+  const services = Array.isArray(data?.ingress_services)
+    ? data.ingress_services.filter((service) => service && (service.name || service.service_name))
+    : [];
+  if (!services.length) return "";
+
+  return `
+    <div class="cloud-arch-modal-section">
+      <div class="cloud-arch-modal-section-title">
+        <span class="cloud-arch-modal-section-icon">🌐</span>
+        Services with Ingress
+      </div>
+      <div style="overflow:auto;border:1px solid var(--border);border-radius:8px;">
+        <table style="width:100%;border-collapse:collapse;font-size:0.84rem;">
+          <thead>
+            <tr>
+              ${["Namespace", "Service", "Ingress / Host", "Path", "Port"].map(
+                (column) => `<th style="padding:8px 10px;text-align:left;background:var(--bg-base);border-bottom:1px solid var(--border);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.03em;color:var(--text-muted);">${escapeHtml(column)}</th>`
+              ).join("")}
+            </tr>
+          </thead>
+          <tbody>
+            ${services.map((service) => {
+              const name = firstNonEmpty(service.name, service.service_name, "—");
+              const namespace = firstNonEmpty(service.namespace, "—");
+              const ingress = firstNonEmpty(service.ingress_name, service.host, "—");
+              const host = firstNonEmpty(service.host);
+              const ingressLabel = host && host !== ingress
+                ? `${escapeHtml(ingress)}<br/><code>${escapeHtml(host)}</code>`
+                : escapeHtml(ingress);
+              return `
+                <tr style="border-bottom:1px solid var(--border);">
+                  <td style="padding:8px 10px;vertical-align:top;"><code>${escapeHtml(namespace)}</code></td>
+                  <td style="padding:8px 10px;vertical-align:top;"><strong>${escapeHtml(name)}</strong></td>
+                  <td style="padding:8px 10px;vertical-align:top;">${ingressLabel}</td>
+                  <td style="padding:8px 10px;vertical-align:top;"><code>${escapeHtml(firstNonEmpty(service.path, "—"))}</code></td>
+                  <td style="padding:8px 10px;vertical-align:top;">${escapeHtml(firstNonEmpty(String(service.port ?? ""), "—"))}</td>
+                </tr>
+              `;
+            }).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
 function renderTabularModalContent(data) {
   if (!modalOverlay || !modalTitle || !modalBody) return;
   modalOverlay.hidden = false;
-  modalTitle.textContent = firstNonEmpty(data?.__node_label, data?.title, data?.name, "Details");
+  modalTitle.textContent = normalizeModalText(firstNonEmpty(data?.__node_label, data?.title, data?.name, "Details"));
   if (modalSubtitle) modalSubtitle.textContent = "";
   setModalHeaderIcon(data?.icon_path || data?.parent_resource?.icon_path || "", "☁");
   const suppressParentHeading =
-    String(firstNonEmpty(data?.title, data?.name, "")).toLowerCase() === "simulation-knowledgecentre-uksouth" &&
-    String(firstNonEmpty(data?.type_label, data?.type, data?.resourceType, "")).toLowerCase().includes("app service plan");
+    normalizeModalText(firstNonEmpty(data?.title, data?.name, "")).toLowerCase() === "simulation-knowledgecentre-uksouth" &&
+    normalizeModalText(firstNonEmpty(data?.type_label, data?.type, data?.resourceType, "")).toLowerCase().includes("app service plan");
 
   const parentResource = data?.parent_resource && typeof data.parent_resource === "object" ? data.parent_resource : null;
   const parentResourceSection = parentResource
@@ -2086,16 +2191,16 @@ function renderTabularModalContent(data) {
       return "<span style=\"color: var(--text-muted);\">—</span>";
     }
     if (typeof cell === "object") {
-      const label = escapeHtml(String(cell.label || "—"));
+      const label = escapeHtml(normalizeModalText(cell.label || "—"));
       const style = cell.style ? String(cell.style) : "";
       if (cell.href) {
         const href = escapeHtml(String(cell.href));
-        const title = cell.title ? ` title="${escapeHtml(String(cell.title))}"` : "";
+        const title = cell.title ? ` title="${escapeHtml(normalizeModalText(cell.title))}"` : "";
         return `<a href="${href}" target="_blank" rel="noopener noreferrer"${title} style="color:#60a5fa;text-decoration:underline;${isFirstCol ? `padding-left:${depth * 16}px;display:inline-block;` : ""}">${label}</a>`;
       }
       return `<span style="${style}${isFirstCol ? `;padding-left:${depth * 16}px;display:inline-block;` : ""}">${label}</span>`;
     }
-    const text = escapeHtml(String(cell));
+    const text = escapeHtml(normalizeModalText(cell));
     if (!isFirstCol || depth <= 0) return text;
     return `<span style="padding-left:${depth * 16}px;display:inline-block;">${text}</span>`;
   };
@@ -2161,8 +2266,8 @@ function renderTabularModalContent(data) {
   if (data.view_type === "tree_table" && Array.isArray(data.sections) && data.sections.length > 0) {
     modalBody.innerHTML = `${parentResourceSection}${data.sections
       .map((section) => {
-        const title = escapeHtml(String(section?.title || ""));
-        const subtitle = escapeHtml(String(section?.subtitle || ""));
+        const title = escapeHtml(normalizeModalText(section?.title || ""));
+        const subtitle = escapeHtml(normalizeModalText(section?.subtitle || ""));
         return `
           <div class="cloud-arch-modal-section">
             <div class="cloud-arch-modal-section-title">
@@ -2189,9 +2294,9 @@ function renderTabularModalContent(data) {
 function renderModalContent(data) {
   if (!modalOverlay || !modalTitle || !modalBody) return;
   modalOverlay.hidden = false;
-  modalTitle.textContent = firstNonEmpty(data.__node_label, data.title, data.name, "Resource details");
+  modalTitle.textContent = normalizeModalText(firstNonEmpty(data.__node_label, data.title, data.name, "Resource details"));
   if (modalSubtitle) {
-    modalSubtitle.textContent = firstNonEmpty(data.type_label, data.type, data.resourceType);
+    modalSubtitle.textContent = normalizeModalText(firstNonEmpty(data.type_label, data.type, data.resourceType));
   }
   setModalHeaderIcon(data.icon_path || data.parent_resource?.icon_path || "", "☁");
 
@@ -2202,11 +2307,11 @@ function renderModalContent(data) {
     const sections = [];
 
     const overviewFields = [];
-    if (data.name) overviewFields.push({ label: "Policy Name", value: escapeHtml(String(data.name)) });
-    if (data.resource_group) overviewFields.push({ label: "Resource Group", value: escapeHtml(String(data.resource_group)) });
-    if (data.subscription) overviewFields.push({ label: "Subscription", value: escapeHtml(String(data.subscription)) });
-    if (data.configuration?.state) overviewFields.push({ label: "State", value: escapeHtml(String(data.configuration.state)) });
-    if (data.configuration?.mode) overviewFields.push({ label: "Mode", value: escapeHtml(String(data.configuration.mode)) });
+    if (data.name) overviewFields.push({ label: "Policy Name", value: escapeHtml(normalizeModalText(data.name)) });
+    if (data.resource_group) overviewFields.push({ label: "Resource Group", value: escapeHtml(normalizeModalText(data.resource_group)) });
+    if (data.subscription) overviewFields.push({ label: "Subscription", value: escapeHtml(normalizeModalText(data.subscription)) });
+    if (data.configuration?.state) overviewFields.push({ label: "State", value: escapeHtml(normalizeModalText(data.configuration.state)) });
+    if (data.configuration?.mode) overviewFields.push({ label: "Mode", value: escapeHtml(normalizeModalText(data.configuration.mode)) });
     if (overviewFields.length > 0) {
       sections.push({ title: "Policy Overview", icon: "🧩", fields: overviewFields });
     }
@@ -2236,7 +2341,7 @@ function renderModalContent(data) {
     if (wafPolicy.max_body_kb !== undefined && wafPolicy.max_body_kb !== null && String(wafPolicy.max_body_kb).trim() !== "") {
       securityFields.push({
         label: "Max Body Size",
-        value: `${escapeHtml(String(wafPolicy.max_body_kb))} KB`,
+        value: `${escapeHtml(normalizeModalText(wafPolicy.max_body_kb))} KB`,
       });
     }
     if (securityFields.length > 0) {
@@ -2251,7 +2356,7 @@ function renderModalContent(data) {
           label: "Gateways Using This Policy",
           value: associatedGateways.length
             ? `<ul class="cloud-arch-modal-list">${associatedGateways
-              .map((gateway) => `<li class="cloud-arch-modal-list-item"><strong>${escapeHtml(String(gateway))}</strong></li>`)
+              .map((gateway) => `<li class="cloud-arch-modal-list-item"><strong>${escapeHtml(normalizeModalText(gateway))}</strong></li>`)
               .join("")}</ul>`
             : '<div class="cloud-arch-modal-empty" style="margin:0;">No gateways are associated with this policy.</div>',
           isHtml: true,
@@ -2295,8 +2400,8 @@ function renderModalContent(data) {
   }
 
   const suppressParentHeading =
-    String(firstNonEmpty(data.title, data.name, "")).toLowerCase() === "simulation-knowledgecentre-uksouth" &&
-    String(firstNonEmpty(data.type_label, data.type, data.resourceType, "")).toLowerCase().includes("app service plan");
+    normalizeModalText(firstNonEmpty(data.title, data.name, "")).toLowerCase() === "simulation-knowledgecentre-uksouth" &&
+    normalizeModalText(firstNonEmpty(data.type_label, data.type, data.resourceType, "")).toLowerCase().includes("app service plan");
   const resourceName = firstNonEmpty(data.__node_label, data.name, data.title, data.resource_name);
   const resourceGroup = firstNonEmpty(
     data.resource_group,
@@ -2334,11 +2439,11 @@ function renderModalContent(data) {
   const sections = [];
 
   const overviewFields = [];
-  if (resourceName) overviewFields.push({ label: "Asset Name", value: escapeHtml(resourceName) });
-  if (serviceType) overviewFields.push({ label: "Service Type", value: escapeHtml(serviceType) });
-  if (resourceType) overviewFields.push({ label: "Resource Type", value: escapeHtml(resourceType) });
+  if (resourceName) overviewFields.push({ label: "Asset Name", value: escapeHtml(normalizeModalText(resourceName)) });
+  if (serviceType) overviewFields.push({ label: "Service Type", value: escapeHtml(normalizeModalText(serviceType)) });
+  if (resourceType) overviewFields.push({ label: "Resource Type", value: escapeHtml(normalizeModalText(resourceType)) });
   if (data.sku || data.configuration?.sku_name) {
-    overviewFields.push({ label: "SKU", value: escapeHtml(String(data.sku || data.configuration?.sku_name || "")) });
+    overviewFields.push({ label: "SKU", value: escapeHtml(normalizeModalText(data.sku || data.configuration?.sku_name || "")) });
   }
   if (data.security && typeof data.security.is_public === "boolean") {
     overviewFields.push({
@@ -2349,22 +2454,23 @@ function renderModalContent(data) {
       isHtml: true,
     });
   }
-  if (resourceGroup) overviewFields.push({ label: "Resource Group", value: escapeHtml(resourceGroup) });
-  if (data.location) overviewFields.push({ label: "Location", value: escapeHtml(String(data.location)) });
+  if (resourceGroup) overviewFields.push({ label: "Resource Group", value: escapeHtml(normalizeModalText(resourceGroup)) });
+  if (data.location) overviewFields.push({ label: "Location", value: escapeHtml(normalizeModalText(data.location)) });
   if (overviewFields.length > 0) {
     sections.push({ title: "Asset Overview", icon: "🧩", fields: overviewFields });
   }
 
   const configFields = [];
-  if (data.configuration?.sku_name) configFields.push({ label: "SKU", value: escapeHtml(String(data.configuration.sku_name)) });
-  if (data.configuration?.sku_tier) configFields.push({ label: "Tier", value: escapeHtml(String(data.configuration.sku_tier)) });
-  if (data.location) configFields.push({ label: "Location", value: escapeHtml(String(data.location)) });
-  if (data.subscription) configFields.push({ label: "Subscription", value: escapeHtml(String(data.subscription)) });
-  if (data.environment) configFields.push({ label: "Environment", value: escapeHtml(String(data.environment)) });
-  if (data.configuration?.kind) configFields.push({ label: "Kind", value: escapeHtml(String(data.configuration.kind)) });
-  if (data.configuration?.hostname) configFields.push({ label: "Hostname", value: escapeHtml(String(data.configuration.hostname)) });
-  if (data.configuration?.protocol) configFields.push({ label: "Protocol", value: escapeHtml(String(data.configuration.protocol)) });
-  if (data.configuration?.port) configFields.push({ label: "Port", value: escapeHtml(String(data.configuration.port)) });
+  if (data.configuration?.sku_name) configFields.push({ label: "SKU", value: escapeHtml(normalizeModalText(data.configuration.sku_name)) });
+  if (data.configuration?.sku_tier) configFields.push({ label: "Tier", value: escapeHtml(normalizeModalText(data.configuration.sku_tier)) });
+  if (data.location) configFields.push({ label: "Location", value: escapeHtml(normalizeModalText(data.location)) });
+  if (data.subscription) configFields.push({ label: "Subscription", value: escapeHtml(normalizeModalText(data.subscription)) });
+  if (data.environment) configFields.push({ label: "Environment", value: escapeHtml(normalizeModalText(data.environment)) });
+  if (data.configuration?.kind) configFields.push({ label: "Kind", value: escapeHtml(normalizeModalText(data.configuration.kind)) });
+  if (data.configuration?.hostname) configFields.push({ label: "Hostname", value: escapeHtml(normalizeModalText(data.configuration.hostname)) });
+  if (data.configuration?.protocol) configFields.push({ label: "Protocol", value: escapeHtml(normalizeModalText(data.configuration.protocol)) });
+  if (data.configuration?.port) configFields.push({ label: "Port", value: escapeHtml(normalizeModalText(data.configuration.port)) });
+  if (data.configuration?.namespace) configFields.push({ label: "Namespace", value: escapeHtml(normalizeModalText(data.configuration.namespace)) });
   if (configFields.length > 0) {
     sections.push({ title: "Configuration", icon: "⚙️", fields: configFields });
   }
@@ -2373,14 +2479,14 @@ function renderModalContent(data) {
   if (fqdns.length > 0) {
     networkFields.push({
       label: fqdns.length > 1 ? "DNS Names" : "DNS Name",
-      value: fqdns.map((fqdn) => `<code>${escapeHtml(fqdn)}</code>`).join("<br/>"),
+      value: fqdns.map((fqdn) => `<code>${escapeHtml(normalizeModalText(fqdn))}</code>`).join("<br/>"),
       isHtml: true,
     });
   }
   if (publicIps.length > 0) {
     networkFields.push({
       label: "Public IP",
-      value: publicIps.map((ip) => `<code>${escapeHtml(ip)}</code>`).join("<br/>"),
+      value: publicIps.map((ip) => `<code>${escapeHtml(normalizeModalText(ip))}</code>`).join("<br/>"),
       isHtml: true,
     });
   }
@@ -2389,7 +2495,7 @@ function renderModalContent(data) {
   if (ipRestrictions.length > 0) {
     networkFields.push({
       label: "IP Restrictions",
-      value: ipRestrictions.map((value) => `<code>${escapeHtml(value)}</code>`).join("<br/>"),
+      value: ipRestrictions.map((value) => `<code>${escapeHtml(normalizeModalText(value))}</code>`).join("<br/>"),
       isHtml: true,
     });
   }
@@ -2397,7 +2503,7 @@ function renderModalContent(data) {
     if (!isAppGatewayDetails(data)) {
       networkFields.push({
         label: "Routes To",
-        value: routingTargetDetails.map((target) => `<code>${escapeHtml(target)}</code>`).join("<br/>"),
+        value: routingTargetDetails.map((target) => `<code>${escapeHtml(normalizeModalText(target))}</code>`).join("<br/>"),
         isHtml: true,
       });
     }
@@ -2406,6 +2512,16 @@ function renderModalContent(data) {
   if (subnet) networkFields.push({ label: "Subnet", value: escapeHtml(subnet) });
   if (networkFields.length > 0) {
     sections.push({ title: "Network", icon: "🌐", fields: networkFields });
+  }
+
+  const aksIngressServicesSection = buildAksIngressServicesSection(data);
+  if (aksIngressServicesSection) {
+    sections.push({
+      title: "",
+      icon: "",
+      fields: [],
+      __rawHtml: aksIngressServicesSection,
+    });
   }
 
   const apimBackendsSection = isApimServiceDetails(data) ? buildApimBackendsSection(data) : "";
@@ -2425,6 +2541,18 @@ function renderModalContent(data) {
       icon: "",
       fields: [],
       __rawHtml: apimBackendUsageSection,
+    });
+  }
+
+  const kubernetesServiceInvokersSection = isKubernetesServiceDetails(data)
+    ? buildKubernetesServiceInvokersSection(data)
+    : "";
+  if (kubernetesServiceInvokersSection) {
+    sections.push({
+      title: "",
+      icon: "",
+      fields: [],
+      __rawHtml: kubernetesServiceInvokersSection,
     });
   }
 
@@ -2462,11 +2590,11 @@ function renderModalContent(data) {
           label: "Child Resources",
           value: `<ul class="cloud-arch-modal-list">${childNodes
             .map((child) => {
-              const type = child.type ? `<span style="color: var(--text-muted);">${escapeHtml(child.type)}</span>` : "";
-              const fqdn = child.fqdn ? `<code>${escapeHtml(child.fqdn)}</code>` : "";
-              const rg = child.resourceGroup ? `<span style="color: var(--text-muted);">(${escapeHtml(child.resourceGroup)})</span>` : "";
+              const type = child.type ? `<span style="color: var(--text-muted);">${escapeHtml(normalizeModalText(child.type))}</span>` : "";
+              const fqdn = child.fqdn ? `<code>${escapeHtml(normalizeModalText(child.fqdn))}</code>` : "";
+              const rg = child.resourceGroup ? `<span style="color: var(--text-muted);">(${escapeHtml(normalizeModalText(child.resourceGroup))})</span>` : "";
               const count = child.resourcesCount > 1 ? ` <span class="cloud-arch-modal-badge cloud-arch-modal-badge--info">${child.resourcesCount} resources</span>` : "";
-              return `<li class="cloud-arch-modal-list-item"><strong>${escapeHtml(child.label)}</strong>${type ? ` • ${type}` : ""}${fqdn ? ` • ${fqdn}` : ""} ${rg}${count}</li>`;
+              return `<li class="cloud-arch-modal-list-item"><strong>${escapeHtml(normalizeModalText(child.label))}</strong>${type ? ` • ${type}` : ""}${fqdn ? ` • ${fqdn}` : ""} ${rg}${count}</li>`;
             })
             .join("")}</ul>`,
           isHtml: true,

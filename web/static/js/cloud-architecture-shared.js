@@ -68,6 +68,15 @@ export function normalizeResourceTypeKey(value) {
 }
 
 export function normalizeIconClass(resourceType, providerKey = "azure") {
+  const rawType = String(resourceType || "").trim().toLowerCase();
+  if (providerKey === "azure") {
+    if (rawType.includes("microsoft.containerservice/managedclusters")) {
+      return "icon_azurerm_aks_azure";
+    }
+    if (rawType.includes("microsoft.kubernetes/services")) {
+      return "icon_azurerm_kubernetes_service_azure";
+    }
+  }
   const key = normalizeResourceTypeKey(resourceType);
   return `icon_${key}_${normalizeResourceTypeKey(providerKey)}`;
 }

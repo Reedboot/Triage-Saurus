@@ -336,7 +336,8 @@ def _build_assets(brand: str, subscription_id: str | None = None) -> list[AssetS
                         {"name": "public", "properties": {"publicIPAddress": {"id": f"pip-{brand}-edge"}}}
                     ],
                     "backendAddressPools": [
-                        {"name": "web", "properties": {"backendAddresses": [{"fqdn": f"store.{brand}-retail.azurewebsites.net"}]}}
+                        {"name": "web", "properties": {"backendAddresses": [{"fqdn": f"store.{brand}-retail.internal"}]}},
+                        {"name": "api", "properties": {"backendAddresses": [{"fqdn": f"apim-{brand}.azure-api.net"}]}},
                     ],
                 }
             },
@@ -420,16 +421,6 @@ def _build_assets(brand: str, subscription_id: str | None = None) -> list[AssetS
             is_public=0,
             tags={"brand": brand, "tier": "edge"},
             raw_json={"properties": {"ruleType": "Basic", "httpListener": {"id": f"listener-{brand}-api"}, "backendHttpSettings": {"id": f"bhs-{brand}-api"}}},
-        ),
-        AssetSpec(
-            key="waf_policy",
-            name=f"waf-{brand}-edge",
-            resource_group=rg["edge"],
-            arm_type="Microsoft.Network/ApplicationGatewayWebApplicationFirewallPolicies",
-            location="uksouth",
-            is_public=0,
-            tags={"brand": brand, "tier": "edge"},
-            raw_json={"properties": {"policySettings": {"mode": "Prevention"}, "customRules": []}},
         ),
         AssetSpec(
             key="load_balancer",
@@ -842,13 +833,14 @@ def _build_assets(brand: str, subscription_id: str | None = None) -> list[AssetS
             location="uksouth",
             sku="Developer_1",
             fqdn=f"apim-{brand}.azure-api.net",
-            is_public=1,
+            is_public=0,
             tags={"brand": brand, "tier": "edge"},
             raw_json={
                 "properties": {
                     "gatewayUrl": f"https://apim-{brand}.azure-api.net",
                     "publisherEmail": f"ops@{brand}-retail.example",
                     "publicNetworkAccess": "Enabled",
+                    "virtualNetworkType": "Internal",
                     "virtualNetworkConfiguration": {
                         "subnetResourceId": f"/subscriptions/{subscription_id}/resourceGroups/rg-{brand}-network/providers/Microsoft.Network/virtualNetworks/vnet-{brand}-core/subnets/snet-{brand}-apim"
                     },
@@ -1684,7 +1676,7 @@ def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: s
             "Https",
             "/*",
             f"bhs-{brand}-web",
-            [f"store.{brand}-retail.azurewebsites.net"],
+            [f"store.{brand}-retail.internal"],
             f"bhs-{brand}-web",
             443,
             "Https",
@@ -1703,7 +1695,7 @@ def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: s
             "Https",
             "/*",
             f"bhs-{brand}-api",
-            [f"aks-{brand}-platform.hcp.uksouth.azmk8s.io"],
+            [f"apim-{brand}.azure-api.net"],
             f"bhs-{brand}-api",
             443,
             "Https",
@@ -1712,7 +1704,8 @@ def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: s
         )
 
         _upsert_apim_backend(conn, subscription_id, f"apim-{brand}-edge", "store-backend", "store-backend", f"https://store.{brand}-retail.azurewebsites.net", "http")
-        _upsert_apim_backend(conn, subscription_id, f"apim-{brand}-edge", "aks-marketlane-platform-orders-orders-api-8080", "aks-marketlane-platform-orders-orders-api-8080", f"https://orders.{brand}-retail.internal/", "http")
+        orders_backend_id = f"aks-{brand}-platform-orders-orders-api-8080"
+        _upsert_apim_backend(conn, subscription_id, f"apim-{brand}-edge", orders_backend_id, orders_backend_id, f"https://orders.{brand}-retail.internal/", "http")
 
         _upsert_apim_route(
             conn,
@@ -1736,7 +1729,7 @@ def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: s
             "Orders API",
             "orders",
             ["https"],
-            "aks-marketlane-platform-orders-orders-api-8080",
+            orders_backend_id,
             f"https://orders.{brand}-retail.internal/",
             f"https://orders.{brand}-retail.internal/",
         )
@@ -1753,13 +1746,13 @@ def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: s
             app_rg,
             "storefront",
             "storefront-ingress",
-            f"store.{brand}-retail.com",
+            f"store.{brand}-retail.internal",
             "/*",
             "store-web",
             "80",
             "store-web",
             f"https://github.com/{brand}/storefront.git",
-            exposure_level="Public",
+            exposure_level="Internal",
             service_ports=["80", "443"],
             pod_template_labels={
                 "app.kubernetes.io/name": "store-web",
@@ -1844,7 +1837,6 @@ def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: s
         notes = "Seeded by Scripts/Harvest/seed_dummy_azure_subscription.py"
         connection_pairs = [
             ("pip_edge", "appgw_edge", "fronts"),
-            ("appgw_edge", "waf_policy", "secured_by"),
             ("appgw_edge", "appgw_listener_web", "contains"),
             ("appgw_edge", "appgw_listener_api", "contains"),
             ("appgw_edge", "appgw_backend_web", "contains"),
@@ -1879,9 +1871,6 @@ def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: s
             ("apim_backend", "apim_api", "routes_to"),
             ("apim_backend", "apim_api_orders", "routes_to"),
             ("apim_named_value", "apim_backend", "configures"),
-            ("apim", "web_store", "routes_to"),
-            ("apim", "fn_orders", "routes_to"),
-            ("apim", "aks_ingress", "routes_to"),
             ("firewall", "appgw_edge", "inspects"),
             ("bastion", "vnet", "manages"),
             ("plan_web", "web_store", "hosts"),

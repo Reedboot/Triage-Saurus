@@ -303,20 +303,20 @@ def infer_connections(experiment_id: str, db_path=None) -> int:
                 for lb in p_lbs:
                     for tgt in p_ck:
                         if plausible_connection(lb, tgt):
-                            add_conn(lb["id"], tgt["id"], "data_access", "routes to")
+                            add_conn(lb["id"], tgt["id"], "data_access", "")
 
             # Rule 1b: LB → APIM → Compute (APIM sits in the routing chain)
             if fanout_ok(p_lbs, p_apims):
                 for lb in p_lbs:
                     for apim in p_apims:
                         if plausible_connection(lb, apim):
-                            add_conn(lb["id"], apim["id"], "data_access", "routes to")
+                            add_conn(lb["id"], apim["id"], "data_access", "")
 
             if fanout_ok(p_apims, p_ck):
                 for apim in p_apims:
                     for tgt in p_ck:
                         if plausible_connection(apim, tgt):
-                            add_conn(apim["id"], tgt["id"], "data_access", "routes to")
+                            add_conn(apim["id"], tgt["id"], "data_access", "")
 
             # Rule 2: Compute/K8s → DB
             if fanout_ok(p_ck, p_databases):
