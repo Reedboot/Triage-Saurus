@@ -1089,10 +1089,6 @@ function syncViewButtons() {
     button.classList.toggle("is-active", isActive);
     button.setAttribute("aria-pressed", isActive ? "true" : "false");
   }
-  const targetFilter = document.getElementById("ingress-diagram-div-target-filter");
-  if (targetFilter) {
-    targetFilter.hidden = activeViewMode !== "reactflow";
-  }
 }
 
 function resetModalRequestState() {

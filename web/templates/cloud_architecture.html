@@ -194,9 +194,16 @@
       margin-left: auto;
     }
 
+    .cloud-arch-combobox {
+      position: relative;
+      min-width: 260px;
+    }
+
     .cloud-arch-input {
-      min-width: 220px;
+      width: 100%;
+      box-sizing: border-box;
       padding: 8px 10px;
+      padding-right: 30px;
       border-radius: 8px;
       border: 1px solid var(--border);
       background: var(--bg-base);
@@ -212,6 +219,53 @@
       outline: none;
       border-color: var(--accent-border);
       box-shadow: 0 0 0 3px var(--accent-dim);
+    }
+
+    .cloud-arch-combobox::after {
+      content: "▾";
+      position: absolute;
+      top: 8px;
+      right: 10px;
+      color: var(--text-muted);
+      pointer-events: none;
+    }
+
+    .cloud-arch-subscription-dropdown {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      right: 0;
+      z-index: 100;
+      max-height: 280px;
+      overflow-y: auto;
+      padding: 4px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg-surface);
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+    }
+
+    .cloud-arch-subscription-option {
+      padding: 8px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      color: var(--text);
+      font-size: 0.85rem;
+    }
+
+    .cloud-arch-subscription-option:hover,
+    .cloud-arch-subscription-option.is-active {
+      background: var(--bg-hover);
+    }
+
+    .cloud-arch-subscription-option[hidden] {
+      display: none;
+    }
+
+    .cloud-arch-subscription-empty {
+      padding: 8px 10px;
+      color: var(--text-muted);
+      font-size: 0.85rem;
     }
 
     .cloud-arch-main {
@@ -845,10 +899,25 @@
         <button type="button" data-cloud-arch-view="reactflow" class="diagram-mode-btn">Attack paths</button>
       </div>
       <form class="cloud-arch-form" id="cloud-arch-form">
-        <input class="cloud-arch-input" id="subscription-input" name="sub" list="cloud-arch-subscription-options" value="{{ initial_subscription }}" placeholder="Subscription name" autocomplete="off" />
+        <div class="cloud-arch-combobox">
+          <input class="cloud-arch-input" id="subscription-input" name="sub" value="{{ initial_subscription }}"
+            placeholder="Choose a subscription" autocomplete="off" role="combobox"
+            aria-label="Search subscriptions" aria-autocomplete="list"
+            aria-controls="cloud-arch-subscription-options" aria-expanded="false" />
+          <div class="cloud-arch-subscription-dropdown" id="cloud-arch-subscription-options"
+            role="listbox" aria-label="Subscriptions" hidden>
+            {% for sub in subscription_options or [] %}
+              <div class="cloud-arch-subscription-option" id="cloud-arch-subscription-option-{{ loop.index0 }}"
+                role="option" data-value="{{ sub.display_name }}"
+                data-search="{{ sub.display_name }} {{ sub.environment or '' }}">
+                {{ sub.display_name }}{% if sub.environment %} ({{ sub.environment }}){% endif %}
+              </div>
+            {% endfor %}
+            <div class="cloud-arch-subscription-empty" hidden>No subscriptions found</div>
+          </div>
+        </div>
         <button class="btn-diagram" type="submit">Load architecture</button>
       </form>
-      <div id="ingress-diagram-div-target-filter" hidden style="display:inline-flex; align-items:center; gap:6px; padding:4px 8px; border:1px solid var(--border); border-radius:999px; background:var(--bg-base); color:var(--text-muted); font-size:0.75rem;">Target filter</div>
     </header>
 
     <main class="cloud-arch-main">
@@ -931,12 +1000,6 @@
     </main>
   </div>
 
-  <datalist id="cloud-arch-subscription-options">
-    {% for sub in subscription_options or [] %}
-      <option value="{{ sub.display_name }}">{{ sub.display_name }}{% if sub.environment %} ({{ sub.environment }}){% endif %}</option>
-    {% endfor %}
-  </datalist>
-
   <!-- Component Detail Modal -->
   <div class="cloud-arch-modal-overlay" id="cloud-arch-modal-overlay" hidden>
     <div class="cloud-arch-modal">
@@ -961,6 +1024,94 @@
       initialSubscription: {{ initial_subscription|tojson }},
       initialViewMode: {{ initial_view_mode|tojson }},
     };
+  </script>
+  <script>
+    (function () {
+      const input = document.getElementById('subscription-input');
+      const dropdown = document.getElementById('cloud-arch-subscription-options');
+      if (!input || !dropdown) return;
+
+      const options = Array.from(dropdown.querySelectorAll('[role="option"]'));
+      const empty = dropdown.querySelector('.cloud-arch-subscription-empty');
+      let activeIndex = -1;
+
+      const visibleOptions = () => options.filter((option) => !option.hidden);
+
+      const setActive = (option) => {
+        options.forEach((item) => item.classList.toggle('is-active', item === option));
+        activeIndex = option ? visibleOptions().indexOf(option) : -1;
+        if (option) {
+          input.setAttribute('aria-activedescendant', option.id);
+          option.scrollIntoView({ block: 'nearest' });
+        } else {
+          input.removeAttribute('aria-activedescendant');
+        }
+      };
+
+      const openDropdown = () => {
+        dropdown.hidden = false;
+        input.setAttribute('aria-expanded', 'true');
+      };
+
+      const closeDropdown = () => {
+        dropdown.hidden = true;
+        input.setAttribute('aria-expanded', 'false');
+        setActive(null);
+      };
+
+      const filterOptions = () => {
+        const query = input.value.trim().toLowerCase();
+        let matches = 0;
+        options.forEach((option) => {
+          option.hidden = !String(option.dataset.search || '').toLowerCase().includes(query);
+          if (!option.hidden) matches += 1;
+        });
+        empty.hidden = matches !== 0;
+        setActive(null);
+      };
+
+      const selectOption = (option) => {
+        input.value = option.dataset.value || option.textContent.trim();
+        closeDropdown();
+      };
+
+      input.addEventListener('focus', () => {
+        options.forEach((option) => { option.hidden = false; });
+        empty.hidden = options.length !== 0;
+        input.select();
+        setActive(null);
+        openDropdown();
+      });
+      input.addEventListener('input', () => {
+        filterOptions();
+        openDropdown();
+      });
+      input.addEventListener('keydown', (event) => {
+        const visible = visibleOptions();
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          event.preventDefault();
+          openDropdown();
+          const direction = event.key === 'ArrowDown' ? 1 : -1;
+          const nextIndex = activeIndex < 0
+            ? (direction > 0 ? 0 : visible.length - 1)
+            : Math.max(0, Math.min(visible.length - 1, activeIndex + direction));
+          setActive(visible[nextIndex] || null);
+        } else if (event.key === 'Enter' && activeIndex >= 0) {
+          event.preventDefault();
+          selectOption(visible[activeIndex]);
+        } else if (event.key === 'Escape') {
+          closeDropdown();
+        }
+      });
+
+      options.forEach((option) => {
+        option.addEventListener('mousedown', (event) => event.preventDefault());
+        option.addEventListener('click', () => selectOption(option));
+      });
+      document.addEventListener('click', (event) => {
+        if (!dropdown.parentElement.contains(event.target)) closeDropdown();
+      });
+    })();
   </script>
   <script src="/static/vendor/react.production.min.js"></script>
   <script src="/static/vendor/react-dom.production.min.js"></script>
@@ -1001,23 +1152,6 @@
       await import('/static/js/cloud-architecture-mermaid.js?v=16');
     }
     import('/static/js/cloud-architecture-reactflow.js?v=16');
-  </script>
-  <script>
-    (function () {
-      const host = document.getElementById('subscription-diagram-mode-host');
-      const targetFilter = document.getElementById('ingress-diagram-div-target-filter');
-      if (!host || !targetFilter) return;
-      const sync = (mode) => {
-        targetFilter.hidden = mode !== 'reactflow';
-      };
-      host.querySelectorAll('[data-cloud-arch-view]').forEach((btn) => {
-        btn.addEventListener('click', () => sync(btn.getAttribute('data-cloud-arch-view') || ''));
-      });
-      const active = host.querySelector('.is-active');
-      if (active) {
-        sync(active.getAttribute('data-cloud-arch-view') || '');
-      }
-    })();
   </script>
 </body>
 </html>

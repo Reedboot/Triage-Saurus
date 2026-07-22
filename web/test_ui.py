@@ -2455,6 +2455,67 @@ class TestIngressDiagramGeneration:
         assert "example-api-uksouth.azure-api.net" in mermaid, mermaid
         assert mermaid.index("Network: prod-vnet") < mermaid.index("Subnet: api-subnet") < mermaid.index("grp_APIM_Public"), mermaid
 
+    def test_apim_apis_inherit_parent_subnet(self):
+        """APIM-hosted APIs should render inside the parent APIM subnet."""
+        import json
+
+        rows = [
+            (
+                "apim-marketlane-edge",
+                "Microsoft.ApiManagement/service",
+                "rg-marketlane-edge",
+                "apim-marketlane.azure-api.net",
+                1,
+                "Developer",
+                "apim-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({
+                    "_extra": {
+                        "vnet_name": "vnet-marketlane-edge",
+                        "vnet_resource_group": "rg-marketlane-network",
+                        "subnet_name": "snet-apim",
+                        "subnet_id": "/subscriptions/sub/resourceGroups/rg-marketlane-network/providers/Microsoft.Network/virtualNetworks/vnet-marketlane-edge/subnets/snet-apim",
+                    }
+                }),
+                None,
+                None,
+            ),
+        ]
+        apim_api_rows = [
+            {
+                "apim_name": "apim-marketlane-edge",
+                "apim_resource_id": "apim-id",
+                "api_name": "catalog-marketlane",
+                "api_display_name": "Catalog API",
+                "api_path": "catalog",
+            },
+            {
+                "apim_name": "apim-marketlane-edge",
+                "apim_resource_id": "apim-id",
+                "api_name": "orders-marketlane",
+                "api_display_name": "Orders API",
+                "api_path": "orders",
+            },
+        ]
+
+        result = self._call(rows=rows, apim_api_rows=apim_api_rows)
+        mermaid = result.get("mermaid", "")
+        lines = mermaid.splitlines()
+        catalog_line = next(line for line in lines if "Catalog API</div>" in line)
+        orders_line = next(line for line in lines if "Orders API</div>" in line)
+
+        assert "Network: vnet-marketlane-edge" in mermaid, mermaid
+        assert "Subnet: snet-apim" in mermaid, mermaid
+        assert catalog_line.startswith("            "), mermaid
+        assert orders_line.startswith("            "), mermaid
+        assert "Azure (no VNet integration)" not in mermaid, mermaid
+        assert mermaid.count(" --> grp_APIM_Public") == 2, mermaid
+        assert "hosted in" not in mermaid, mermaid
+
     def test_apim_api_links_as_hosted_instead_of_routing(self):
         """APIM API nodes should not render a misleading Routing edge to the gateway host."""
         import json
@@ -2517,7 +2578,8 @@ class TestIngressDiagramGeneration:
             if value.get("arm_type") == "Microsoft.ApiManagement/service"
         )
         assert "Catalog API" in mermaid, mermaid
-        assert 'Catalog API -->|"hosted in"| grp_APIM_Public' in mermaid or "hosted in" in mermaid, mermaid
+        assert " --> grp_APIM_Public" in mermaid, mermaid
+        assert "hosted in" not in mermaid, mermaid
         assert 'Catalog API -->|"Routing"| grp_APIM_Public' not in mermaid, mermaid
         assert apim_node.get("title") == "APIM", apim_node
         assert api_node.get("icon_path", "").endswith("api-center.svg"), api_node
@@ -7997,7 +8059,8 @@ class TestCloudPosture:
                 id TEXT PRIMARY KEY,
                 display_name TEXT,
                 environment TEXT,
-                state TEXT
+                state TEXT,
+                last_synced TEXT
             )
             """
         )
@@ -8012,8 +8075,12 @@ class TestCloudPosture:
         resp = client.get("/cloud/architecture?sub=sub-1")
         assert resp.status_code == 200
         html = resp.get_data(as_text=True)
-        assert "Mermaid" in html
-        assert "React Flow" in html
+        assert 'role="combobox"' in html
+        assert 'role="listbox"' in html
+        assert "Test Subscription (production)" in html
+        assert "ingress-diagram-div-target-filter" not in html
+        assert "Overview" in html
+        assert "Attack paths" in html
         assert "Miro" not in html
 
     def test_api_cloud_resource_details_handles_nsg_null_sku(self, monkeypatch):

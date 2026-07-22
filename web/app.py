@@ -22531,6 +22531,44 @@ def _build_ingress_diagram(
               or "cache/redis" in type_key or "search/search" in type_key or "appconfiguration" in type_key):
             data_stores.append(item)
 
+    # APIM APIs are synthetic child resources and do not carry independent network
+    # configuration. Place them with their parent APIM service so they render inside
+    # the same VNet/subnet boundary rather than in the generic Azure backbone.
+    apim_by_name = {
+        str(item.get("name") or "").strip().lower(): item
+        for item in api_layer
+        if str(item.get("name") or "").strip()
+    }
+    for api_item in entry_points:
+        if "apim api" not in str(api_item.get("type") or "").lower():
+            continue
+        parent_name = ""
+        raw_json = api_item.get("raw_json")
+        try:
+            parsed_raw = json.loads(raw_json) if isinstance(raw_json, str) else (raw_json or {})
+        except json.JSONDecodeError:
+            parsed_raw = {}
+        if isinstance(parsed_raw, dict):
+            extra = parsed_raw.get("_extra") or {}
+            if isinstance(extra, dict):
+                parent_name = str(extra.get("apim_name") or "").strip().lower()
+        if not parent_name:
+            parent_name = next(
+                (
+                    str(target.get("target") or target.get("name") or "").strip().lower()
+                    for target in api_item.get("routing_targets") or []
+                    if isinstance(target, dict)
+                    and str(target.get("target") or target.get("name") or "").strip()
+                ),
+                "",
+            )
+        parent_apim = apim_by_name.get(parent_name)
+        if not parent_apim:
+            continue
+        for field in ("vnet_name", "vnet_resource_group", "subnet_name", "subnet_id"):
+            if parent_apim.get(field):
+                api_item[field] = parent_apim[field]
+
     backends = _shared_subscription_apply_plan_hierarchy(backends, plan_links)
 
     # Propagate VNet/subnet info from ASE items to their hosted App Service Plans.
@@ -24701,6 +24739,8 @@ def _build_ingress_diagram(
 
     def _entry_route_label(entry: dict) -> str:
         entry_type = str(entry.get("arm_type") or entry.get("type") or "").lower()
+        if "apim api" in entry_type:
+            return ""
         if "loadbalancer" in entry_type:
             return "Load balancing"
         if "trafficmanager" in entry_type:
@@ -24978,7 +25018,10 @@ def _build_ingress_diagram(
                 edge_label = f"⚠️ Cross-VNet: {base_label}"
             else:
                 edge_label = base_label
-            _add_link(f'    {entry_nid} -->|"{edge_label}"| {target_nid}', "orange")
+            if edge_label:
+                _add_link(f'    {entry_nid} -->|"{edge_label}"| {target_nid}', "orange")
+            else:
+                _add_link(f"    {entry_nid} --> {target_nid}", "orange")
 
     for api in shown_api:
         api_nid = _get_node_id(api)
@@ -25143,8 +25186,9 @@ def _build_ingress_diagram(
             if entry_nid != api_nid:
                 entry_type_lc = str(entry.get("type") or entry.get("arm_type") or "").lower()
                 if "apim api" in entry_type_lc:
-                    routing_label = '"hosted in"'
-                _add_link(f'    {entry_nid} -->|{routing_label}| {api_nid}', "orange")
+                    _add_link(f"    {entry_nid} --> {api_nid}", "orange")
+                else:
+                    _add_link(f'    {entry_nid} -->|{routing_label}| {api_nid}', "orange")
 
     # Entry Points → Backends (orange — fallback when no APIM; Traffic Manager, App Gateway, etc.)
     # Without APIM, entry points route directly to backend services. Traffic Manager specifically
