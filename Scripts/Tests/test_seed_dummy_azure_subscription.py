@@ -204,7 +204,21 @@ def test_seed_dummy_azure_subscription_populates_cozo(tmp_path):
             ),
         ]
         assert conn.execute("SELECT COUNT(*) FROM apim_backends").fetchone()[0] == 2
-        assert conn.execute("SELECT COUNT(*) FROM apim_api_operations").fetchone()[0] >= 4
+        apim_operations = conn.execute(
+            """
+            SELECT api_name, operation_id, method, url_template
+            FROM apim_api_operations
+            ORDER BY api_name, operation_id
+            """
+        ).fetchall()
+        assert [tuple(row) for row in apim_operations] == [
+            ("catalog-marketlane", "get-item", "GET", "/items/{itemId}"),
+            ("catalog-marketlane", "list-items", "GET", "/items"),
+            ("catalog-marketlane", "search-items", "GET", "/items/search"),
+            ("orders-marketlane", "cancel-order", "POST", "/orders/{orderId}/cancel"),
+            ("orders-marketlane", "create-order", "POST", "/orders"),
+            ("orders-marketlane", "get-order", "GET", "/orders/{orderId}"),
+        ]
 
         text_blobs = " ".join(
             " ".join(str(row[col]) for col in ("name", "resource_group", "fqdn"))

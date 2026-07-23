@@ -1734,10 +1734,89 @@ def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: s
             f"https://orders.{brand}-retail.internal/",
         )
 
-        _upsert_apim_operation(conn, subscription_id, f"apim-{brand}-edge", f"catalog-{brand}", "Catalog API", "catalog", f"https://store.{brand}-retail.azurewebsites.net", "list-items", "List items", "GET", "/items")
-        _upsert_apim_operation(conn, subscription_id, f"apim-{brand}-edge", f"catalog-{brand}", "Catalog API", "catalog", f"https://store.{brand}-retail.azurewebsites.net", "get-item", "Get item", "GET", "/items/{itemId}")
-        _upsert_apim_operation(conn, subscription_id, f"apim-{brand}-edge", f"orders-{brand}", "Orders API", "orders", f"https://orders.{brand}-retail.internal/", "create-order", "Create order", "POST", "/orders")
-        _upsert_apim_operation(conn, subscription_id, f"apim-{brand}-edge", f"orders-{brand}", "Orders API", "orders", f"https://orders.{brand}-retail.internal/", "cancel-order", "Cancel order", "POST", "/orders/{orderId}/cancel")
+        apim_operations = [
+            (
+                f"catalog-{brand}",
+                "Catalog API",
+                "catalog",
+                f"https://store.{brand}-retail.azurewebsites.net",
+                "list-items",
+                "List items",
+                "GET",
+                "/items",
+                "Browse the full product catalog",
+            ),
+            (
+                f"catalog-{brand}",
+                "Catalog API",
+                "catalog",
+                f"https://store.{brand}-retail.azurewebsites.net",
+                "get-item",
+                "Get item",
+                "GET",
+                "/items/{itemId}",
+                "Fetch a single catalog item by ID",
+            ),
+            (
+                f"catalog-{brand}",
+                "Catalog API",
+                "catalog",
+                f"https://store.{brand}-retail.azurewebsites.net",
+                "search-items",
+                "Search items",
+                "GET",
+                "/items/search",
+                "Search the catalog by keyword or category",
+            ),
+            (
+                f"orders-{brand}",
+                "Orders API",
+                "orders",
+                f"https://orders.{brand}-retail.internal/",
+                "create-order",
+                "Create order",
+                "POST",
+                "/orders",
+                "Create a new customer order",
+            ),
+            (
+                f"orders-{brand}",
+                "Orders API",
+                "orders",
+                f"https://orders.{brand}-retail.internal/",
+                "get-order",
+                "Get order",
+                "GET",
+                "/orders/{orderId}",
+                "Look up the status of an existing order",
+            ),
+            (
+                f"orders-{brand}",
+                "Orders API",
+                "orders",
+                f"https://orders.{brand}-retail.internal/",
+                "cancel-order",
+                "Cancel order",
+                "POST",
+                "/orders/{orderId}/cancel",
+                "Cancel a pending order",
+            ),
+        ]
+        for api_name, api_display_name, api_path, backend_url, operation_id, display_name, method, url_template, description in apim_operations:
+            _upsert_apim_operation(
+                conn,
+                subscription_id,
+                f"apim-{brand}-edge",
+                api_name,
+                api_display_name,
+                api_path,
+                backend_url,
+                operation_id,
+                display_name,
+                method,
+                url_template,
+                description,
+            )
 
         _upsert_aks_route(
             conn,
