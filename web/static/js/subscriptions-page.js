@@ -70,6 +70,81 @@
     return `<span${style ? ` style="${escapeHtml(style)}"` : ''}>${renderCellValue(label)}</span>`;
   }
 
+  function renderAksIngressServices(response) {
+    const services = Array.isArray(response?.ingress_services)
+      ? response.ingress_services.filter((service) => service && (service.name || service.service_name))
+      : [];
+    if (!services.length) {
+      return '<div style="color:var(--text-muted);">No drill-down details returned.</div>';
+    }
+
+    const grouped = new Map();
+    for (const service of services) {
+      const namespace = String(service.namespace || '—').trim() || '—';
+      const key = namespace.toLowerCase();
+      if (!grouped.has(key)) {
+        grouped.set(key, { namespace, rows: [] });
+      }
+      grouped.get(key).rows.push(service);
+    }
+
+    const renderRow = (service) => {
+      const name = String(service.name || service.service_name || '—').trim() || '—';
+      const ingress = String(service.ingress_name || service.host || '—').trim() || '—';
+      const host = String(service.host || '').trim();
+      const ingressLabel = host && host !== ingress
+        ? `${escapeHtml(ingress)}<br/><code>${escapeHtml(host)}</code>`
+        : escapeHtml(ingress);
+      const path = String(service.path || '—').trim() || '—';
+      const port = String(service.port ?? '—').trim() || '—';
+      const searchText = [service.namespace, name, ingress, host, path, port]
+        .map((value) => String(value || '').toLowerCase())
+        .join(' ');
+      return `
+        <tr data-aks-ingress-row data-search-text="${escapeHtml(searchText)}" style="border-bottom:1px solid var(--border);">
+          <td style="padding:8px 10px;vertical-align:top;"><strong>${escapeHtml(name)}</strong></td>
+          <td style="padding:8px 10px;vertical-align:top;">${ingressLabel}</td>
+          <td style="padding:8px 10px;vertical-align:top;"><code>${escapeHtml(path)}</code></td>
+          <td style="padding:8px 10px;vertical-align:top;">${escapeHtml(port)}</td>
+        </tr>
+      `;
+    };
+
+    const groups = Array.from(grouped.values()).sort((a, b) => a.namespace.localeCompare(b.namespace));
+    return `
+      <div style="margin-top:12px;">
+        <div style="margin-bottom:10px;">
+          <input
+            type="search"
+            data-aks-ingress-search
+            placeholder="Filter namespaces, services, hosts, or paths…"
+            style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-base);color:var(--text);"
+          />
+        </div>
+        <div style="overflow:auto;border:1px solid var(--border);border-radius:8px;">
+          ${groups.map((group, index) => `
+            <details data-aks-ingress-group${index === 0 ? ' open' : ''} style="border-bottom:1px solid var(--border);">
+              <summary style="cursor:pointer;list-style:none;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--bg-base);">
+                <span><strong>${escapeHtml(group.namespace)}</strong></span>
+                <span style="color:var(--text-muted);font-size:0.8rem;">${group.rows.length} service${group.rows.length === 1 ? '' : 's'}</span>
+              </summary>
+              <div style="overflow:auto;">
+                <table style="width:100%;border-collapse:collapse;font-size:0.84rem;">
+                  <thead>
+                    <tr>
+                      ${['Service', 'Ingress / Host', 'Path', 'Port'].map((column) => `<th style="padding:8px 10px;text-align:left;background:var(--bg-base);border-bottom:1px solid var(--border);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.03em;color:var(--text-muted);">${escapeHtml(column)}</th>`).join('')}
+                    </tr>
+                  </thead>
+                  <tbody>${group.rows.map(renderRow).join('')}</tbody>
+                </table>
+              </div>
+            </details>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+
   function buildTreeRows(rows, parentId = null, collapseChildren = false) {
     return rows
       .filter((row) => String(row?.parent_id ?? '') === String(parentId ?? ''))
@@ -125,7 +200,9 @@
     const rows = Array.isArray(response?.rows) ? response.rows : [];
     const sections = Array.isArray(response?.sections) ? response.sections : [];
     let table = '<div style="color:var(--text-muted);">No drill-down details returned.</div>';
-    if (String(response?.view_type || '').toLowerCase() === 'tree_table' && sections.length) {
+    if (Array.isArray(response?.ingress_services) && response.ingress_services.length) {
+      table = renderAksIngressServices(response);
+    } else if (String(response?.view_type || '').toLowerCase() === 'tree_table' && sections.length) {
       table = sections.map((section) => `
         <div style="margin-top:16px;">
           <div style="font-weight:700;color:var(--text);margin-bottom:6px;">${escapeHtml(section?.title || '')}</div>
@@ -174,12 +251,45 @@
         }
       });
     });
+    const aksSearch = drilldownModalBody.querySelector('[data-aks-ingress-search]');
+    const aksRows = Array.from(drilldownModalBody.querySelectorAll('[data-aks-ingress-row]'));
+    const aksGroups = Array.from(drilldownModalBody.querySelectorAll('[data-aks-ingress-group]'));
+    if (aksSearch && aksRows.length && aksGroups.length) {
+      const updateAksSearch = () => {
+        const query = String(aksSearch.value || '').trim().toLowerCase();
+        for (const group of aksGroups) {
+          let visible = 0;
+          const groupRows = Array.from(group.querySelectorAll('[data-aks-ingress-row]'));
+          for (const row of groupRows) {
+            const searchText = String(row.dataset.searchText || '').toLowerCase();
+            const show = !query || searchText.includes(query);
+            row.hidden = !show;
+            if (show) visible += 1;
+          }
+          group.hidden = visible === 0;
+          if (query) {
+            group.open = visible > 0;
+          }
+        }
+      };
+      aksSearch.addEventListener('input', updateAksSearch);
+      updateAksSearch();
+    }
   }
 
   async function openNodeDrilldown(nodeId, nodeData) {
     if (!currentSubscriptionId) return;
-    const resp = await fetch(`/${encodeURIComponent(currentSubscriptionId)}/drilldown`, {
-      headers: { Accept: 'application/json' },
+    const resp = await fetch(`/api/subscriptions/${encodeURIComponent(currentSubscriptionId)}/drilldown`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        arm_type: nodeData?.arm_type || nodeData?.resourceType || nodeData?.type || '',
+        resources: Array.isArray(nodeData?.resources) ? nodeData.resources : [],
+        node: nodeData || currentNodeDrilldownMap[nodeId] || {},
+      }),
     });
     const data = await resp.json();
     renderDrilldownModal(nodeData || currentNodeDrilldownMap[nodeId] || {}, data);

@@ -593,8 +593,6 @@ def _fetch_api_bundle(
         service_url,
         backend_lookup,
     )
-    if not api_backend_url and not backend_id:
-        return None, []
 
     api_display = safe_str(props.get("displayName") or api.get("displayName") or api_name)
     api_path = safe_str(props.get("path") or api.get("path"))
@@ -1007,7 +1005,7 @@ def harvest_routes(
                 )
                 continue
 
-            if not dry_run:
+            if not dry_run and route_rows:
                 conn.execute(
                     "DELETE FROM apim_api_routes WHERE subscription_id = ? AND apim_name = ?",
                     (subscription_id, apim_name),
@@ -1060,6 +1058,7 @@ def harvest_routes(
                             route["last_synced"],
                         ),
                     )
+            if not dry_run and operation_rows:
                 conn.execute(
                     "DELETE FROM apim_api_operations WHERE subscription_id = ? AND apim_name = ?",
                     (subscription_id, apim_name),
@@ -1109,6 +1108,7 @@ def harvest_routes(
                             row["last_synced"],
                         ),
                     )
+            if not dry_run and (route_rows or operation_rows):
                 conn.commit()
 
             total += len(route_rows)

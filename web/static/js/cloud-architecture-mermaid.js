@@ -707,7 +707,7 @@ function normalizeIconClass(resourceType, providerKey = "azure") {
       return "icon-azurerm-aks";
     }
     if (rawType.includes("microsoft.kubernetes/services") || rawType.includes("kubernetes service")) {
-      return "icon-azurerm-aks";
+      return "icon-azurerm-kubernetes-service";
     }
   }
 
@@ -2107,53 +2107,6 @@ function buildTrafficFlowSection(data) {
     </div>`;
 }
 
-function buildAksIngressServicesSection(data) {
-  const services = Array.isArray(data?.ingress_services)
-    ? data.ingress_services.filter((service) => service && (service.name || service.service_name))
-    : [];
-  if (!services.length) return "";
-
-  return `
-    <div class="cloud-arch-modal-section">
-      <div class="cloud-arch-modal-section-title">
-        <span class="cloud-arch-modal-section-icon">🌐</span>
-        Services with Ingress
-      </div>
-      <div style="overflow:auto;border:1px solid var(--border);border-radius:8px;">
-        <table style="width:100%;border-collapse:collapse;font-size:0.84rem;">
-          <thead>
-            <tr>
-              ${["Namespace", "Service", "Ingress / Host", "Path", "Port"].map(
-                (column) => `<th style="padding:8px 10px;text-align:left;background:var(--bg-base);border-bottom:1px solid var(--border);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.03em;color:var(--text-muted);">${escapeHtml(column)}</th>`
-              ).join("")}
-            </tr>
-          </thead>
-          <tbody>
-            ${services.map((service) => {
-              const name = firstNonEmpty(service.name, service.service_name, "—");
-              const namespace = firstNonEmpty(service.namespace, "—");
-              const ingress = firstNonEmpty(service.ingress_name, service.host, "—");
-              const host = firstNonEmpty(service.host);
-              const ingressLabel = host && host !== ingress
-                ? `${escapeHtml(ingress)}<br/><code>${escapeHtml(host)}</code>`
-                : escapeHtml(ingress);
-              return `
-                <tr style="border-bottom:1px solid var(--border);">
-                  <td style="padding:8px 10px;vertical-align:top;"><code>${escapeHtml(namespace)}</code></td>
-                  <td style="padding:8px 10px;vertical-align:top;"><strong>${escapeHtml(name)}</strong></td>
-                  <td style="padding:8px 10px;vertical-align:top;">${ingressLabel}</td>
-                  <td style="padding:8px 10px;vertical-align:top;"><code>${escapeHtml(firstNonEmpty(service.path, "—"))}</code></td>
-                  <td style="padding:8px 10px;vertical-align:top;">${escapeHtml(firstNonEmpty(String(service.port ?? ""), "—"))}</td>
-                </tr>
-              `;
-            }).join("")}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  `;
-}
-
 function renderTabularModalContent(data) {
   if (!modalOverlay || !modalTitle || !modalBody) return;
   modalOverlay.hidden = false;
@@ -2512,16 +2465,6 @@ function renderModalContent(data) {
   if (subnet) networkFields.push({ label: "Subnet", value: escapeHtml(subnet) });
   if (networkFields.length > 0) {
     sections.push({ title: "Network", icon: "🌐", fields: networkFields });
-  }
-
-  const aksIngressServicesSection = buildAksIngressServicesSection(data);
-  if (aksIngressServicesSection) {
-    sections.push({
-      title: "",
-      icon: "",
-      fields: [],
-      __rawHtml: aksIngressServicesSection,
-    });
   }
 
   const apimBackendsSection = isApimServiceDetails(data) ? buildApimBackendsSection(data) : "";

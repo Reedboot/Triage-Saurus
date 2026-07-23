@@ -74,7 +74,7 @@ export function normalizeIconClass(resourceType, providerKey = "azure") {
       return "icon_azurerm_aks_azure";
     }
     if (rawType.includes("microsoft.kubernetes/services") || rawType.includes("kubernetes service")) {
-      return "icon_azurerm_aks_azure";
+      return "icon_azurerm_kubernetes_service_azure";
     }
   }
   const key = normalizeResourceTypeKey(resourceType);

@@ -1229,9 +1229,12 @@ def get_icon_path(resource_type: str, provider: str = 'azure') -> Optional[Path]
         mapping = KUBERNETES_RESOURCE_TYPE_TO_ICON
         if rtype in mapping:
             category, icon_name = mapping[rtype]
-            # Kubernetes icons live in icons/kubernetes/
-            icon_file = ICONS_ROOT / category / f"{icon_name}.svg"
-            if icon_file.exists():
+            if rtype == "kubernetes_service":
+                icon_file = _find_icon_file("containers", "kubernetes-service", "azure")
+            else:
+                # Kubernetes icons live in icons/kubernetes/
+                icon_file = ICONS_ROOT / category / f"{icon_name}.svg"
+            if icon_file and icon_file.exists():
                 return icon_file
         return None
     else:
@@ -1246,8 +1249,11 @@ def get_icon_path(resource_type: str, provider: str = 'azure') -> Optional[Path]
             mapping = KUBERNETES_RESOURCE_TYPE_TO_ICON
             if rtype in mapping:
                 category, icon_name = mapping[rtype]
-                icon_file = ICONS_ROOT / category / f"{icon_name}.svg"
-                if icon_file.exists():
+                if rtype == "kubernetes_service":
+                    icon_file = _find_icon_file("containers", "kubernetes-service", "azure")
+                else:
+                    icon_file = ICONS_ROOT / category / f"{icon_name}.svg"
+                if icon_file and icon_file.exists():
                     return icon_file
             return None
         elif rtype in OTHER_RESOURCE_TYPE_TO_ICON:
@@ -1401,6 +1407,16 @@ def build_icon_map_bulk(provider: str = 'azure') -> dict:
         # contains both providers and synthetic keys, so filter by key prefix.
         if provider in {"alicloud", "oci"} and not resource_type.startswith(f"{provider}_"):
             continue
+
+        if provider == "kubernetes" and resource_type == "kubernetes_service":
+            icon_file = _find_icon_file("containers", "kubernetes-service", "azure")
+            if icon_file:
+                try:
+                    rel_path = icon_file.relative_to(web_root)
+                    icon_map[resource_type] = f"/{rel_path.as_posix()}"
+                    continue
+                except Exception:
+                    pass
 
         icon_name_lower = icon_name.lower()
         if '/' in icon_name_lower:

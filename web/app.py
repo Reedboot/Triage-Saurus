@@ -20453,7 +20453,7 @@ _SUBSCRIPTION_DIAGRAM_CACHE: dict[str, tuple[float, str, dict]] = {}
 _SUBSCRIPTION_DIAGRAM_CACHE_TTL = 600  # 10 minutes
 # Bump this whenever diagram rendering logic changes (listener icons, pool icons, edge labels, etc.)
 # so the DB cache is automatically invalidated for all subscriptions.
-_DIAGRAM_CODE_VERSION = "v35"  # APIM service now wraps its API hierarchy inside the subnet container
+_DIAGRAM_CODE_VERSION = "v36"  # SF cluster diagrams now render VMSS containment edges
 
 
 def _subscription_diagram_cache_signature(conn, sub_id: str) -> tuple[str | None, tuple[str, str] | None]:
@@ -21439,7 +21439,7 @@ def _get_icon_path(resource_type: str) -> str | None:
             rtype_normalized = "kubernetes_ingress"
             provider = "kubernetes"
         elif rtype_lower in ("microsoft.kubernetes/services", "kubernetes_service", "kubernetes service"):
-            rtype_normalized = "azurerm_aks"
+            rtype_normalized = "azurerm_kubernetes_service"
             provider = "azure"
         elif rtype_lower in arm_to_icon_map:
             rtype_normalized = arm_to_icon_map[rtype_lower]
@@ -21569,7 +21569,7 @@ def _get_icon_class(resource_type: str) -> str:
         if rtype_lower == "microsoft.kubernetes/ingresses":
             rtype_normalized = "kubernetes_ingress"
         elif rtype_lower in ("microsoft.kubernetes/services", "kubernetes_service", "kubernetes service"):
-            rtype_normalized = "azurerm_aks"
+            rtype_normalized = "azurerm_kubernetes_service"
         elif rtype_lower in arm_to_icon_map:
             rtype_normalized = arm_to_icon_map[rtype_lower]
         elif rtype_lower.startswith("microsoft."):
@@ -21605,6 +21605,7 @@ _SUBSCRIPTION_DRILLABLE_ARM_TYPES = {
     "microsoft.storage/storageaccounts",
     "microsoft.sql/servers",
     "microsoft.containerservice/managedclusters",
+    "microsoft.servicefabric/clusters",
     "microsoft.documentdb/databaseaccounts",
     "microsoft.web/sites",
     "microsoft.web/serverfarms",
@@ -26946,6 +26947,7 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list, node: 
             "is_public": bool(_row_value(row, "is_public")),
             "is_restricted": bool(_row_value(row, "is_restricted")),
             "waf_mode": _row_value(row, "waf_mode"),
+            "raw_json": _row_value(row, "raw_json"),
             "icon_path": _get_icon_path(parent_type),
         }
 
@@ -27453,6 +27455,67 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list, node: 
                 "🔑 Required" if req_sub else "Open",
                 protocols or "HTTPS",
             ])
+        return _table_result(title=title, columns=columns, rows=rows)
+
+    # ── Service Fabric cluster → VM Scale Set node types ─────────────────────
+    if "servicefabric/clusters" in arm_type_lc:
+        title = "Service Fabric — Node Types"
+        columns = ["Node Type", "VM Scale Set", "Size", "Instances", "Primary"]
+
+        cluster_row = parent_resource
+        node_types: list[dict[str, object]] = []
+        try:
+            raw_text = str(cluster_row.get("raw_json") or "").strip()
+            raw_json = json.loads(raw_text) if raw_text else {}
+        except Exception:
+            raw_json = {}
+        for node_type in raw_json.get("nodeTypes") or []:
+            if not isinstance(node_type, dict):
+                continue
+            name = str(node_type.get("name") or "").strip()
+            if not name:
+                continue
+            node_types.append({
+                "name": name,
+                "isPrimary": bool(node_type.get("isPrimary")),
+                "vmInstanceCount": node_type.get("vmInstanceCount"),
+                "vmSize": node_type.get("vmSize"),
+            })
+
+        cluster_rg = str(cluster_row.get("resource_group") or "").strip()
+        vmss_rows = conn.execute(
+            """
+            SELECT name, sku, raw_json
+            FROM provisioned_assets
+            WHERE subscription_id = ?
+              AND LOWER(resource_group) = LOWER(?)
+              AND LOWER(type) LIKE '%virtualmachinescalesets%'
+            ORDER BY name
+            """,
+            (sub_id, cluster_rg),
+        ).fetchall()
+
+        rows = []
+        for node_type in node_types:
+            vmss_name = str(node_type.get("name") or "").strip()
+            match = next((r for r in vmss_rows if str(r["name"] or "").strip().lower() == vmss_name.lower()), None)
+            if not match:
+                continue
+            rows.append([
+                vmss_name,
+                match["name"] or "—",
+                node_type.get("vmSize") or match["sku"] or "—",
+                node_type.get("vmInstanceCount") or "—",
+                "Yes" if node_type.get("isPrimary") else "No",
+            ])
+
+        if not rows:
+            return _table_result(
+                title=title,
+                columns=columns,
+                rows=[],
+                empty_message="No matching VM scale sets were found for this Service Fabric cluster.",
+            )
         return _table_result(title=title, columns=columns, rows=rows)
 
     # ── AKS cluster → ingress/service/deployment routes ──────────────────────

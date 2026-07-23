@@ -341,6 +341,18 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
         subnet_ids = _extract_subnet_ids(parsed_raw_json)
         return subnet_ids[0] if subnet_ids else None
 
+    def _extract_servicefabric_node_type_names(parsed_raw_json: dict) -> list[str]:
+        if not isinstance(parsed_raw_json, dict):
+            return []
+        names: list[str] = []
+        for node_type in parsed_raw_json.get("nodeTypes") or []:
+            if not isinstance(node_type, dict):
+                continue
+            name = str(node_type.get("name") or "").strip()
+            if name and name not in names:
+                names.append(name)
+        return names
+
     assets: list[dict] = []
     public_ip_assets_by_id: dict[str, dict] = {}
     public_ip_assets_by_name_rg: dict[tuple[str, str], list[dict]] = {}
@@ -409,6 +421,10 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
             public_ip_resource_ids = _extract_public_ip_ids(parsed_raw)
             if public_ip_resource_ids:
                 asset["public_ip_resource_ids"] = public_ip_resource_ids
+            if "servicefabric/clusters" in (rtype or "").lower():
+                node_type_names = _extract_servicefabric_node_type_names(parsed_raw)
+                if node_type_names:
+                    asset["servicefabric_node_type_names"] = node_type_names
             props = parsed_raw.get("properties")
             if isinstance(props, dict):
                 for candidate in (
@@ -793,6 +809,28 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
             asset["parent_vnet_resource_group"] = candidate_ase.get("parent_vnet_resource_group")
         if candidate_ase.get("parent_vnet_id") and not asset.get("parent_vnet_id"):
             asset["parent_vnet_id"] = candidate_ase.get("parent_vnet_id")
+
+    servicefabric_clusters_by_node_type: dict[tuple[str, str], dict] = {}
+    for asset in assets:
+        if "servicefabric/clusters" not in (asset.get("arm_type") or "").lower():
+            continue
+        cluster_rg = (asset.get("rg") or "").lower()
+        for node_type_name in asset.get("servicefabric_node_type_names") or []:
+            node_type_key = (cluster_rg, str(node_type_name or "").strip().lower())
+            servicefabric_clusters_by_node_type[node_type_key] = asset
+
+    for asset in assets:
+        if "virtualmachinescalesets" not in (asset.get("arm_type") or "").lower():
+            continue
+        cluster_asset = servicefabric_clusters_by_node_type.get(((asset.get("rg") or "").lower(), (asset.get("name") or "").lower()))
+        if not cluster_asset:
+            continue
+        asset["servicefabric_cluster_id"] = cluster_asset.get("id")
+        asset["servicefabric_cluster_name"] = cluster_asset.get("name")
+        asset["servicefabric_cluster_resource_group"] = cluster_asset.get("rg")
+        asset["parent_servicefabric_cluster_id"] = cluster_asset.get("id")
+        asset["parent_servicefabric_cluster_name"] = cluster_asset.get("name")
+        asset["parent_servicefabric_cluster_resource_group"] = cluster_asset.get("rg")
 
     visible_assets: list[dict] = []
     for asset in assets:
@@ -1822,6 +1860,35 @@ def build_subscription_diagrams_by_rg(
                 "#64748b",
                 dasharray="6,3",
             )
+
+        servicefabric_clusters: dict[tuple[str, str], dict] = {}
+        servicefabric_vmss_by_cluster: dict[tuple[str, str], list[dict]] = defaultdict(list)
+        for asset in visible_rg_assets:
+            arm_type_low = (asset.get("arm_type") or "").lower()
+            if "servicefabric/clusters" in arm_type_low:
+                cluster_key = ((asset.get("rg") or "").strip().lower(), (asset.get("name") or "").strip().lower())
+                servicefabric_clusters[cluster_key] = asset
+            elif "virtualmachinescalesets" in arm_type_low:
+                cluster_name = str(asset.get("servicefabric_cluster_name") or asset.get("parent_servicefabric_cluster_name") or "").strip().lower()
+                cluster_rg = str(asset.get("servicefabric_cluster_resource_group") or asset.get("parent_servicefabric_cluster_resource_group") or asset.get("rg") or "").strip().lower()
+                if cluster_name:
+                    servicefabric_vmss_by_cluster[(cluster_rg, cluster_name)].append(asset)
+
+        for cluster_key, cluster_asset in servicefabric_clusters.items():
+            cluster_nid = subscription_node_id(cluster_asset, sanitise_node_id)
+            if cluster_nid not in seen_nodes:
+                continue
+            for vmss_asset in servicefabric_vmss_by_cluster.get(cluster_key, []):
+                vmss_nid = subscription_node_id(vmss_asset, sanitise_node_id)
+                if vmss_nid not in seen_nodes:
+                    continue
+                add_edge(
+                    cluster_nid,
+                    vmss_nid,
+                    "contains",
+                    "#64748b",
+                    dasharray="6,3",
+                )
 
         # For cluster-only RGs, connect each cluster to the synthetic APIM context node
         # so it's clear the cluster is not orphaned — it's reachable from the subscription-level APIM.

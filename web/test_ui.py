@@ -1003,7 +1003,7 @@ class TestCloudPage:
             },
         }
         page.route(
-            f"**/{self._SUB_ID}/diagram",
+            f"**/api/subscriptions/{self._SUB_ID}/diagram**",
             lambda route: route.fulfill(
                 content_type="application/json",
                 body=json.dumps({
@@ -1039,7 +1039,7 @@ class TestCloudPage:
         )
 
         page.route(
-            f"**/{self._SUB_ID}/drilldown",
+            f"**/api/subscriptions/{self._SUB_ID}/drilldown**",
             lambda route: route.fulfill(
                 content_type="application/json",
                 body=json.dumps({
@@ -1198,6 +1198,135 @@ class TestCloudPage:
         expect(fqdn_link).to_be_visible(timeout=5000)
         assert fqdn_link.get_attribute("target") == "_blank"
         assert "noopener" in (fqdn_link.get_attribute("rel") or "")
+
+
+class TestCloudPageAksIngressModal:
+    """Playwright coverage for AKS ingress service drill-down grouping and search."""
+
+    _SUB_ID = "aaaaaaaa-bbbb-cccc-dddd-ffffffffffff"
+
+    _MERMAID_AKS = (
+        "graph LR\n"
+        '    test_aks["AKS Cluster"]\n'
+        "    classDef aksCluster stroke:#2563eb,stroke-width:2px;\n"
+        "    class test_aks aksCluster;\n"
+    )
+
+    def _setup_mocks(self, page: Page) -> None:
+        import json
+
+        page.route(
+            "**/api/subscriptions",
+            lambda route: route.fulfill(
+                content_type="application/json",
+                body=json.dumps({
+                    "subscriptions": [{
+                        "id": self._SUB_ID,
+                        "display_name": "AKS Ingress Subscription",
+                        "environment": "production",
+                        "env_badge": "danger",
+                        "provider": "Azure",
+                        "state": "Enabled",
+                        "last_synced": None,
+                        "asset_count": 1,
+                        "public_count": 0,
+                    }]
+                }),
+            ),
+        )
+
+        node_map = {
+            "test_aks": {
+                "title": "aks-prod",
+                "arm_type": "Microsoft.ContainerService/managedClusters",
+                "resources": [{"rg": "rg-aks", "name": "aks-prod"}],
+                "is_group": True,
+                "can_drill": True,
+            }
+        }
+
+        page.route(
+            f"**/{self._SUB_ID}/diagram",
+            lambda route: route.fulfill(
+                content_type="application/json",
+                body=json.dumps({
+                    "subscription_name": "AKS Ingress Subscription",
+                    "environment": "production",
+                    "total_assets": 1,
+                    "ingress_diagram": {
+                        "mermaid": self._MERMAID_AKS,
+                        "css_code": "",
+                        "icon_map": {},
+                        "node_drilldown_map": node_map,
+                        "default_view": "overview",
+                    },
+                    "diagrams": [{
+                        "rg": "rg-aks",
+                        "mermaid": self._MERMAID_AKS,
+                        "css_code": "",
+                        "icon_map": {},
+                        "node_drilldown_map": node_map,
+                        "asset_count": 1,
+                        "public_count": 0,
+                        "relationship_count": 0,
+                        "default_view": "overview",
+                    }],
+                }),
+            ),
+        )
+
+        def _handle_aks_drilldown(route):
+            route.fulfill(
+                content_type="application/json",
+                body=json.dumps({
+                    "title": "AKS Cluster — Services with Ingress",
+                    "ingress_services": [
+                        {
+                            "namespace": "orders",
+                            "name": "orders-api",
+                            "ingress_name": "orders-ingress",
+                            "host": "orders.example.com",
+                            "path": "/api/orders",
+                            "port": "8080",
+                        },
+                        {
+                            "namespace": "payments",
+                            "name": "payments-api",
+                            "ingress_name": "payments-ingress",
+                            "host": "payments.example.com",
+                            "path": "/api/payments",
+                            "port": "8443",
+                        },
+                    ],
+                }),
+            )
+
+        page.route(f"**/api/subscriptions/{self._SUB_ID}/drilldown**", _handle_aks_drilldown)
+
+    def test_aks_ingress_modal_groups_by_namespace_and_searches(self, page: Page, live_server: str):
+        self._setup_mocks(page)
+        page.goto(live_server + "/cloud")
+        page.wait_for_load_state("networkidle")
+        page.wait_for_selector(".subscription-preview-btn", timeout=15000)
+        page.locator(".subscription-preview-btn").first.click()
+        page.wait_for_selector("#ingress-diagram-div svg g.node-drillable", timeout=8000)
+
+        page.locator("#ingress-diagram-div svg g.node-drillable").dblclick()
+
+        expect(page.locator("#drilldown-modal")).to_be_visible(timeout=8000)
+        expect(page.locator("#drilldown-modal [data-aks-ingress-search]")).to_be_visible(timeout=5000)
+        expect(page.locator("#drilldown-modal details[data-aks-ingress-group]")).to_have_count(2)
+        expect(page.locator("#drilldown-modal details[data-aks-ingress-group]").first).to_contain_text("orders")
+        expect(page.locator("#drilldown-modal details[data-aks-ingress-group]").last).to_contain_text("payments")
+        expect(page.locator("#drilldown-modal tr[data-aks-ingress-row]").first).to_contain_text("orders-api")
+
+        search = page.locator("#drilldown-modal [data-aks-ingress-search]")
+        search.fill("payments")
+
+        expect(page.locator("#drilldown-modal tr[data-aks-ingress-row]").nth(0)).to_be_hidden(timeout=5000)
+        expect(page.locator("#drilldown-modal tr[data-aks-ingress-row]").nth(1)).to_be_visible(timeout=5000)
+        expect(page.locator("#drilldown-modal details[data-aks-ingress-group]").first).to_be_hidden(timeout=5000)
+        expect(page.locator("#drilldown-modal details[data-aks-ingress-group]").last).to_be_visible(timeout=5000)
 
     def test_dblclick_opens_generic_resource_details(self, page: Page, live_server: str):
         """Double-clicking a non-special resource node must still open generic details."""
@@ -4407,13 +4536,13 @@ class TestIngressDiagramGeneration:
 
         rows = [
             (
-                "cbuk-core-prodgreen-api-uksouth",
+                "core-api-uksouth",
                 "Microsoft.ApiManagement/service",
                 "rg-api",
-                "cbuk-core-prodgreen-api-uksouth.azure-api.net",
+                "core-api-uksouth.azure-api.net",
                 1,
                 "Developer",
-                "/subscriptions/000/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/cbuk-core-prodgreen-api-uksouth",
+                "/subscriptions/000/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/core-api-uksouth",
                 0,
                 None,
                 0,
@@ -4431,13 +4560,13 @@ class TestIngressDiagramGeneration:
                 None,
             ),
             (
-                "cbuk-core-prodgreen-api-uksouth-prodgreen-eventgrid-bridge",
+                "core-api-uksouth-eventgrid-bridge",
                 "Microsoft.Web/sites",
                 "rg-app",
-                "cbuk-core-prodgreen-api-uksouth-prodgreen-eventgrid-bridge.azurewebsites.net",
+                "core-api-uksouth-eventgrid-bridge.azurewebsites.net",
                 1,
                 "Y1",
-                "/subscriptions/000/resourceGroups/rg-app/providers/Microsoft.Web/sites/cbuk-core-prodgreen-api-uksouth-prodgreen-eventgrid-bridge",
+                "/subscriptions/000/resourceGroups/rg-app/providers/Microsoft.Web/sites/core-api-uksouth-eventgrid-bridge",
                 0,
                 None,
                 0,
@@ -4450,14 +4579,14 @@ class TestIngressDiagramGeneration:
         ]
         apim_backend_rows = [
             {
-                "apim_name": "cbuk-core-prodgreen-api-uksouth",
+                "apim_name": "core-api-uksouth",
                 "backend_id": "prodgreen-eventgrid-bridge",
                 "title": "prodgreen-eventgrid-bridge.internal.cbinnovation.uk",
                 "url": "https://prodgreen-eventgrid-bridge.internal.cbinnovation.uk/",
             }
         ]
         apim_route_map = {
-            "cbuk-core-prodgreen-api-uksouth": [
+            "core-api-uksouth": [
                 "https://prodgreen-eventgrid-bridge.internal.cbinnovation.uk/",
             ]
         }
@@ -4479,7 +4608,7 @@ class TestIngressDiagramGeneration:
         assert "prodgreen-eventgrid-bridge.internal.cbinnovation.uk</div>" in mermaid, mermaid
         assert "rg_api_cbuk_core_prodgreen_api_uksouth__prodgreen_eventgrid_bridge_internal_cbinnovation_uk" in mermaid, mermaid
         assert target.get("title") == "prodgreen-eventgrid-bridge.internal.cbinnovation.uk", target
-        assert target.get("resources", [{}])[0].get("name") == "cbuk-core-prodgreen-api-uksouth::prodgreen-eventgrid-bridge.internal.cbinnovation.uk", target
+        assert target.get("resources", [{}])[0].get("name") == "core-api-uksouth::prodgreen-eventgrid-bridge.internal.cbinnovation.uk", target
 
     def test_marketlane_apim_backend_targets_use_backend_id_and_apim_subnet(self):
         """APIM backend targets should keep the backend id label and inherit APIM subnet placement."""
@@ -10273,7 +10402,7 @@ class TestCloudPosture:
         assert data["parent_resource"]["type_label"] == "Bastion"
         assert data["parent_resource"]["icon_path"]
 
-    def test_kubernetes_service_uses_aks_icon(self):
+    def test_kubernetes_service_uses_kubernetes_service_icon(self):
         import os
         import sys
 
@@ -10286,10 +10415,10 @@ class TestCloudPosture:
         friendly_icon_path = app_module._get_icon_path("Kubernetes Service")
         friendly_icon_class = app_module._get_icon_class("Kubernetes Service")
 
-        assert icon_path and icon_path.endswith("azure/compute/aks.svg"), icon_path
-        assert icon_class == "icon-azurerm-aks", icon_class
-        assert friendly_icon_path and friendly_icon_path.endswith("azure/compute/aks.svg"), friendly_icon_path
-        assert friendly_icon_class == "icon-azurerm-aks", friendly_icon_class
+        assert icon_path and icon_path.endswith("azure/containers/kubernetes-service.svg"), icon_path
+        assert icon_class == "icon-azurerm-kubernetes-service", icon_class
+        assert friendly_icon_path and friendly_icon_path.endswith("azure/containers/kubernetes-service.svg"), friendly_icon_path
+        assert friendly_icon_class == "icon-azurerm-kubernetes-service", friendly_icon_class
 
     def test_api_cloud_resource_details_treats_internal_apim_as_private(self, monkeypatch):
         import json
@@ -10930,7 +11059,7 @@ class TestCloudPosture:
             "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
             ("sub-1", "Test Subscription", "production", "Enabled"),
         )
-        apim_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/cbuk-core-prodgreen-api-uksouth"
+        apim_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/core-api-uksouth"
         conn.execute(
             """
             INSERT INTO provisioned_assets (
@@ -10943,11 +11072,11 @@ class TestCloudPosture:
                 apim_id,
                 "sub-1",
                 "rg-api",
-                "cbuk-core-prodgreen-api-uksouth",
+                "core-api-uksouth",
                 "Microsoft.ApiManagement/service",
                 "uksouth",
                 "Premium",
-                "cbuk-core-prodgreen-api-uksouth.azure-api.net",
+                "core-api-uksouth.azure-api.net",
                 0,
                 "active",
                 None,
@@ -10964,7 +11093,7 @@ class TestCloudPosture:
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "cbuk-core-prodgreen-api-uksouth",
+                "core-api-uksouth",
                 "prodgreen-eventgrid-bridge",
                 "prodgreen-eventgrid-bridge.internal.cbinnovation.uk",
                 "EventGrid bridge backend",
@@ -10981,7 +11110,7 @@ class TestCloudPosture:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "cbuk-core-prodgreen-api-uksouth",
+                "core-api-uksouth",
                 "bridge-api",
                 "Bridge API",
                 "/bridge",
@@ -11000,7 +11129,7 @@ class TestCloudPosture:
             query_string={
                 "id": "cbuk_core_prodgreen_api_uksouth_prodgreen_eventgrid_bridge_internal_cbinnovation_uk",
                 "name": "prodgreen-eventgrid-bridge.internal.cbinnovation.uk",
-                "resource_group": "cbuk-core-prodgreen-api-uksouth",
+                "resource_group": "core-api-uksouth",
                 "type": "APIM Backend Target",
                 "sub": "sub-1",
             },
@@ -11010,7 +11139,7 @@ class TestCloudPosture:
         data = resp.get_json()
         assert data["type_label"] == "APIM Backend Target"
         assert data["name"] == "prodgreen-eventgrid-bridge.internal.cbinnovation.uk"
-        assert data["parent_resource"]["name"] == "cbuk-core-prodgreen-api-uksouth"
+        assert data["parent_resource"]["name"] == "core-api-uksouth"
         assert data["configuration"]["backend_id"] == "prodgreen-eventgrid-bridge"
         assert data["network"]["subnet"] is None or isinstance(data["network"]["subnet"], str)
 

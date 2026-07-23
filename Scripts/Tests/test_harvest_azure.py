@@ -1334,6 +1334,116 @@ class TestApimHarvestConcurrency:
 
 
 class TestApimRouteHarvestConcurrency:
+    def test_fetch_api_bundle_persists_route_without_backend_resolution(self, monkeypatch):
+        service = {
+            "id": "/subscriptions/sub-1/resourceGroups/rg-one/providers/Microsoft.ApiManagement/service/orders-apim",
+            "name": "orders-apim",
+            "resourceGroup": "rg-one",
+            "type": "Microsoft.ApiManagement/service",
+            "properties": {
+                "gatewayUrl": "https://api.contoso.test/",
+                "portalUrl": "https://portal.contoso.test/",
+                "virtualNetworkType": "External",
+            },
+        }
+        api = {
+            "name": "orders",
+            "properties": {
+                "displayName": "Orders API",
+                "path": "orders",
+                "subscriptionRequired": True,
+                "protocols": ["https"],
+            },
+        }
+
+        monkeypatch.setattr(apim, "_az_show_policy", lambda *args, **kwargs: None)
+        monkeypatch.setattr(apim, "_az_list_operations", lambda *args, **kwargs: [])
+
+        route, ops = apim._fetch_api_bundle(
+            service,
+            api,
+            "sub-1",
+            "2026-07-23T00:00:00Z",
+            backend_lookup={},
+        )
+
+        assert route is not None
+        assert route["backend_id"] is None
+        assert route["backend_url"] is None
+        assert route["service_url"] is None
+        assert ops == []
+
+    def test_harvest_routes_preserves_existing_rows_when_no_new_routes(self, monkeypatch):
+        service = {
+            "id": "/subscriptions/sub-1/resourceGroups/rg-one/providers/Microsoft.ApiManagement/service/orders-apim",
+            "name": "orders-apim",
+            "resourceGroup": "rg-one",
+            "type": "Microsoft.ApiManagement/service",
+            "properties": {
+                "gatewayUrl": "https://api.contoso.test/",
+                "portalUrl": "https://portal.contoso.test/",
+                "virtualNetworkType": "External",
+            },
+        }
+
+        monkeypatch.setattr(apim, "az", lambda args, subscription_id: [service] if args == ["apim", "list"] else [])
+        monkeypatch.setattr(apim, "_az_list_backends", lambda *args, **kwargs: [])
+        monkeypatch.setattr(apim, "_az_list_apis", lambda *args, **kwargs: [])
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE provisioned_assets (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    name TEXT,
+                    type TEXT,
+                    fqdn TEXT
+                );
+                """
+            )
+            apim._ensure_apim_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO apim_api_routes (
+                    id, subscription_id, apim_name, api_name, api_display_name,
+                    api_path, api_protocols, backend_id, backend_url, service_url,
+                    requires_subscription, gateway_hosts, exposure_level, policy_summary,
+                    sf_service_instance_name, sf_resolve_condition, last_synced
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "orders-apim::legacy",
+                    "sub-1",
+                    "orders-apim",
+                    "legacy",
+                    "Legacy API",
+                    "/legacy",
+                    "[]",
+                    None,
+                    None,
+                    None,
+                    1,
+                    "[]",
+                    "Public",
+                    "{}",
+                    None,
+                    None,
+                    "2026-07-23T00:00:00Z",
+                ),
+            )
+            route_count = apim.harvest_routes("sub-1", conn, dry_run=False)
+            row_count = conn.execute(
+                "SELECT COUNT(*) FROM apim_api_routes WHERE apim_name = ?",
+                ("orders-apim",),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+
+        assert route_count == 0
+        assert row_count == 1
+
     def test_harvest_routes_emits_progress_bars(self, monkeypatch, capsys):
         barrier = threading.Barrier(2)
         service = {
@@ -1731,14 +1841,14 @@ class TestFunctionTriggerParsing:
 class TestServiceFabricHarvest:
     def test_harvest_extracts_applications_and_services(self, monkeypatch):
         cluster = {
-            "id": "/subscriptions/sub-1/resourceGroups/rg-sf/providers/Microsoft.ServiceFabric/clusters/sfha",
-            "name": "sfha",
+            "id": "/subscriptions/sub-1/resourceGroups/rg-sf/providers/Microsoft.ServiceFabric/clusters/sh2",
+            "name": "sh2",
             "resourceGroup": "rg-sf",
             "location": "uksouth",
             "type": "Microsoft.ServiceFabric/clusters",
             "tags": {"pipeline": "sf-pipeline"},
             "properties": {
-                "managementEndpoint": "https://sfha.example.com:19080",
+                "managementEndpoint": "https://sh2.example.com:19080",
                 "clusterState": "Ready",
                 "clusterCodeVersion": "11.4.205.1",
                 "nodeTypes": [{"name": "nt1"}],
@@ -1787,7 +1897,7 @@ class TestServiceFabricHarvest:
             if cmd[:4] == ["az", "sf", "application", "list"]:
                 return _Result(json.dumps([
                     {
-                        "id": "/clusters/sfha/applications/fabric:/OrderApp",
+                        "id": "/clusters/sh2/applications/fabric:/OrderApp",
                         "name": "fabric:/OrderApp",
                         "properties": {"typeName": "OrderAppType"},
                     }
@@ -1795,7 +1905,7 @@ class TestServiceFabricHarvest:
             if cmd[:4] == ["az", "sf", "service", "list"]:
                 return _Result(json.dumps([
                     {
-                        "id": "/clusters/sfha/services/fabric:/OrderApp/OrderService",
+                        "id": "/clusters/sh2/services/fabric:/OrderApp/OrderService",
                         "name": "fabric:/OrderApp/OrderService",
                         "properties": {
                             "serviceTypeName": "OrderServiceType",
@@ -1816,7 +1926,7 @@ class TestServiceFabricHarvest:
         svc = next(r for r in rows if r["type"] == "Microsoft.ServiceFabric/clusters/services")
         assert svc["name"] == "fabric:/OrderApp/OrderService"
         assert svc["resource_group"] == "rg-sf"
-        assert svc["fqdn"] == "sfha.example.com"
+        assert svc["fqdn"] == "sh2.example.com"
         cluster_row = next(r for r in rows if r["type"] == "Microsoft.ServiceFabric/clusters")
         assert cluster_row["vnet_name"] == "production"
         assert cluster_row["subnet_name"] == "service_fabric_zonal"
@@ -2971,6 +3081,117 @@ class TestSubscriptionNetworkRendering:
         assert "contains" in mermaid
         assert "in subnet" in mermaid
         assert "app-nsg" in mermaid
+
+    def test_servicefabric_cluster_drilldown_lists_vmss_nodes(self):
+        import importlib.util
+        import sqlite3
+
+        web_dir = ROOT / "web"
+        spec = importlib.util.spec_from_file_location("web_app", web_dir / "app.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = mod
+        spec.loader.exec_module(mod)
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            """
+            CREATE TABLE provisioned_assets (
+                id TEXT,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                raw_json TEXT,
+                fqdn TEXT,
+                is_public INTEGER,
+                is_restricted INTEGER,
+                waf_mode TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets
+            (id, subscription_id, resource_group, name, type, location, sku, raw_json, fqdn, is_public, is_restricted, waf_mode)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "/subscriptions/sub-1/resourceGroups/core-sh2-uksouth/providers/Microsoft.ServiceFabric/clusters/core-sh2",
+                "sub-1",
+                "core-sh2-uksouth",
+                "core-sh2",
+                "Microsoft.ServiceFabric/clusters",
+                "uksouth",
+                None,
+                json.dumps({
+                    "nodeTypes": [
+                        {"name": "svc1", "isPrimary": False, "vmInstanceCount": 5, "vmSize": "Standard_D4lds_v5"},
+                        {"name": "system1", "isPrimary": True, "vmInstanceCount": 5, "vmSize": "Standard_D2s_v3"},
+                    ]
+                }),
+                None,
+                0,
+                0,
+                None,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets
+            (id, subscription_id, resource_group, name, type, location, sku, raw_json, fqdn, is_public, is_restricted, waf_mode)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "/subscriptions/sub-1/resourceGroups/core-sh2-uksouth/providers/Microsoft.Compute/virtualMachineScaleSets/svc1",
+                "sub-1",
+                "core-sh2-uksouth",
+                "svc1",
+                "Microsoft.Compute/virtualMachineScaleSets",
+                "uksouth",
+                "Standard_D4lds_v5",
+                json.dumps({"properties": {}}),
+                None,
+                0,
+                0,
+                None,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets
+            (id, subscription_id, resource_group, name, type, location, sku, raw_json, fqdn, is_public, is_restricted, waf_mode)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "/subscriptions/sub-1/resourceGroups/core-sh2-uksouth/providers/Microsoft.Compute/virtualMachineScaleSets/system1",
+                "sub-1",
+                "core-sh2-uksouth",
+                "system1",
+                "Microsoft.Compute/virtualMachineScaleSets",
+                "uksouth",
+                "Standard_D2s_v3",
+                json.dumps({"properties": {}}),
+                None,
+                0,
+                0,
+                None,
+            ),
+        )
+
+        result = mod._build_child_table(  # type: ignore[attr-defined]
+            conn,
+            "sub-1",
+            "Microsoft.ServiceFabric/clusters",
+            [{"rg": "core-sh2-uksouth", "name": "core-sh2"}],
+            node={"title": "core-sh2"},
+        )
+
+        assert result["view_type"] == "table"
+        assert result["columns"] == ["Node Type", "VM Scale Set", "Size", "Instances", "Primary"]
+        assert [row[0] for row in result["rows"]] == ["svc1", "system1"]
 
 
 class TestKeyVaultHarvest:
