@@ -21438,9 +21438,9 @@ def _get_icon_path(resource_type: str) -> str | None:
         if rtype_lower == "microsoft.kubernetes/ingresses":
             rtype_normalized = "kubernetes_ingress"
             provider = "kubernetes"
-        elif rtype_lower in ("microsoft.kubernetes/services", "kubernetes_service"):
-            rtype_normalized = "kubernetes_service"
-            provider = "kubernetes"
+        elif rtype_lower in ("microsoft.kubernetes/services", "kubernetes_service", "kubernetes service"):
+            rtype_normalized = "azurerm_aks"
+            provider = "azure"
         elif rtype_lower in arm_to_icon_map:
             rtype_normalized = arm_to_icon_map[rtype_lower]
             provider = "azure"
@@ -21568,8 +21568,8 @@ def _get_icon_class(resource_type: str) -> str:
         
         if rtype_lower == "microsoft.kubernetes/ingresses":
             rtype_normalized = "kubernetes_ingress"
-        elif rtype_lower in ("microsoft.kubernetes/services", "kubernetes_service"):
-            rtype_normalized = "kubernetes_service"
+        elif rtype_lower in ("microsoft.kubernetes/services", "kubernetes_service", "kubernetes service"):
+            rtype_normalized = "azurerm_aks"
         elif rtype_lower in arm_to_icon_map:
             rtype_normalized = arm_to_icon_map[rtype_lower]
         elif rtype_lower.startswith("microsoft."):
@@ -21585,7 +21585,7 @@ def _get_icon_class(resource_type: str) -> str:
         else:
             rtype_normalized = resource_type
         
-        provider = "kubernetes" if rtype_lower in ("microsoft.kubernetes/ingresses", "microsoft.kubernetes/services", "kubernetes_service") else (
+        provider = "kubernetes" if rtype_lower == "microsoft.kubernetes/ingresses" else (
             "azure" if rtype_lower.startswith(("microsoft.", "azurerm_")) else (
             "aws" if rtype_lower.startswith("aws_") else (
                 "gcp" if rtype_lower.startswith("google_") else "azure"

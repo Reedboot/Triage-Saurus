@@ -10273,6 +10273,24 @@ class TestCloudPosture:
         assert data["parent_resource"]["type_label"] == "Bastion"
         assert data["parent_resource"]["icon_path"]
 
+    def test_kubernetes_service_uses_aks_icon(self):
+        import os
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        icon_path = app_module._get_icon_path("microsoft.kubernetes/services")
+        icon_class = app_module._get_icon_class("microsoft.kubernetes/services")
+        friendly_icon_path = app_module._get_icon_path("Kubernetes Service")
+        friendly_icon_class = app_module._get_icon_class("Kubernetes Service")
+
+        assert icon_path and icon_path.endswith("azure/compute/aks.svg"), icon_path
+        assert icon_class == "icon-azurerm-aks", icon_class
+        assert friendly_icon_path and friendly_icon_path.endswith("azure/compute/aks.svg"), friendly_icon_path
+        assert friendly_icon_class == "icon-azurerm-aks", friendly_icon_class
+
     def test_api_cloud_resource_details_treats_internal_apim_as_private(self, monkeypatch):
         import json
         import os

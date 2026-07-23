@@ -28,7 +28,7 @@ AZURE_RESOURCE_TYPE_TO_ICON = {
     'azurerm_advisor': ('management_governance', 'advisor'),
     'azurerm_ai_at_edge': ('new_icons', 'ai-at-edge'),
     'azurerm_ai_studio': ('ai_machine_learning', 'ai-studio'),
-    'azurerm_aks': ('containers', 'kubernetes-service'),
+    'azurerm_aks': ('compute', 'aks'),
     'azurerm_alerts': ('management_governance', 'alerts'),
     'azurerm_all_resources': ('general', 'all-resources'),
     'azurerm_analysis_services': ('analytics', 'analysis-services'),

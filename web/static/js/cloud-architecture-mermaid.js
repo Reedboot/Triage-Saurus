@@ -706,8 +706,8 @@ function normalizeIconClass(resourceType, providerKey = "azure") {
     if (rawType.includes("microsoft.containerservice/managedclusters")) {
       return "icon-azurerm-aks";
     }
-    if (rawType.includes("microsoft.kubernetes/services")) {
-      return "icon-azurerm-kubernetes-service";
+    if (rawType.includes("microsoft.kubernetes/services") || rawType.includes("kubernetes service")) {
+      return "icon-azurerm-aks";
     }
   }
 
