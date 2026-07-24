@@ -345,10 +345,19 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
         if not isinstance(parsed_raw_json, dict):
             return []
         names: list[str] = []
-        for node_type in parsed_raw_json.get("nodeTypes") or []:
-            if not isinstance(node_type, dict):
-                continue
-            name = str(node_type.get("name") or "").strip()
+        candidates: list[object] = []
+        candidates.extend(parsed_raw_json.get("nodeTypes") or [])
+        props = parsed_raw_json.get("properties")
+        if isinstance(props, dict):
+            candidates.extend(props.get("nodeTypes") or [])
+        extra = parsed_raw_json.get("_extra")
+        if isinstance(extra, dict):
+            candidates.extend(extra.get("node_types") or [])
+        for node_type in candidates:
+            if isinstance(node_type, dict):
+                name = str(node_type.get("name") or node_type.get("nodeTypeName") or node_type.get("vmssName") or node_type.get("vmss_name") or "").strip()
+            else:
+                name = str(node_type or "").strip()
             if name and name not in names:
                 names.append(name)
         return names

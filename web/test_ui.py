@@ -8541,7 +8541,7 @@ class TestCloudPosture:
                         None,
                         "2026-06-01T00:00:00Z",
                         "2026-06-01T00:00:00Z",
-                        json.dumps({"_extra": {"node_types": [{"name": "sharedz1"}]}}),
+                        json.dumps({"nodeTypes": [{"name": "sharedz1"}]}),
                         0,
                         None,
                     ),
@@ -8695,8 +8695,8 @@ class TestCloudPosture:
                         "2026-06-01T00:00:00Z",
                         "2026-06-01T00:00:00Z",
                         json.dumps({
+                            "nodeTypes": [{"name": "sharedz1"}],
                             "_extra": {
-                                "node_types": [{"name": "sharedz1"}],
                                 "subnet_id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/production/subnets/service_fabric",
                             }
                         }),
@@ -8755,10 +8755,10 @@ class TestCloudPosture:
             conn.close()
 
         assert result["view_type"] == "table", result
-        assert result["title"] == "Service Fabric Cluster — VM Scale Sets", result
+        assert result["title"] == "Service Fabric — Node Types", result
         assert result["rows"], result
         assert any(row[1] == "sharedz1" for row in result["rows"]), result["rows"]
-        assert all(len(row) == 7 for row in result["rows"]), result["rows"]
+        assert all(len(row) == 5 for row in result["rows"]), result["rows"]
 
     def test_cloud_architecture_page_labels_tabs_mermaid_and_react_flow(self, monkeypatch):
         import os

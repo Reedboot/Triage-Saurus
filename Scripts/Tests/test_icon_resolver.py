@@ -32,6 +32,9 @@ def test_provider_specific_icon_paths_exist():
     assert get_icon_path("azurerm_sql_server", "azure").as_posix().endswith(
         "web/static/assets/icons/azure/databases/sql-server.svg"
     )
+    assert get_icon_path("azurerm_aks", "azure").as_posix().endswith(
+        "web/static/assets/icons/azure/containers/kubernetes-service.svg"
+    )
     assert get_icon_path("alicloud_db_instance", "alicloud").as_posix().endswith(
         "web/static/assets/icons/alicloud/database/db-instance.svg"
     )
@@ -72,6 +75,7 @@ def test_provider_icon_maps_include_new_sets():
     assert "oci_containerengine_node_pool" in oci_map
     assert "kubernetes_serviceaccount" in kubernetes_map
     assert kubernetes_map["kubernetes_service"].endswith("azure/containers/kubernetes-service.svg")
+    assert kubernetes_map["kubernetes_ingress"].endswith("kubernetes/ingress.svg")
 
 
 def test_alicloud_and_oci_maps_are_provider_isolated():

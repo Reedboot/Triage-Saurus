@@ -14976,6 +14976,9 @@ def _build_subscription_architecture_payload(
             node_types = props.get("nodeTypes")
             if isinstance(node_types, list):
                 candidates.extend(node_types)
+        node_types = parsed.get("nodeTypes")
+        if isinstance(node_types, list):
+            candidates.extend(node_types)
 
         names: list[str] = []
         seen: set[str] = set()
@@ -23690,6 +23693,8 @@ def _build_ingress_diagram(
                 category = "AI Services"
             elif "servicefabric" in type_key:
                 category = "Service Fabric"
+            elif "virtualmachinescalesets" in type_key and str(item.get("name") or "").strip().lower() in service_fabric_vmss_names:
+                category = "Service Fabric VM Scale Set"
             elif "insights/components" in type_key:
                 category = "App Insights"
             elif "apim backend target" in type_key or "apimbackendtarget" in type_key or "apim backend pool" in type_key or "apimbackendpool" in type_key:
@@ -23709,7 +23714,13 @@ def _build_ingress_diagram(
             effective_arm_type = lambda item, cat: (
                 "Microsoft.Web/functionApps" if cat == "Function App" else item["type"]
             )
-            force_individual = category in {"App Service", "Function App", "APIM Backend Target", "Kubernetes Service"}
+            force_individual = category in {
+                "App Service",
+                "Function App",
+                "APIM Backend Target",
+                "Kubernetes Service",
+                "Service Fabric VM Scale Set",
+            }
             if force_individual or len(items) <= NAME_THRESHOLD:
                 for item in items:
                     if category in {"App Service", "Function App"} and (
@@ -23934,7 +23945,62 @@ def _build_ingress_diagram(
     # Group resources by type + exposure (only show unique combinations)
     grouped_entry_points = _group_entry_points(entry_points)
     grouped_api_layer = _group_api_services(api_layer)
+
+    service_fabric_vmss_names: set[str] = set()
+    for row in rows:
+        if "servicefabric/clusters" not in str(row[2] or "").lower():
+            continue
+        try:
+            raw_cluster = json.loads(row[12] or "{}") if isinstance(row[12], str) else (row[12] or {})
+        except Exception:
+            raw_cluster = {}
+        if not isinstance(raw_cluster, dict):
+            continue
+        node_types = list(raw_cluster.get("nodeTypes") or [])
+        node_types.extend((raw_cluster.get("properties") or {}).get("nodeTypes") or [])
+        node_types.extend((raw_cluster.get("_extra") or {}).get("node_types") or [])
+        for node_type in node_types:
+            if isinstance(node_type, dict):
+                node_name = node_type.get("name") or node_type.get("nodeTypeName") or node_type.get("vmssName")
+            else:
+                node_name = node_type
+            if node_name:
+                service_fabric_vmss_names.add(str(node_name).strip().lower())
+
     grouped_backends = _group_backends_by_type(_prioritize_backends(backends))
+    sf_vmss_items = [
+        dict(item)
+        for item in backends
+        if "virtualmachinescalesets" in str(item.get("type") or "").lower()
+        and str(item.get("name") or "").strip().lower() in service_fabric_vmss_names
+    ]
+    if sf_vmss_items:
+        sf_vmss_keys = {str(item.get("name") or "").strip().lower() for item in sf_vmss_items}
+        retained_groups: list[dict] = []
+        for group in grouped_backends:
+            resources = group.get("resources")
+            if not group.get("is_group") or not isinstance(resources, list):
+                retained_groups.append(group)
+                continue
+            remaining = [
+                resource for resource in resources
+                if str(resource.get("name") or "").strip().lower() not in sf_vmss_keys
+            ]
+            if not remaining:
+                continue
+            group = dict(group)
+            group["resources"] = remaining
+            group["count"] = len(remaining)
+            retained_groups.append(group)
+        for item in sf_vmss_items:
+            item["label"] = item.get("label") or _short_name(item.get("name") or "")
+            item["count"] = 1
+            item["is_group"] = False
+            item["resources"] = [{"rg": item.get("rg"), "name": item.get("name")}]
+            item["arm_type"] = item.get("type")
+            item["type"] = "Service Fabric VM Scale Set"
+            retained_groups.append(item)
+        grouped_backends = retained_groups
     if aks_service_entries:
         existing_service_keys = {
             (
@@ -25634,11 +25700,14 @@ def _build_ingress_diagram(
             or cluster_item.get("id")
             or ""
         ).strip()
+        db_conn = _get_db_with_schema()
         def _load_cluster_raw_json() -> object | None:
+            if db_conn is None:
+                return None
             row = None
             try:
                 if cluster_id:
-                    row = conn.execute(
+                    row = db_conn.execute(
                         """
                         SELECT raw_json
                         FROM provisioned_assets
@@ -25651,7 +25720,7 @@ def _build_ingress_diagram(
                         (sub_id, cluster_id),
                     ).fetchone()
                 if not row and cluster_rg:
-                    row = conn.execute(
+                    row = db_conn.execute(
                         """
                         SELECT raw_json
                         FROM provisioned_assets
@@ -25664,7 +25733,7 @@ def _build_ingress_diagram(
                         (sub_id, cluster_rg),
                     ).fetchone()
                 if not row and cluster_name and cluster_rg:
-                    row = conn.execute(
+                    row = db_conn.execute(
                         """
                         SELECT raw_json
                         FROM provisioned_assets
@@ -25678,7 +25747,7 @@ def _build_ingress_diagram(
                         (sub_id, cluster_name, cluster_rg),
                     ).fetchone()
                 if not row:
-                    row = conn.execute(
+                    row = db_conn.execute(
                         """
                         SELECT raw_json
                         FROM provisioned_assets
@@ -25720,6 +25789,9 @@ def _build_ingress_diagram(
                 node_types = props.get("nodeTypes")
                 if isinstance(node_types, list):
                     candidates.extend(node_types)
+            node_types = parsed.get("nodeTypes")
+            if isinstance(node_types, list):
+                candidates.extend(node_types)
             if candidates:
                 names: list[str] = []
                 seen: set[str] = set()
@@ -25816,6 +25888,19 @@ def _build_ingress_diagram(
                         if str(vmss.get("name") or "").strip().lower() == node_name_lc:
                             _add(vmss)
 
+            if not candidate_vmss and node_type_names:
+                node_type_keys = {name.lower() for name in node_type_names}
+                for vmss_group in sf_vmss_assets:
+                    grouped_resources = vmss_group.get("resources")
+                    if not isinstance(grouped_resources, list):
+                        continue
+                    if any(
+                        str(resource.get("name") or "").strip().lower() in node_type_keys
+                        for resource in grouped_resources
+                        if isinstance(resource, dict)
+                    ):
+                        _add(vmss_group)
+
             if not candidate_vmss:
                 for vmss in sf_vmss_assets:
                     vmss_subnet_id = _vmss_subnet_id(vmss)
@@ -25866,6 +25951,9 @@ def _build_ingress_diagram(
                 node_types = props.get("nodeTypes")
                 if isinstance(node_types, list):
                     candidates.extend(node_types)
+            node_types = parsed.get("nodeTypes")
+            if isinstance(node_types, list):
+                candidates.extend(node_types)
             names: list[str] = []
             seen: set[str] = set()
             for candidate in candidates:
@@ -28101,6 +28189,12 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list, node: 
                 for node_type in (cluster_extra.get("node_types") or [])
                 if isinstance(node_type, dict) and str(node_type.get("name") or "").strip()
             ]
+            if not node_type_names:
+                node_type_names = [
+                    str(node_type.get("name") or "").strip()
+                    for node_type in (cluster_raw.get("nodeTypes") or [])
+                    if isinstance(node_type, dict) and str(node_type.get("name") or "").strip()
+                ]
             vmss_rows = conn.execute(
                 """
                 SELECT name, sku, resource_group, fqdn, status, raw_json

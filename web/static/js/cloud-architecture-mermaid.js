@@ -1132,7 +1132,8 @@ function openNodePopup(resourceId, nodeData) {
     armType.includes("applicationgateway") ||
     armType.includes("sites") ||
     armType.includes("serverfarms") ||
-    armType.includes("hostingenvironments");
+    armType.includes("hostingenvironments") ||
+    armType.includes("servicefabric/clusters");
   if (resources.length > 1 || (isGroupedNode && resources.length > 0)) {
     if (currentMermaidSubscriptionId) {
       openDrilldownModal(nodeData, currentMermaidSubscriptionId);

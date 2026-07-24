@@ -576,6 +576,73 @@ def test_servicefabric_cluster_links_matching_vmss_nodes():
     assert f'{cluster_node_id} -->|"contains"| {vmss_node_id}' in view["mermaid"]
 
 
+def test_servicefabric_cluster_links_vmss_from_nested_properties_node_types():
+    rows = [
+        (
+            "core-sh2",
+            "Microsoft.ServiceFabric/clusters",
+            "core-sh2-uksouth",
+            None,
+            False,
+            None,
+            "/subscriptions/000/resourceGroups/core-sh2-uksouth/providers/Microsoft.ServiceFabric/clusters/core-sh2",
+            False,
+            None,
+            False,
+            None,
+            None,
+            json.dumps({
+                "properties": {
+                    "nodeTypes": [
+                        {"name": "svc1"},
+                        {"name": "system1"},
+                    ]
+                }
+            }),
+            None,
+        ),
+        (
+            "svc1",
+            "Microsoft.Compute/virtualMachineScaleSets",
+            "core-sh2-uksouth",
+            None,
+            False,
+            "Standard_D4lds_v5",
+            "/subscriptions/000/resourceGroups/core-sh2-uksouth/providers/Microsoft.Compute/virtualMachineScaleSets/svc1",
+            False,
+            None,
+            False,
+            None,
+            None,
+            json.dumps({"properties": {}}),
+            None,
+        ),
+    ]
+
+    assets = subscription_assets_from_rows(rows, _friendly_type)
+    vmss = next(asset for asset in assets if asset["name"] == "svc1")
+    assert vmss["servicefabric_cluster_name"] == "core-sh2"
+
+    diagrams = build_subscription_diagrams_by_rg(
+        "pipeline-customer-production",
+        "production",
+        rows,
+        sanitise_node_id=lambda s: s.replace("/", "_").replace("-", "_"),
+        friendly_type=lambda t: t,
+        get_icon_path=lambda t: None,
+        normalize_attack_paths=lambda *args, **kwargs: [],
+    )
+
+    view = next(d["views"]["connectivity"] for d in diagrams if d["rg"] == "core-sh2-uksouth")
+    cluster_node_id = subscription_node_id(
+        next(asset for asset in assets if asset["name"] == "core-sh2"),
+        lambda s: s.replace("/", "_").replace("-", "_"),
+    )
+    vmss_node_id = subscription_node_id(vmss, lambda s: s.replace("/", "_").replace("-", "_"))
+
+    assert f'{cluster_node_id} -->|"contains"| {vmss_node_id}' in view["mermaid"]
+
+
 def test_collapses_apim_public_ip_into_apim_asset():
     public_ip_id = "/subscriptions/000/resourceGroups/rg-api/providers/Microsoft.Network/publicIPAddresses/apim-public"
     rows = [
