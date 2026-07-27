@@ -8,6 +8,7 @@ import sqlite3
 import subprocess
 import signal
 import time
+import uuid
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
@@ -345,7 +346,58 @@ def _az_show_policy(
     try:
         payload = _run_az_json(cmd)
     except Exception:
-        return None
+        payload = None
+
+    if payload is None:
+        # Some Azure CLI versions do not expose the `az apim ... policy`
+        # commands. Read the same policy through the ARM endpoint instead.
+        from urllib.parse import quote
+
+        api_segment = quote(str(api_id or ""), safe="")
+        if resource_kind == "api":
+            policy_path = f"apis/{api_segment}/policies/policy"
+        else:
+            operation_segment = quote(str(operation_id or ""), safe="")
+            policy_path = f"apis/{api_segment}/operations/{operation_segment}/policies/policy"
+        url = (
+            "https://management.azure.com/subscriptions/"
+            f"{quote(str(subscription_id or ''), safe='')}"
+            f"/resourceGroups/{quote(str(resource_group or ''), safe='')}"
+            "/providers/Microsoft.ApiManagement/service/"
+            f"{quote(str(service_name or ''), safe='')}/{policy_path}"
+            "?api-version=2022-08-01&format=rawxml"
+        )
+        output_file = f".apim-policy-{uuid.uuid4().hex}.xml"
+        try:
+            subprocess.run(
+                [
+                    "az",
+                    "rest",
+                    "--method",
+                    "get",
+                    "--url",
+                    url,
+                    "--output-file",
+                    output_file,
+                ],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            with open(output_file, "r", encoding="utf-8-sig") as policy_file:
+                policy_xml = policy_file.read()
+            if policy_xml.strip():
+                return policy_xml
+        except (OSError, subprocess.CalledProcessError):
+            pass
+        finally:
+            try:
+                os.remove(output_file)
+            except FileNotFoundError:
+                pass
 
     if isinstance(payload, dict):
         value = payload.get("value")
@@ -506,7 +558,11 @@ def _backend_url_from_row(backend: dict[str, Any]) -> str | None:
     management_endpoints = sf_cluster.get("managementEndpoints") or []
     if management_endpoints:
         return safe_str(management_endpoints[0])
-    return safe_str(backend.get("url") or props.get("url") or props.get("resourceId"))
+    backend_url = safe_str(backend.get("url") or props.get("url"))
+    resource_id = safe_str(backend.get("resourceId") or props.get("resourceId"))
+    if backend_url and not backend_url.lower().startswith("fabric:/"):
+        return backend_url
+    return resource_id or backend_url
 
 
 def _build_backend_lookup(backends: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:

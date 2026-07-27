@@ -54,7 +54,7 @@ def test_provider_specific_icon_paths_exist():
         "web/static/assets/icons/kubernetes/serviceaccount.svg"
     )
     assert get_icon_path("kubernetes_service", "kubernetes").as_posix().endswith(
-        "web/static/assets/icons/azure/containers/kubernetes-service.svg"
+        "web/static/assets/icons/azure/containers/ingress.svg"
     )
 
 
@@ -74,7 +74,7 @@ def test_provider_icon_maps_include_new_sets():
     assert "oci_network_load_balancer_network_load_balancer" in oci_map
     assert "oci_containerengine_node_pool" in oci_map
     assert "kubernetes_serviceaccount" in kubernetes_map
-    assert kubernetes_map["kubernetes_service"].endswith("azure/containers/kubernetes-service.svg")
+    assert kubernetes_map["kubernetes_service"].endswith("azure/containers/ingress.svg")
     assert kubernetes_map["kubernetes_ingress"].endswith("kubernetes/ingress.svg")
 
 

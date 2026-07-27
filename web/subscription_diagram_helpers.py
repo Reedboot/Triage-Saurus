@@ -67,7 +67,7 @@ def subscription_short_name(name: str, max_len: int = 28) -> str:
 
 def subscription_is_function_app(item: dict) -> bool:
     name = (item.get("name") or "").lower()
-    return "-fn-" in name or name.endswith("-fn") or "funcapp" in name or "functionapp" in name
+    return bool(item.get("is_function_app")) or "-fn-" in name or name.endswith("-fn") or "funcapp" in name or "functionapp" in name
 
 
 def subscription_known_fqdn_suffix(arm_type: str) -> str | None:
@@ -142,13 +142,17 @@ def subscription_asset_tier(arm_type: str, name: str = "") -> str:
     return "other"
 
 
+def subscription_is_load_balancer(asset: dict) -> bool:
+    return "network/loadbalancers" in str(asset.get("arm_type") or "").lower()
+
+
 def subscription_is_kubernetes_service(asset: dict) -> bool:
     type_key = (asset.get("arm_type") or asset.get("type") or "").lower()
     return "kubernetes_service" in type_key or "microsoft.kubernetes/services" in type_key
 
 
 def subscription_should_hide_in_subscription_diagram(asset: dict) -> bool:
-    return subscription_is_kubernetes_service(asset)
+    return subscription_is_kubernetes_service(asset) and asset.get("node_variant") != "aks_service"
 
 
 def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str]) -> list[dict]:
@@ -367,6 +371,8 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
     public_ip_assets_by_name_rg: dict[tuple[str, str], list[dict]] = {}
     for row in rows:
         name, rtype, rg, fqdn, is_public, sku = row[:6]
+        if "/sites/slots" in str(rtype or "").lower():
+            continue
         asset_id = row[6] if len(row) > 6 else None
         has_waf = bool(row[7]) if len(row) > 7 else False
         listeners = row[8] if len(row) > 8 else None
@@ -375,6 +381,7 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
         routing_targets = row[11] if len(row) > 11 else None
         raw_json = row[12] if len(row) > 12 else None
         auth_methods_raw = row[13] if len(row) > 13 else None
+        endpoints_raw = row[15] if len(row) > 15 else None
         parsed_raw = _parse_json(raw_json)
         if isinstance(auth_methods_raw, str):
             try:
@@ -406,6 +413,18 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
             "short_name": subscription_short_name(name or "resource"),
             "auth_methods": auth_methods,
         }
+        fqdns = [str(fqdn).strip()] if fqdn else []
+        try:
+            endpoint_values = json.loads(endpoints_raw or "[]") if isinstance(endpoints_raw, str) else (endpoints_raw or [])
+        except Exception:
+            endpoint_values = []
+        if isinstance(endpoint_values, list):
+            for endpoint in endpoint_values:
+                address = endpoint.get("address") if isinstance(endpoint, dict) else endpoint
+                address = str(address or "").strip()
+                if address and address not in fqdns:
+                    fqdns.append(address)
+        asset["fqdns"] = fqdns
         if (
             not asset.get("routing_targets")
             and str(rtype or "").strip().lower() == "apim backend target"
@@ -427,6 +446,30 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
                     "target_resource_id": str(parsed_raw.get("target_resource_id") or "").strip(),
                 }]
         if isinstance(parsed_raw, dict):
+            raw_kind = str(
+                parsed_raw.get("kind")
+                or (parsed_raw.get("properties") or {}).get("kind")
+                or ""
+            ).lower()
+            if "functionapp" in raw_kind or "function app" in raw_kind:
+                asset["is_function_app"] = True
+            if "serverfarms" in (rtype or "").lower():
+                hosting_profile = (
+                    (parsed_raw.get("properties") or {}).get("hostingEnvironmentProfile")
+                    or parsed_raw.get("hostingEnvironmentProfile")
+                    or (parsed_raw.get("properties") or {}).get("hosting_environment_profile")
+                    or parsed_raw.get("hosting_environment_profile")
+                )
+                if isinstance(hosting_profile, dict):
+                    hosting_profile_id = str(hosting_profile.get("id") or "").strip()
+                else:
+                    hosting_profile_id = str(hosting_profile or "").strip()
+                if hosting_profile_id:
+                    asset["hosting_ase_name"] = hosting_profile_id.rstrip("/").rsplit("/", 1)[-1]
+                    if "/resourceGroups/" in hosting_profile_id:
+                        asset["hosting_ase_resource_group"] = (
+                            hosting_profile_id.split("/resourceGroups/", 1)[1].split("/", 1)[0]
+                        )
             public_ip_resource_ids = _extract_public_ip_ids(parsed_raw)
             if public_ip_resource_ids:
                 asset["public_ip_resource_ids"] = public_ip_resource_ids
@@ -849,7 +892,12 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
     return visible_assets
 
 
-def subscription_apply_plan_hierarchy(assets: list[dict], plan_links: list | None = None) -> list[dict]:
+def subscription_apply_plan_hierarchy(
+    assets: list[dict],
+    plan_links: list | None = None,
+    *,
+    hide_hosted_sites: bool = True,
+) -> list[dict]:
     """Fold hosted App Services / Function Apps into their hosting parent.
 
     The returned list keeps App Service Plans and App Service Environments visible,
@@ -1006,7 +1054,7 @@ def subscription_apply_plan_hierarchy(assets: list[dict], plan_links: list | Non
         asset_copy = dict(asset)
         key = _key(asset_copy)
         children = hosted_by_parent.get(key)
-        if children and _is_site_type(asset_copy):
+        if children and _is_site_type(asset_copy) and hide_hosted_sites:
             continue
         if children and any(token in _type(asset_copy) for token in ("serverfarms", "hostingenvironment")):
             is_ase = "hostingenvironment" in _type(asset_copy)
@@ -1597,23 +1645,37 @@ def build_subscription_diagrams_by_rg(
                 "source_repo": git_repository,
                 "source_labels": pod_template_labels,
             }
+            service_label = str(service_name or deployment_name or "").strip()
+            service_node_name = f"{cluster_name}-{namespace}-{service_label}-{service_port}-service"
+            service_asset = {
+                "name": service_node_name,
+                "node_variant": "aks_service",
+                "arm_type": "kubernetes_service",
+                "tier": "backend",
+                "rg": cluster_rg or "default",
+                "short_name": service_label or service_node_name,
+                "label": service_label or service_node_name,
+                "auth_methods": [],
+                "resources": [],
+                "source_cluster_rg": cluster_rg,
+                "source_cluster_name": cluster_name,
+                "source_namespace": namespace,
+                "source_service": service_name,
+                "source_service_port": service_port,
+                "source_deployment": deployment_name,
+                "source_repo": git_repository,
+                "source_labels": pod_template_labels,
+            }
+            ingress_asset["service_node_name"] = service_node_name
 
             groups[cluster_rg or "default"].append(ingress_asset)
+            groups[cluster_rg or "default"].append(service_asset)
 
     diagrams = []
 
     def rg_asset_summary(rg_assets: list[dict]) -> dict:
-        hosted_site_keys = {
-            ((site_name or "").lower(), (site_rg or "").lower())
-            for site_rg, site_name, _plan_rg, _plan_name in (plan_links or [])
-        }
         def _is_visible_backend(asset: dict) -> bool:
-            if asset.get("tier") != "backend":
-                return False
-            key = ((asset.get("name") or "").lower(), (asset.get("rg") or "").lower())
-            if key in hosted_site_keys and "sites" in (asset.get("arm_type") or "").lower():
-                return False
-            return True
+            return asset.get("tier") == "backend"
 
         return {
             "entry_points": sum(1 for asset in rg_assets if asset.get("tier") == "entry"),
@@ -1624,25 +1686,17 @@ def build_subscription_diagrams_by_rg(
         }
 
     def build_rg_view(rg: str, rg_assets: list[dict]) -> tuple[dict, int]:
-        rg_assets = subscription_apply_plan_hierarchy(rg_assets, plan_links)
+        rg_assets = subscription_apply_plan_hierarchy(
+            rg_assets,
+            plan_links,
+            hide_hosted_sites=False,
+        )
         diagram_assets = [
             asset for asset in rg_assets
             if not subscription_should_hide_in_subscription_diagram(asset)
         ]
         summary = rg_asset_summary(diagram_assets)
-        hosted_site_keys = {
-            ((site_name or "").lower(), (site_rg or "").lower())
-            for site_rg, site_name, _plan_rg, _plan_name in (plan_links or [])
-        }
-        visible_rg_assets = [
-            asset
-            for asset in diagram_assets
-            if not (
-                asset.get("tier") == "backend"
-                and "sites" in (asset.get("arm_type") or "").lower()
-                and ((asset.get("name") or "").lower(), (asset.get("rg") or "").lower()) in hosted_site_keys
-            )
-        ]
+        visible_rg_assets = diagram_assets
         route_nodes_by_cluster: dict[tuple[str, str], list[dict]] = defaultdict(list)
         route_nodes_by_host: dict[str, list[dict]] = defaultdict(list)
         route_nodes_by_name: dict[str, list[dict]] = defaultdict(list)
@@ -1784,14 +1838,21 @@ def build_subscription_diagrams_by_rg(
                 {
                     "id": node_id,
                     "label": subscription_asset_label(asset, include_badges=badges, include_fqdn=show_fqdn),
-                    "arm_type": asset.get("arm_type"),
+                    "arm_type": (
+                        "Microsoft.Web/functionApps"
+                        if subscription_is_function_app(asset)
+                        else asset.get("arm_type")
+                    ),
                     "class_name": subscription_node_class(asset),
                 }
             )
             subscription_register_node(node_map, asset, sanitise_node_id)
 
-        exposure_entries = entries[:4]
-        exposure_apis = apis[:2]
+        # A load balancer is an ingress resource, but its presence alone does
+        # not establish a route to APIM. Keep it in the topology while requiring
+        # explicit harvested routing data for any load-balancer relationship.
+        exposure_entries = [a for a in entries if not subscription_is_load_balancer(a)][:4]
+        exposure_apis = [a for a in apis if (a.get("node_variant") or "") != "aks_ingress"][:2]
         exposure_public_backends = [a for a in backends if a.get("public")][:4]
         exposure_internal_backends = [a for a in backends if not a.get("public")][:3] if (entries or apis) else []
         exposure_backends = exposure_public_backends + exposure_internal_backends
@@ -1855,6 +1916,68 @@ def build_subscription_diagrams_by_rg(
                     dasharray="6,3",
                 )
 
+        # Keep hosted apps visible in the subnet/resource-group view and show
+        # the actual hosting chain instead of hiding them inside the plan count.
+        if plan_links:
+            plan_by_key = {
+                ((asset.get("rg") or "").strip().lower(), (asset.get("name") or "").strip().lower()): asset
+                for asset in visible_rg_assets
+                if "serverfarms" in (asset.get("arm_type") or "").lower()
+            }
+            ase_by_key = {
+                (
+                    (asset.get("rg") or "").strip().lower(),
+                    (asset.get("name") or "").strip().lower(),
+                ): asset
+                for asset in visible_rg_assets
+                if "hostingenvironment" in (asset.get("arm_type") or "").lower()
+            }
+            for site_rg, site_name, plan_rg, plan_name in plan_links:
+                site = next(
+                    (
+                        asset
+                        for asset in visible_rg_assets
+                        if (asset.get("rg") or "").strip().lower() == str(site_rg or "").strip().lower()
+                        and (asset.get("name") or "").strip().lower() == str(site_name or "").strip().lower()
+                    ),
+                    None,
+                )
+                plan = plan_by_key.get(
+                    (str(plan_rg or "").strip().lower(), str(plan_name or "").strip().lower())
+                )
+                if not site or not plan:
+                    continue
+                add_edge(
+                    subscription_node_id(site, sanitise_node_id),
+                    subscription_node_id(plan, sanitise_node_id),
+                    "hosted on",
+                    "#ffffff",
+                )
+
+            for plan in plan_by_key.values():
+                ase_name = str(plan.get("hosting_ase_name") or "").strip().lower()
+                if not ase_name:
+                    continue
+                ase_rg = str(plan.get("hosting_ase_resource_group") or plan.get("rg") or "").strip().lower()
+                ase = ase_by_key.get((ase_rg, ase_name))
+                if ase is None:
+                    ase = next(
+                        (
+                            candidate
+                            for (candidate_rg, candidate_name), candidate in ase_by_key.items()
+                            if candidate_name == ase_name
+                        ),
+                        None,
+                    )
+                if ase:
+                    add_edge(
+                        subscription_node_id(plan, sanitise_node_id),
+                        subscription_node_id(ase, sanitise_node_id),
+                        "Hosted in",
+                        "#94a3b8",
+                        dasharray="4,2",
+                    )
+
         for asset in visible_rg_assets:
             subnet_id = str(asset.get("subnet_id") or "").lower()
             if not subnet_id:
@@ -1892,8 +2015,8 @@ def build_subscription_diagrams_by_rg(
                 if vmss_nid not in seen_nodes:
                     continue
                 add_edge(
-                    cluster_nid,
                     vmss_nid,
+                    cluster_nid,
                     "contains",
                     "#64748b",
                     dasharray="6,3",
@@ -1920,7 +2043,6 @@ def build_subscription_diagrams_by_rg(
                             route_nid = subscription_node_id(_route_asset, sanitise_node_id)
                             if route_nid in seen_nodes:
                                 add_edge(_sub_ctx_node_id, route_nid, "", "#f97316", dasharray="6,3")
-                                add_edge(route_nid, cluster_nid, "", "#f97316", dasharray="6,3")
                     else:
                         add_edge(_sub_ctx_node_id, cluster_nid, "", "#f97316", dasharray="6,3")
 
@@ -2036,8 +2158,43 @@ def build_subscription_diagrams_by_rg(
                 route_nid = subscription_node_id(route_asset, sanitise_node_id)
                 if route_nid not in seen_nodes:
                     continue
-                if (route_asset.get("node_variant") or "") == "aks_ingress":
-                    add_edge(route_nid, cluster_nid, "", "#f97316", dasharray="6,3")
+
+        service_nodes_by_name: dict[tuple[str, str, str, str], str] = {}
+        for asset in visible_rg_assets:
+            if (asset.get("node_variant") or "") != "aks_service":
+                continue
+            key = (
+                str(asset.get("source_cluster_rg") or asset.get("rg") or "").strip().lower(),
+                str(asset.get("source_cluster_name") or "").strip().lower(),
+                str(asset.get("source_namespace") or "").strip().lower(),
+                str(asset.get("source_service") or "").strip().lower(),
+            )
+            if key[1] and key[3]:
+                service_nodes_by_name[key] = subscription_node_id(asset, sanitise_node_id)
+
+        for ingress in visible_rg_assets:
+            if (ingress.get("node_variant") or "") != "aks_ingress":
+                continue
+            ingress_nid = subscription_node_id(ingress, sanitise_node_id)
+            service_name = str(ingress.get("source_service") or "").strip().lower()
+            service_key = (
+                str(ingress.get("source_cluster_rg") or ingress.get("rg") or "").strip().lower(),
+                str(ingress.get("source_cluster_name") or "").strip().lower(),
+                str(ingress.get("source_namespace") or "").strip().lower(),
+                service_name,
+            )
+            service_nid = service_nodes_by_name.get(service_key)
+            if service_nid:
+                add_edge(ingress_nid, service_nid, "", "#f97316", dasharray="6,3")
+
+        cluster_nodes_by_key = {
+            _cluster_key(cluster_asset): subscription_node_id(cluster_asset, sanitise_node_id)
+            for cluster_asset in cluster_assets
+        }
+        for service_key, service_nid in service_nodes_by_name.items():
+            cluster_nid = cluster_nodes_by_key.get((service_key[0], service_key[1]))
+            if cluster_nid:
+                add_edge(service_nid, cluster_nid, "", "#f97316", dasharray="6,3")
 
         for asset in public_assets:
             if asset.get("tier") == "entry":
@@ -2080,16 +2237,6 @@ def build_subscription_diagrams_by_rg(
                         subscription_node_id(api, sanitise_node_id),
                         subscription_node_id(backend, sanitise_node_id),
                         "backend reach",
-                        "#ffffff",
-                    )
-
-        if exposure_backends and exposure_data:
-            for backend in exposure_backends:
-                for store in exposure_data:
-                    add_edge(
-                        subscription_node_id(backend, sanitise_node_id),
-                        subscription_node_id(store, sanitise_node_id),
-                        "data flow",
                         "#ffffff",
                     )
 

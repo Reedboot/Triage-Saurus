@@ -269,3 +269,141 @@ def test_apim_routing_targets_render_explicit_backend_edge():
     assert source_id in mermaid
     assert target_id in mermaid
     assert f'{source_id} -->|"Routing"| {target_id}' in mermaid
+
+
+def test_appgw_routes_keep_edges_for_multiple_apim_backend_pools():
+    rows = [
+        (
+            "cbuk-main-production-appgatewaycop-uksouth",
+            "microsoft.network/applicationgateways",
+            "rg-gateway",
+            "",
+            True,
+            "",
+            "/subscriptions/000/resourceGroups/rg-gateway/providers/Microsoft.Network/applicationGateways/gateway",
+            False,
+            None,
+            False,
+            None,
+            None,
+            json.dumps({"properties": {}}),
+            None,
+            None,
+        ),
+        (
+            "cbuk-main-production-api-uksouth",
+            "microsoft.apimanagement/service",
+            "rg-api",
+            "cbuk-main-production-api-uksouth.azure-api.net",
+            False,
+            "Developer",
+            "/subscriptions/000/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/cbuk-main-production-api-uksouth",
+            False,
+            None,
+            False,
+            None,
+            None,
+            json.dumps({"properties": {}}),
+            None,
+            None,
+        ),
+    ]
+    appgw_routes = [
+        (
+            "cbuk-main-production-appgatewaycop-uksouth",
+            "cop2new.clearbank.co.uk",
+            json.dumps(["cbuk-main-production-api-uksouth.azure-api.net"]),
+            "cop-resource-server-apim",
+            "resource-server-listener",
+            "/*",
+            "Https",
+            None,
+        ),
+        (
+            "cbuk-main-production-appgatewaycop-uksouth",
+            "payuknew.clearbank.co.uk",
+            json.dumps(["cbuk-main-production-api-uksouth.azure-api.net"]),
+            "cop-auth-server-apim",
+            "auth-server-listener",
+            "/*",
+            "Https",
+            None,
+        ),
+    ]
+
+    diagram = _build_ingress_diagram(
+        rows,
+        appgw_routes=appgw_routes,
+        public_appgw_names={"cbuk-main-production-appgatewaycop-uksouth"},
+    )
+    mermaid = diagram["mermaid"]
+
+    target_id = "grp_APIM_Private"
+    assert (
+        f"{_sanitise_node_id('agpool_rg-gateway_cbuk-main-production-appgatewaycop-uksouth_cop-resource-server-apim')} "
+        f"--> {target_id}"
+    ) in mermaid
+    assert (
+        f"{_sanitise_node_id('agpool_rg-gateway_cbuk-main-production-appgatewaycop-uksouth_cop-auth-server-apim')} "
+        f"--> {target_id}"
+    ) in mermaid
+
+
+def test_appgw_routes_target_explicit_apim_api_nodes():
+    rows = [
+        (
+            "gateway",
+            "microsoft.network/applicationgateways",
+            "rg-gateway",
+            "",
+            True,
+            "",
+            "/subscriptions/000/resourceGroups/rg-gateway/providers/Microsoft.Network/applicationGateways/gateway",
+            False,
+            None,
+            False,
+            None,
+            None,
+            json.dumps({"properties": {}}),
+            None,
+            None,
+        ),
+        (
+            "apim",
+            "microsoft.apimanagement/service",
+            "rg-api",
+            "apim.azure-api.net",
+            False,
+            "",
+            "/subscriptions/000/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/apim",
+            False,
+            None,
+            False,
+            None,
+            None,
+            json.dumps({"properties": {}}),
+            None,
+            None,
+        ),
+    ]
+    diagram = _build_ingress_diagram(
+        rows,
+        appgw_routes=[
+            ("gateway", "api.example.test", json.dumps(["apim.azure-api.net"]), "orders", "listener", "/*", "Https", None),
+        ],
+        apim_api_rows=[{
+            "apim_name": "apim",
+            "api_name": "orders",
+            "api_display_name": "Orders",
+            "api_path": "/orders",
+            "apim_resource_id": "/subscriptions/000/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/apim",
+            "backend_id": "orders-backend",
+            "backend_url": "https://orders.example.test",
+            "service_url": "https://apim.azure-api.net/orders",
+        }],
+    )
+    mermaid = diagram["mermaid"]
+    pool_id = _sanitise_node_id("agpool_rg-gateway_gateway_orders")
+    api_id = _sanitise_node_id("rg-api_apim::orders")
+    assert f"{pool_id} --> {api_id}" in mermaid
+    assert f"{api_id} --> { _sanitise_node_id('grp_APIM_Private')}" in mermaid

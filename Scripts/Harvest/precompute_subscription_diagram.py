@@ -11,7 +11,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-def precompute_subscription_diagram(db_path: Path | str, sub_id: str) -> None:
+def precompute_subscription_diagram(
+    db_path: Path | str,
+    sub_id: str,
+    *,
+    warm_traces: bool = True,
+) -> None:
     """Persist the Mermaid subscription payload without requiring a web server."""
     from web.app import api_subscription_diagram, app
     from web.core.db import configure_db_path
@@ -27,7 +32,8 @@ def precompute_subscription_diagram(db_path: Path | str, sub_id: str) -> None:
         raise RuntimeError(
             f"diagram endpoint returned HTTP {response.status_code}: {detail}"
         )
-    precompute_subscription_traces(db_path, sub_id)
+    if warm_traces:
+        precompute_subscription_traces(db_path, sub_id)
 
 
 def precompute_subscription_traces(db_path: Path | str, sub_id: str) -> None:

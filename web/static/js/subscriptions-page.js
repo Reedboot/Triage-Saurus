@@ -216,6 +216,13 @@
     } else if (columns.length || rows.length) {
       table = `<table class="section-table" style="width:100%;margin-top:12px;"><thead><tr>${columns.map((col) => `<th>${escapeHtml(col)}</th>`).join('')}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${renderCellValue(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
     }
+    const dnsNames = [
+      ...(Array.isArray(response?.fqdns) ? response.fqdns : []),
+      ...(Array.isArray(response?.dns_names) ? response.dns_names : []),
+      ...(Array.isArray(response?.network?.dns_names) ? response.network.dns_names : []),
+      ...(Array.isArray(nodeData?.fqdns) ? nodeData.fqdns : []),
+      ...(Array.isArray(nodeData?.dns_names) ? nodeData.dns_names : []),
+    ].map((value) => String(value || '').trim()).filter((value, index, values) => value && values.indexOf(value) === index);
 
     drilldownModalBody.innerHTML = `
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
@@ -227,6 +234,7 @@
             const publicIp = nodeData?.public_ip || publicIps[0] || nodeData?.network?.public_ip || '';
             return publicIp ? `<div style="margin-top:4px;color:var(--text-muted);"><strong>Public IP:</strong> ${escapeHtml(publicIp)}</div>` : '';
           })()}
+          ${dnsNames.length ? `<div style="margin-top:4px;color:var(--text-muted);"><strong>DNS aliases:</strong> ${dnsNames.map((name) => `<code>${escapeHtml(name)}</code>`).join(', ')}</div>` : ''}
         </div>
         <button type="button" class="btn-diagram" id="drilldown-close-btn">Close</button>
       </div>

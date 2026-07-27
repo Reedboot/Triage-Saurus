@@ -407,7 +407,7 @@ At the start of every session, read `Output/Learning/state.json`:
   "current_experiment_id": "003",
   "status": "awaiting_review",
   "next_action": "Run 'triage experiment review 003'",
-  "repos_in_scope": ["fi-api", "terraform-infrastructure"],
+  "repos_in_scope": ["test-api", "terraform-infrastructure"],
   "last_updated": "2026-02-23T10:30:00Z"
 }
 ```
@@ -424,7 +424,7 @@ For long-running multi-repo experiments, update state.json with checkpoint data:
 ```json
 {
   "checkpoint": {
-    "repos_completed": ["fi-api"],
+    "repos_completed": ["test-api"],
     "repos_pending": ["terraform-infrastructure", "terraform-modules"],
     "current_repo": "terraform-infrastructure",
     "current_phase": "dev_skeptic_review",

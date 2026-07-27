@@ -7,6 +7,11 @@
     "stream_timeout_seconds": 600,
     "job_timeout_seconds": 3600
   },
+  "performance": {
+    "module_scan_concurrency": 1,
+    "pipeline_parallel_mode": true,
+    "single_writer_queue_enabled": true
+  },
   "ai_models": {
     "global_default": "gpt-5.4-mini",
     "architecture": "",
@@ -14,10 +19,5 @@
     "rules": "",
     "themes": "",
     "image_summaries": ""
-  },
-  "performance": {
-    "module_scan_concurrency": 1,
-    "pipeline_parallel_mode": true,
-    "single_writer_queue_enabled": true
   }
 }

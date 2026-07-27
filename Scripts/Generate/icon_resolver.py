@@ -338,7 +338,7 @@ AZURE_RESOURCE_TYPE_TO_ICON = {
     'azurerm_kubernetes': ('compute', 'kubernetes'),
     'azurerm_kubernetes_fleet_manager': ('other', 'kubernetes-fleet-manager'),
     'azurerm_kubernetes_hub': ('new_icons', 'kubernetes-hub'),
-    'azurerm_kubernetes_service': ('containers', 'kubernetes-service'),
+    'azurerm_kubernetes_service': ('containers', 'ingress'),
     'azurerm_lab_accounts': ('devops', 'lab-accounts'),
     'azurerm_lab_services': ('devops', 'lab-services'),
     'azurerm_landing_zone': ('new_icons', 'landing-zone'),
@@ -637,7 +637,7 @@ AZURE_RESOURCE_TYPE_TO_ICON = {
     'azurerm_web_test': ('general', 'web-test'),
     'azurerm_website_power': ('general', 'website-power'),
     'azurerm_website_staging': ('general', 'website-staging'),
-    'azurerm_windows10_core_services': ('iot', 'windows10-core-services'),
+    'azurerm_windows10_core_services': ('iot', 'windows10-main-services'),
     'azurerm_windows_notification_services': ('other', 'windows-notification-services'),
     'azurerm_workbooks': ('monitor', 'workbooks'),
     'azurerm_worker_container_app': ('other', 'worker-container-app'),
@@ -1230,7 +1230,7 @@ def get_icon_path(resource_type: str, provider: str = 'azure') -> Optional[Path]
         if rtype in mapping:
             category, icon_name = mapping[rtype]
             if rtype == "kubernetes_service":
-                icon_file = _find_icon_file("containers", "kubernetes-service", "azure")
+                icon_file = _find_icon_file("containers", "ingress", "azure")
             else:
                 # Kubernetes icons live in icons/kubernetes/
                 icon_file = ICONS_ROOT / category / f"{icon_name}.svg"
@@ -1250,7 +1250,7 @@ def get_icon_path(resource_type: str, provider: str = 'azure') -> Optional[Path]
             if rtype in mapping:
                 category, icon_name = mapping[rtype]
                 if rtype == "kubernetes_service":
-                    icon_file = _find_icon_file("containers", "kubernetes-service", "azure")
+                    icon_file = _find_icon_file("containers", "ingress", "azure")
                 else:
                     icon_file = ICONS_ROOT / category / f"{icon_name}.svg"
                 if icon_file and icon_file.exists():
@@ -1409,7 +1409,7 @@ def build_icon_map_bulk(provider: str = 'azure') -> dict:
             continue
 
         if provider == "kubernetes" and resource_type == "kubernetes_service":
-            icon_file = _find_icon_file("containers", "kubernetes-service", "azure")
+            icon_file = _find_icon_file("containers", "ingress", "azure")
             if icon_file:
                 try:
                     rel_path = icon_file.relative_to(web_root)

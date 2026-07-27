@@ -3069,8 +3069,8 @@ class TestIngressDiagramGeneration:
         assert result.get("default_view") == "connectivity"
         assert result.get("attack_paths"), "Expected attack-path summaries in the ingress payload"
 
-    def test_function_app_rows_fold_into_app_service_plan(self):
-        """Function App rows should be folded under the App Service Plan node."""
+    def test_function_app_rows_render_as_app_service_plan_children(self):
+        """Function App rows should remain visible beside their hosting plan."""
         rows = [
             (
                 "test-plan",
@@ -3100,10 +3100,10 @@ class TestIngressDiagramGeneration:
             plan_links=[("rg-app", "orders-fn-app", "rg-app", "test-plan")],
         )
         assert result.get("asset_summary", {}).get("backends") == 2, result.get("asset_summary")
-        assert "1 app" in result.get("mermaid", ""), result.get("mermaid", "")
+        assert "rg_app_orders_fn_app" in result.get("mermaid", ""), result.get("mermaid", "")
         titles = {v.get("title") for v in result.get("node_drilldown_map", {}).values()}
         assert "test-plan" in titles, titles
-        assert "orders-fn-app" not in titles, titles
+        assert "orders-fn-app" in titles, titles
 
     def test_site_hosting_plan_links_handle_nested_properties_plan_id(self):
         """Hosted sites should still link to plans when the plan id lives under properties."""
@@ -3153,8 +3153,49 @@ class TestIngressDiagramGeneration:
         finally:
             conn.close()
 
-    def test_function_app_rows_fold_into_app_service_environment(self):
-        """App Service Environment rows should also fold hosted apps beneath the parent node."""
+    def test_site_hosting_plan_links_handle_nested_site_config_plan_id(self):
+        """Hosted sites should link when Azure nests the plan id under properties.siteConfig."""
+        import json
+        import sqlite3
+
+        from web.app import _build_site_hosting_plan_links
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute(
+                """
+                CREATE TABLE provisioned_assets (
+                    name TEXT,
+                    resource_group TEXT,
+                    raw_json TEXT,
+                    type TEXT,
+                    subscription_id TEXT
+                )
+                """
+            )
+            plan_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/serverfarms/test-plan"
+            conn.execute(
+                """
+                INSERT INTO provisioned_assets (name, resource_group, raw_json, type, subscription_id)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    "orders-fn",
+                    "rg-app",
+                    json.dumps({"properties": {"siteConfig": {"appServicePlanId": plan_id}}}),
+                    "Microsoft.Web/sites",
+                    "sub-1",
+                ),
+            )
+
+            assert _build_site_hosting_plan_links(conn, "sub-1") == [
+                ("rg-app", "orders-fn", "rg-app", "test-plan")
+            ]
+        finally:
+            conn.close()
+
+    def test_function_app_rows_render_beside_app_service_environment(self):
+        """Function App rows should remain visible beside their ASE parent."""
         rows = [
             (
                 "test-ase",
@@ -3183,10 +3224,10 @@ class TestIngressDiagramGeneration:
             rows=rows,
             plan_links=[("rg-app", "orders-fn-app", "rg-app", "test-ase")],
         )
-        assert "1 app" in result.get("mermaid", ""), result.get("mermaid", "")
+        assert "rg_app_orders_fn_app" in result.get("mermaid", ""), result.get("mermaid", "")
         titles = {v.get("title") for v in result.get("node_drilldown_map", {}).values()}
         assert "test-ase" in titles, titles
-        assert "orders-fn-app" not in titles, titles
+        assert "orders-fn-app" in titles, titles
 
     def test_app_service_plan_drilldown_lists_hosted_apps(self):
         """The App Service Plan drilldown must list hosted app services."""
@@ -4264,9 +4305,9 @@ class TestIngressDiagramGeneration:
                     "fn-1",
                     "sub-1",
                     "rg-app",
-                    "production-fi-api-uksouth",
+                    "production-test-api-uksouth",
                     "Microsoft.Web/sites",
-                    "production-fi-api-uksouth.azurewebsites.net",
+                    "production-test-api-uksouth.azurewebsites.net",
                     1,
                     0,
                     json.dumps({"kind": "functionapp,linux"}),
@@ -4277,7 +4318,7 @@ class TestIngressDiagramGeneration:
                 conn,
                 "sub-1",
                 "Microsoft.Web/sites",
-                [{"rg": "rg-app", "name": "production-fi-api-uksouth"}],
+                [{"rg": "rg-app", "name": "production-test-api-uksouth"}],
             )
         finally:
             conn.close()
@@ -4536,13 +4577,13 @@ class TestIngressDiagramGeneration:
 
         rows = [
             (
-                "core-api-uksouth",
+                "main-api-uksouth",
                 "Microsoft.ApiManagement/service",
                 "rg-api",
-                "core-api-uksouth.azure-api.net",
+                "main-api-uksouth.azure-api.net",
                 1,
                 "Developer",
-                "/subscriptions/000/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/core-api-uksouth",
+                "/subscriptions/000/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/main-api-uksouth",
                 0,
                 None,
                 0,
@@ -4560,13 +4601,13 @@ class TestIngressDiagramGeneration:
                 None,
             ),
             (
-                "core-api-uksouth-eventgrid-bridge",
+                "main-api-uksouth-eventgrid-bridge",
                 "Microsoft.Web/sites",
                 "rg-app",
-                "core-api-uksouth-eventgrid-bridge.azurewebsites.net",
+                "main-api-uksouth-eventgrid-bridge.azurewebsites.net",
                 1,
                 "Y1",
-                "/subscriptions/000/resourceGroups/rg-app/providers/Microsoft.Web/sites/core-api-uksouth-eventgrid-bridge",
+                "/subscriptions/000/resourceGroups/rg-app/providers/Microsoft.Web/sites/main-api-uksouth-eventgrid-bridge",
                 0,
                 None,
                 0,
@@ -4579,15 +4620,15 @@ class TestIngressDiagramGeneration:
         ]
         apim_backend_rows = [
             {
-                "apim_name": "core-api-uksouth",
-                "backend_id": "prodgreen-eventgrid-bridge",
-                "title": "prodgreen-eventgrid-bridge.internal.cbinnovation.uk",
-                "url": "https://prodgreen-eventgrid-bridge.internal.cbinnovation.uk/",
+                "apim_name": "main-api-uksouth",
+                "backend_id": "production-eventgrid-bridge",
+                "title": "production-eventgrid-bridge.internal.cbinnovation.uk",
+                "url": "https://production-eventgrid-bridge.internal.cbinnovation.uk/",
             }
         ]
         apim_route_map = {
-            "core-api-uksouth": [
-                "https://prodgreen-eventgrid-bridge.internal.cbinnovation.uk/",
+            "main-api-uksouth": [
+                "https://production-eventgrid-bridge.internal.cbinnovation.uk/",
             ]
         }
 
@@ -4604,11 +4645,11 @@ class TestIngressDiagramGeneration:
             if value.get("arm_type") == "APIM Backend Target"
         )
 
-        assert "prodgreen-eventgrid-bridge.internal.cbinnovation.uk 🔒" not in mermaid, mermaid
-        assert "prodgreen-eventgrid-bridge.internal.cbinnovation.uk</div>" in mermaid, mermaid
-        assert "rg_api_cbuk_core_prodgreen_api_uksouth__prodgreen_eventgrid_bridge_internal_cbinnovation_uk" in mermaid, mermaid
-        assert target.get("title") == "prodgreen-eventgrid-bridge.internal.cbinnovation.uk", target
-        assert target.get("resources", [{}])[0].get("name") == "core-api-uksouth::prodgreen-eventgrid-bridge.internal.cbinnovation.uk", target
+        assert "production-eventgrid-bridge.internal.cbinnovation.uk 🔒" not in mermaid, mermaid
+        assert "production-eventgrid-bridge.internal.cbinnovation.uk</div>" in mermaid, mermaid
+        assert "rg_api_cbuk_core_production_api_uksouth__production_eventgrid_bridge_internal_cbinnovation_uk" in mermaid, mermaid
+        assert target.get("title") == "production-eventgrid-bridge.internal.cbinnovation.uk", target
+        assert target.get("resources", [{}])[0].get("name") == "main-api-uksouth::production-eventgrid-bridge.internal.cbinnovation.uk", target
 
     def test_marketlane_apim_backend_targets_use_backend_id_and_apim_subnet(self):
         """APIM backend targets should keep the backend id label and inherit APIM subnet placement."""
@@ -5032,6 +5073,78 @@ class TestIngressDiagramGeneration:
         mermaid = result.get("mermaid", "")
         assert 'agpool_rg_app_cop_resource_server_apim_backend_pool --> rg_backend_cards_management_web' in mermaid, mermaid
         assert 'agpool_rg_app_cop_resource_server_apim_backend_pool --> rg_backend_institution_portal_crm' in mermaid, mermaid
+
+    def test_appgw_pool_routes_to_ase_when_hidden_site_name_differs(self):
+        """A shortened App Gateway pool name should still route through its ASE."""
+        import json
+
+        rows = [
+            (
+                "shared-appgw",
+                "Microsoft.Network/applicationGateways",
+                "rg-network",
+                "shared-appgw.example.com",
+                1,
+                "WAF_v2",
+                "appgw-id",
+                0,
+                "HTTPS:443",
+            ),
+            (
+                "production-shared-uksouth",
+                "Microsoft.Web/hostingEnvironments",
+                "rg-platform",
+                "production-shared-uksouth.appserviceenvironment.net",
+                0,
+                "ASEv3",
+                "ase-id",
+                0,
+                None,
+            ),
+            (
+                "main-production-test-api-uksouth",
+                "Microsoft.Web/sites",
+                "rg-fiapi",
+                "main-production-test-api-uksouth.production-shared-uksouth.appserviceenvironment.net",
+                0,
+                "P1v3",
+                "site-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({
+                    "properties": {
+                        "hostingEnvironmentProfile": {
+                            "id": "/subscriptions/sub/resourceGroups/rg-platform/providers/Microsoft.Web/hostingEnvironments/production-shared-uksouth"
+                        }
+                    }
+                }),
+            ),
+        ]
+        appgw_routes = [
+            (
+                "shared-appgw",
+                "fiapi.example.com",
+                json.dumps([
+                    "production-test-api-uksouth.production-shared-uksouth.appserviceenvironment.net"
+                ]),
+                "fiapi",
+                "listener-fiapi",
+                "/*",
+                "HTTPS",
+                None,
+            ),
+        ]
+
+        result = self._call(
+            rows=rows,
+            plan_links=[("rg-fiapi", "main-production-test-api-uksouth", "rg-platform", "production-shared-uksouth")],
+            appgw_routes=appgw_routes,
+        )
+        mermaid = result.get("mermaid", "")
+        assert "agpool_rg_network_shared_appgw_fiapi --> rg_platform_production_shared_uksouth" in mermaid, mermaid
 
     def test_appgw_appserviceenvironment_backend_urls_route_to_multiple_backend_sites(self):
         """App Gateway backend URLs should resolve to all matching ASE-hosted backend sites."""
@@ -7045,10 +7158,10 @@ class TestCloudPosture:
 
         rows = [
             (
-                "prodgreen-fincrime-casemanagementorchestrator-api",
+                "production-fincrime-casemanagementorchestrator-api",
                 "APIM backend target",
                 "rg-api",
-                "prodgreen-fincrime-casemanagementorchestrator-api.internal.cbinnovation.uk",
+                "production-fincrime-casemanagementorchestrator-api.internal.cbinnovation.uk",
                 0,
                 "Standard",
                 "backend-id",
@@ -7058,8 +7171,8 @@ class TestCloudPosture:
                 None,
                 json.dumps([
                     {
-                        "target": "prodgreen-fincrime-casemanagementorchestrator-api.internal.cbinnovation.uk",
-                        "name": "prodgreen-fincrime-casemanagementorchestrator-api.internal.cbinnovation.uk",
+                        "target": "production-fincrime-casemanagementorchestrator-api.internal.cbinnovation.uk",
+                        "name": "production-fincrime-casemanagementorchestrator-api.internal.cbinnovation.uk",
                     }
                 ]),
                 json.dumps({"properties": {}}),
@@ -7451,7 +7564,7 @@ class TestCloudPosture:
         ns_nid = app_module._sanitise_node_id("rg-msg_" + ns_name)
         fn_nid = app_module._sanitise_node_id("rg-fn_" + fn_name)
         assert any(
-            ns_nid in line and fn_nid in line and "AMQP" in line
+            ns_nid in line and fn_nid in line and "trigger" in line
             for line in mermaid.splitlines()
         ), mermaid
 
@@ -8079,7 +8192,7 @@ class TestCloudPosture:
                         "sub-1",
                         "appgw-one",
                         json.dumps([
-                            "production-fi-api-uksouth.production-shared-uksouth.appserviceenvironment.net",
+                            "production-test-api-uksouth.production-shared-uksouth.appserviceenvironment.net",
                         ]),
                         "fiapi",
                         "listener-one",
@@ -8133,14 +8246,14 @@ class TestCloudPosture:
 
         node_id = app_module._resolve_routing_target_node_id(
             {
-                "target": "production-fi-api-uksouth.production-shared-uksouth.appserviceenvironment.net",
-                "fqdn": "production-fi-api-uksouth.production-shared-uksouth.appserviceenvironment.net",
-                "name": "production-fi-api-uksouth.azurewebsites.net",
+                "target": "production-test-api-uksouth.production-shared-uksouth.appserviceenvironment.net",
+                "fqdn": "production-test-api-uksouth.production-shared-uksouth.appserviceenvironment.net",
+                "name": "production-test-api-uksouth.azurewebsites.net",
             },
-            node_by_fqdn={"production-fi-api-uksouth.azurewebsites.net": "node-fi-api"},
+            node_by_fqdn={"production-test-api-uksouth.azurewebsites.net": "node-test-api"},
         )
 
-        assert node_id == "node-fi-api"
+        assert node_id == "node-test-api"
 
     def test_subscription_architecture_payload_links_nested_ase_siteconfig_parent(self):
         import json
@@ -8428,7 +8541,7 @@ class TestCloudPosture:
             mermaid = graph["views"]["connectivity"]["mermaid"]
             cluster_node_id = app_module._sanitise_node_id("production-sf-uksouth_production-sf")
             vmss_node_id = app_module._sanitise_node_id("production-sf-uksouth_sharedz1")
-            assert f'{cluster_node_id} -->|"contains"| {vmss_node_id}' in mermaid, mermaid
+            assert f'{vmss_node_id} -->|"contains"| {cluster_node_id}' in mermaid, mermaid
         finally:
             app_module._get_db_with_schema = original_get_db
             conn.close()
@@ -8593,7 +8706,10 @@ class TestCloudPosture:
             mermaid = graph["views"]["connectivity"]["mermaid"]
             cluster_node_id = app_module._sanitise_node_id("production-sf-uksouth_production-sf")
             vmss_node_id = app_module._sanitise_node_id("production-compute-uksouth_sharedz1")
-            assert f'{cluster_node_id} -->|"contains"| {vmss_node_id}' in mermaid, mermaid
+            node_id = app_module._sanitise_node_id(f"production-sf-uksouth_production-sf_node_sharedz1")
+            assert f'{node_id}["Node: sharedz1"]' in mermaid, mermaid
+            assert f'{vmss_node_id} --> {node_id}' in mermaid, mermaid
+            assert f'{node_id} -->|"runs on"| {cluster_node_id}' in mermaid, mermaid
         finally:
             app_module._get_db_with_schema = original_get_db
             conn.close()
@@ -8787,7 +8903,7 @@ class TestCloudPosture:
             ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
         )
         conn.commit()
-        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        monkeypatch.setattr(app_module, "_get_db", lambda: conn)
 
         client = app_module.app.test_client()
         resp = client.get("/cloud/architecture?sub=sub-1")
@@ -10166,10 +10282,8 @@ class TestCloudPosture:
         # Internet should connect to bastion with public IP
         assert f"Internet -->|\"Public IP" in mermaid, f"Internet should connect to bastion with public IP. Mermaid: {mermaid}"
         assert f"| {bastion_id}" in mermaid, f"Connection should target bastion node. Mermaid: {mermaid}"
-        # Bastion should also show the private-side hop into the VNet
-        private_edge_line = next(line for line in mermaid.splitlines() if "Private access" in line)
-        assert bastion_id in private_edge_line, mermaid
-        assert "blue_vnet" in private_edge_line, mermaid
+        # Bastion should not add a synthetic edge to the containing VNet.
+        assert "Private access" not in mermaid, mermaid
         bastion_node_line = next(line for line in mermaid.splitlines() if f"{bastion_id}[" in line)
         assert "WAF" not in bastion_node_line, mermaid
 
@@ -10415,9 +10529,9 @@ class TestCloudPosture:
         friendly_icon_path = app_module._get_icon_path("Kubernetes Service")
         friendly_icon_class = app_module._get_icon_class("Kubernetes Service")
 
-        assert icon_path and icon_path.endswith("azure/containers/kubernetes-service.svg"), icon_path
+        assert icon_path and icon_path.endswith("azure/containers/ingress.svg"), icon_path
         assert icon_class == "icon-azurerm-kubernetes-service", icon_class
-        assert friendly_icon_path and friendly_icon_path.endswith("azure/containers/kubernetes-service.svg"), friendly_icon_path
+        assert friendly_icon_path and friendly_icon_path.endswith("azure/containers/ingress.svg"), friendly_icon_path
         assert friendly_icon_class == "icon-azurerm-kubernetes-service", friendly_icon_class
 
     def test_api_cloud_resource_details_treats_internal_apim_as_private(self, monkeypatch):
@@ -11059,7 +11173,7 @@ class TestCloudPosture:
             "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
             ("sub-1", "Test Subscription", "production", "Enabled"),
         )
-        apim_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/core-api-uksouth"
+        apim_id = "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/main-api-uksouth"
         conn.execute(
             """
             INSERT INTO provisioned_assets (
@@ -11072,11 +11186,11 @@ class TestCloudPosture:
                 apim_id,
                 "sub-1",
                 "rg-api",
-                "core-api-uksouth",
+                "main-api-uksouth",
                 "Microsoft.ApiManagement/service",
                 "uksouth",
                 "Premium",
-                "core-api-uksouth.azure-api.net",
+                "main-api-uksouth.azure-api.net",
                 0,
                 "active",
                 None,
@@ -11093,11 +11207,11 @@ class TestCloudPosture:
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "core-api-uksouth",
-                "prodgreen-eventgrid-bridge",
-                "prodgreen-eventgrid-bridge.internal.cbinnovation.uk",
+                "main-api-uksouth",
+                "production-eventgrid-bridge",
+                "production-eventgrid-bridge.internal.cbinnovation.uk",
                 "EventGrid bridge backend",
-                "https://prodgreen-eventgrid-bridge.internal.cbinnovation.uk/",
+                "https://production-eventgrid-bridge.internal.cbinnovation.uk/",
                 "https",
                 "sub-1",
             ),
@@ -11110,12 +11224,12 @@ class TestCloudPosture:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "core-api-uksouth",
+                "main-api-uksouth",
                 "bridge-api",
                 "Bridge API",
                 "/bridge",
-                "https://prodgreen-eventgrid-bridge.internal.cbinnovation.uk/",
-                "https://prodgreen-eventgrid-bridge.internal.cbinnovation.uk/",
+                "https://production-eventgrid-bridge.internal.cbinnovation.uk/",
+                "https://production-eventgrid-bridge.internal.cbinnovation.uk/",
                 1,
                 "sub-1",
             ),
@@ -11127,9 +11241,9 @@ class TestCloudPosture:
         resp = client.get(
             "/api/cloud/resource-details",
             query_string={
-                "id": "cbuk_core_prodgreen_api_uksouth_prodgreen_eventgrid_bridge_internal_cbinnovation_uk",
-                "name": "prodgreen-eventgrid-bridge.internal.cbinnovation.uk",
-                "resource_group": "core-api-uksouth",
+                "id": "cbuk_core_production_api_uksouth_production_eventgrid_bridge_internal_cbinnovation_uk",
+                "name": "production-eventgrid-bridge.internal.cbinnovation.uk",
+                "resource_group": "main-api-uksouth",
                 "type": "APIM Backend Target",
                 "sub": "sub-1",
             },
@@ -11138,9 +11252,9 @@ class TestCloudPosture:
         assert resp.status_code == 200, resp.get_data(as_text=True)
         data = resp.get_json()
         assert data["type_label"] == "APIM Backend Target"
-        assert data["name"] == "prodgreen-eventgrid-bridge.internal.cbinnovation.uk"
-        assert data["parent_resource"]["name"] == "core-api-uksouth"
-        assert data["configuration"]["backend_id"] == "prodgreen-eventgrid-bridge"
+        assert data["name"] == "production-eventgrid-bridge.internal.cbinnovation.uk"
+        assert data["parent_resource"]["name"] == "main-api-uksouth"
+        assert data["configuration"]["backend_id"] == "production-eventgrid-bridge"
         assert data["network"]["subnet"] is None or isinstance(data["network"]["subnet"], str)
 
     def test_api_cloud_resource_details_infers_appgw_parent_from_backend_route(self, monkeypatch):
@@ -15392,7 +15506,7 @@ class TestCloudAssetsApi:
                 ("asset-2", "sub-1", 0),
             ],
         )
-        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        monkeypatch.setattr(app_module, "_get_db", lambda: conn)
 
         client = app_module.app.test_client()
         resp = client.get("/api/subscriptions")

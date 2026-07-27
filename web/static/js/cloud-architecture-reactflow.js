@@ -925,7 +925,11 @@ function openModal(resourceId, nodeData, lookup = {}) {
       }
       if (controller.signal.aborted) return;
       try {
-        renderModalContent(data);
+        renderModalContent({
+          ...data,
+          title: entry?.title || entry?.name || data.title,
+          icon_path: entry?.icon_path || data.icon_path,
+        });
       } catch (err) {
         showModalError(`Error rendering details: ${err.message}`);
       }
@@ -1081,7 +1085,16 @@ function renderModalContent(data) {
     String(data.type_label || data.type || data.resourceType || "").toLowerCase().includes("app service plan");
   const dataTypeKey = normalizeResourceTypeKey(data.type || data.resourceType || data.type_label);
   const parentTypeKey = normalizeResourceTypeKey(data.parent_resource?.type || data.parent_resource?.type_label);
-  const hasDistinctParent = data.parent_resource && data.parent_resource.name && data.parent_resource.type_label && dataTypeKey && parentTypeKey && dataTypeKey !== parentTypeKey;
+  const isCluster = /managedclusters|kubernetes cluster|\baks\b|servicefabric\/clusters|service fabric cluster/i.test(
+    String(data.type || data.resourceType || data.type_label || "")
+  );
+  const hasDistinctParent = !isCluster &&
+    data.parent_resource &&
+    data.parent_resource.name &&
+    data.parent_resource.type_label &&
+    dataTypeKey &&
+    parentTypeKey &&
+    dataTypeKey !== parentTypeKey;
   const sections = [];
 
   if (hasDistinctParent) {
@@ -1223,8 +1236,8 @@ function renderModalContent(data) {
     
     // DNS Names
     if (surface.dns_names && surface.dns_names.length > 0) {
-      const dnsHtml = '<ul class="cloud-arch-modal-list">' +
-        surface.dns_names.map(dns => `<li class="cloud-arch-modal-list-item">${escapeHtml(dns)}</li>`).join('') +
+      const dnsHtml = '<ul class="cloud-arch-modal-list" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px 16px;">' +
+        surface.dns_names.map(dns => `<li class="cloud-arch-modal-list-item" style="overflow-wrap:anywhere;word-break:break-word;">${escapeHtml(dns)}</li>`).join('') +
         '</ul>';
       sections.push({ 
         title: "Public DNS Names", 
@@ -1440,9 +1453,9 @@ function renderModalContent(data) {
     }
     
     if (net.dns_names && net.dns_names.length > 0) {
-      const dnsHtml = net.dns_names.map(dns => 
-        `<span class="cloud-arch-modal-badge cloud-arch-modal-badge--info">🔗 ${dns}</span>`
-      ).join(' ');
+      const dnsHtml = `<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px 12px;">${net.dns_names.map(dns =>
+        `<span class="cloud-arch-modal-badge cloud-arch-modal-badge--info" style="min-width:0;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">🔗 ${dns}</span>`
+      ).join('')}</div>`;
       networkFields.push({ label: "DNS Names", value: dnsHtml, isHtml: true, fullWidth: true });
     }
     

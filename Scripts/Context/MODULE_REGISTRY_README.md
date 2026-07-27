@@ -106,7 +106,7 @@ When the same module is invoked with different parameters:
 # In fi_authentication
 module "aks" {
   source = "git::https://dev.azure.com/.../terraform-aks"
-  app_name = "fi-authentication"
+  app_name = "test-authentication"
 }
 
 # In another repo
@@ -122,7 +122,7 @@ Both repos infer the SAME resource types from the registry:
 - azurerm_key_vault
 - etc.
 
-The NAMING differs (fi-authentication-aks vs payments-service-aks), but the
+The NAMING differs (test-authentication-aks vs payments-service-aks), but the
 infrastructure type and shape is understood to be identical.
 
 ## Future Enhancements

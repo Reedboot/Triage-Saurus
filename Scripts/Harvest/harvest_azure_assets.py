@@ -135,10 +135,15 @@ ProgressCallback = Callable[[str], None]
 _MAX_PROVIDER_WORKERS = 6
 _PROGRESS_REFRESH_SECONDS = 10.0
 _PROVIDER_WRITE_CHUNK = 250
+_DIAGRAM_CHECKPOINT_ASSET_INTERVAL = 100
 
 
-def _precompute_subscription_diagram(sub_id: str) -> None:
-    precompute_subscription_diagram(REPO_ROOT / "Output" / "Data" / "cozo.db", sub_id)
+def _precompute_subscription_diagram(sub_id: str, *, warm_traces: bool = True) -> None:
+    precompute_subscription_diagram(
+        REPO_ROOT / "Output" / "Data" / "cozo.db",
+        sub_id,
+        warm_traces=warm_traces,
+    )
 
 
 def _normalize_provider_filters(raw_filters: list[str] | None) -> list[str]:
@@ -394,6 +399,7 @@ def _persist_rows(
     dry_run: bool,
     rows: list[dict[str, Any]],
     seen_ids: set[str],
+    on_asset_persisted: Callable[[], None] | None = None,
 ) -> int:
     count = 0
     for asset in rows:
@@ -404,6 +410,8 @@ def _persist_rows(
         count += 1
         if not dry_run:
             upsert_asset(conn, asset)
+            if on_asset_persisted:
+                on_asset_persisted()
     return count
 
 
@@ -412,6 +420,7 @@ def _drain_ready_backfill_jobs(
     conn: sqlite3.Connection,
     dry_run: bool,
     seen_ids: set[str],
+    on_asset_persisted: Callable[[], None] | None = None,
 ) -> int:
     processed = 0
     remaining: list[BackfillJob] = []
@@ -424,7 +433,13 @@ def _drain_ready_backfill_jobs(
         except Exception as exc:
             print(f"  [backfill] {job.label} FAILED ({exc})")
             continue
-        processed += _persist_rows(conn, dry_run, _normalize_rows(result), seen_ids)
+        processed += _persist_rows(
+            conn,
+            dry_run,
+            _normalize_rows(result),
+            seen_ids,
+            on_asset_persisted=on_asset_persisted,
+        )
     jobs[:] = remaining
     return processed
 
@@ -434,6 +449,7 @@ def _flush_backfill_jobs(
     conn: sqlite3.Connection,
     dry_run: bool,
     seen_ids: set[str],
+    on_asset_persisted: Callable[[], None] | None = None,
 ) -> int:
     processed = 0
     pending = {job.future: job for job in jobs}
@@ -446,7 +462,13 @@ def _flush_backfill_jobs(
             except Exception as exc:
                 print(f"  [backfill] {job.label} FAILED ({exc})")
                 continue
-            processed += _persist_rows(conn, dry_run, _normalize_rows(result), seen_ids)
+            processed += _persist_rows(
+                conn,
+                dry_run,
+                _normalize_rows(result),
+                seen_ids,
+                on_asset_persisted=on_asset_persisted,
+            )
     jobs.clear()
     return processed
 
@@ -693,18 +715,45 @@ def harvest_subscription(
     seen_ids: set[str] = set()
     pending_backfill_jobs: list[BackfillJob] = []
     total = 0
+    assets_persisted = 0
+    assets_since_diagram_checkpoint = 0
     provider_specs = _select_provider_specs(provider_filters)
+
+    def _diagram_checkpoint() -> None:
+        nonlocal assets_persisted, assets_since_diagram_checkpoint
+        if dry_run:
+            return
+        assets_persisted += 1
+        assets_since_diagram_checkpoint += 1
+        if assets_since_diagram_checkpoint < _DIAGRAM_CHECKPOINT_ASSET_INTERVAL:
+            return
+        assets_since_diagram_checkpoint = 0
+        conn.commit()
+        print(f"  [Mermaid Diagram] checkpoint at {assets_persisted} assets...", flush=True)
+        _precompute_subscription_diagram(sub_id, warm_traces=False)
 
     def _store_result(result: HarvestOutput) -> tuple[int, int]:
         nonlocal total
         if isinstance(result, StagedRows):
-            core_count = _persist_rows(conn, dry_run, result.core_rows, seen_ids)
+            core_count = _persist_rows(
+                conn,
+                dry_run,
+                result.core_rows,
+                seen_ids,
+                on_asset_persisted=_diagram_checkpoint,
+            )
             total += core_count
             pending_backfill_jobs.extend(result.backfill_jobs)
             return core_count, len(result.backfill_jobs)
 
         rows = _normalize_rows(result)
-        row_count = _persist_rows(conn, dry_run, rows, seen_ids)
+        row_count = _persist_rows(
+            conn,
+            dry_run,
+            rows,
+            seen_ids,
+            on_asset_persisted=_diagram_checkpoint,
+        )
         total += row_count
         return row_count, 0
 
@@ -727,7 +776,13 @@ def harvest_subscription(
             while pending:
                 done, pending = wait(pending, timeout=_PROGRESS_REFRESH_SECONDS, return_when=FIRST_COMPLETED)
                 if not done:
-                    processed_backfills = _drain_ready_backfill_jobs(pending_backfill_jobs, conn, dry_run, seen_ids)
+                    processed_backfills = _drain_ready_backfill_jobs(
+                        pending_backfill_jobs,
+                        conn,
+                        dry_run,
+                        seen_ids,
+                        on_asset_persisted=_diagram_checkpoint,
+                    )
                     total += processed_backfills
                     if processed_backfills and not dry_run:
                         conn.commit()
@@ -745,7 +800,13 @@ def harvest_subscription(
 
                     asset_count, backfill_count = _store_result(assets)
 
-                    processed_backfills = _drain_ready_backfill_jobs(pending_backfill_jobs, conn, dry_run, seen_ids)
+                    processed_backfills = _drain_ready_backfill_jobs(
+                        pending_backfill_jobs,
+                        conn,
+                        dry_run,
+                        seen_ids,
+                        on_asset_persisted=_diagram_checkpoint,
+                    )
                     total += processed_backfills
                     if processed_backfills and not dry_run:
                         conn.commit()
@@ -863,7 +924,13 @@ def harvest_subscription(
     except Exception as exc:
         print(f"  [Firewall Policies] FAILED ({exc})")
 
-    processed_backfills = _flush_backfill_jobs(pending_backfill_jobs, conn, dry_run, seen_ids)
+    processed_backfills = _flush_backfill_jobs(
+        pending_backfill_jobs,
+        conn,
+        dry_run,
+        seen_ids,
+        on_asset_persisted=_diagram_checkpoint,
+    )
     total += processed_backfills
     if processed_backfills and not dry_run:
         conn.commit()

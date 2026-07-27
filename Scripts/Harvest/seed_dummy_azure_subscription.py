@@ -491,7 +491,18 @@ def _build_assets(brand: str, subscription_id: str | None = None) -> list[AssetS
                     "ipConfigurations": [
                         {"name": "bastion", "properties": {"publicIPAddress": {"id": f"pip-{brand}-bastion"}}}
                     ]
-                }
+                },
+                "_extra": {
+                    "vnet_name": f"vnet-{brand}-core",
+                    "vnet_resource_group": rg["network"],
+                    "subnet_name": f"snet-{brand}-bastion",
+                    "subnet_id": _arm_id(
+                        subscription_id or "",
+                        rg["network"],
+                        "Microsoft.Network/virtualNetworks",
+                        f"vnet-{brand}-core/subnets/snet-{brand}-bastion",
+                    ),
+                },
             },
         ),
         AssetSpec(

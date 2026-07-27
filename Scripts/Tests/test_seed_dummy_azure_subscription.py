@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "Scripts" / "Harvest" / "seed_dummy_azure_subscription.py"
 BANNED_TERMS = {
     "chaps",
-    "bacs",
+    "money",
     "fx",
     "institution",
     "cop",
@@ -22,7 +22,7 @@ BANNED_TERMS = {
     "previewaks",
     "externalaks",
     "sharedaks",
-    "prodgreen",
+    "production",
     "pipeline-customer",
     "banking",
 }
@@ -56,7 +56,10 @@ def test_seed_dummy_azure_subscription_populates_cozo(tmp_path):
             (sub["id"],),
         ).fetchone()
         assert cached_diagram is not None
-        assert json.loads(cached_diagram["payload_json"])["ingress_diagram"]["mermaid"]
+        mermaid = json.loads(cached_diagram["payload_json"])["ingress_diagram"]["mermaid"]
+        bastion_subnet_start = mermaid.index("Subnet: snet-marketlane-bastion")
+        bastion_subnet_end = mermaid.index("\n        end", bastion_subnet_start)
+        assert "bas-marketlane-core" in mermaid[bastion_subnet_start:bastion_subnet_end]
 
         assets = conn.execute(
             "SELECT name, resource_group, COALESCE(fqdn, '') AS fqdn FROM provisioned_assets ORDER BY name"
@@ -180,6 +183,13 @@ def test_seed_dummy_azure_subscription_populates_cozo(tmp_path):
         ).fetchone()
         assert apim_asset["is_public"] == 0
         assert json.loads(apim_asset["raw_json"])["properties"]["virtualNetworkType"] == "Internal"
+        bastion_asset = conn.execute(
+            "SELECT raw_json FROM provisioned_assets WHERE name = ?",
+            ("bas-marketlane-core",),
+        ).fetchone()
+        bastion_extra = json.loads(bastion_asset["raw_json"])["_extra"]
+        assert bastion_extra["vnet_name"] == "vnet-marketlane-core"
+        assert bastion_extra["subnet_name"] == "snet-marketlane-bastion"
         assert conn.execute("SELECT COUNT(*) FROM firewall_policies").fetchone()[0] >= 1
         assert conn.execute("SELECT COUNT(*) FROM firewall_app_rules").fetchone()[0] >= 2
         assert conn.execute("SELECT COUNT(*) FROM firewall_nat_rules").fetchone()[0] >= 1

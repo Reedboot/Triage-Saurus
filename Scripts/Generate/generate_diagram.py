@@ -2094,7 +2094,7 @@ class HierarchicalDiagramBuilder:
     def is_bastion_host(self, resource: dict) -> bool:
         """Check if resource is an Azure Bastion host."""
         rtype = (resource.get('resource_type') or '').lower()
-        return 'bastion_host' in rtype
+        return 'bastion_host' in rtype or 'bastionhosts' in rtype
 
     def _get_sg_protected_computes(self, sg: dict, candidate_computes: List[dict]) -> List[dict]:
         """Resolve which compute resources an SG/NSG should wrap in the diagram."""

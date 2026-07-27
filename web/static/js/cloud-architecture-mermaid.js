@@ -1223,6 +1223,39 @@ function populateComponentTraceOptions() {
       fqdn: String(data.fqdn || resources[0]?.fqdn || "").trim(),
     });
     options.push(`<option value="${escapeHtml(display)}"></option>`);
+
+    if (normalizedType.includes("apim api") || normalizedType.includes("apimanagement/apis")) {
+      const apiName = String(data.api_name || data.configuration?.api_name || "").trim();
+      const apiDisplay = `${apiName} — APIM API`;
+      if (apiName && !componentTraceIndex.has(apiDisplay)) {
+        componentTraceIndex.set(apiDisplay, {
+          id: nodeId,
+          name: apiName,
+          displayName: apiName,
+          type: "APIM API",
+          fqdn: String(data.fqdn || resources[0]?.fqdn || "").trim(),
+        });
+        options.push(`<option value="${escapeHtml(apiDisplay)}"></option>`);
+      }
+    }
+
+    const apis = Array.isArray(data.apis) ? data.apis : [];
+    for (const api of apis) {
+      const apiName = String(api?.api_name || api?.name || "").trim();
+      if (!apiName) continue;
+      const apiLabel = normalizeModalText(String(api?.api_display_name || apiName).trim());
+      const apiType = "APIM API";
+      const apiDisplay = `${apiLabel} — ${apiType}`;
+      if (componentTraceIndex.has(apiDisplay)) continue;
+      componentTraceIndex.set(apiDisplay, {
+        id: `${nodeId}::api::${apiName}`,
+        name: apiName,
+        displayName: apiLabel,
+        type: apiType,
+        fqdn: String(data.fqdn || "").trim(),
+      });
+      options.push(`<option value="${escapeHtml(apiDisplay)}"></option>`);
+    }
   }
   componentOptionsEl.innerHTML = options.sort().join("");
   renderComponentDropdown("");
@@ -1293,20 +1326,43 @@ function attachComponentTraceHandlers(svg, chain) {
     const open = (event) => {
       event?.stopPropagation();
       event?.preventDefault();
-      openModal(String(step.node_id || ""), nodeData, {
-        id: String(step.node_id || ""),
-        name: resourceName,
-        resourceGroup: step.resource_group || "",
-        type: resourceType,
-        subscription: currentMermaidSubscriptionId,
-        nodeId: String(step.node_id || ""),
-      });
+      showTraceStepDetails(step);
     };
     nodeEl.addEventListener("click", open);
     nodeEl.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") open(event);
     });
   });
+}
+
+function showTraceStepDetails(step) {
+  const detailsEl = document.getElementById("cloud-arch-trace-details");
+  if (!detailsEl) return;
+  const values = [
+    ["Service Type", step.kind],
+    ["Name", step.name || step.label || step.node_id],
+    ["DNS", step.fqdn || step.hostname || step.backend_url],
+    ["API Operations", step.operations || step.api_operations],
+    ["WAF Policy Name", step.waf_policy_name],
+    ["Namespace", step.namespace],
+    ["Service Port", step.port],
+    ["API Path", step.route],
+    ["Protocol", step.protocol || step.backend_protocol],
+    ["Resource Group", step.resource_group],
+    ["Cluster", step.cluster_name],
+    ["Deployment", step.deployment_name],
+  ].filter(([, value]) => value !== undefined && value !== null && String(value).trim());
+  detailsEl.hidden = false;
+  detailsEl.innerHTML = `
+    <div class="cloud-arch-trace-details-title">${escapeHtml(step.label || step.name || "Component details")}</div>
+    <div class="cloud-arch-modal-grid">
+      ${values.map(([label, value]) => `
+        <div class="cloud-arch-modal-field">
+          <div class="cloud-arch-modal-field-label">${escapeHtml(label)}</div>
+          <div class="cloud-arch-modal-field-value">${escapeHtml(Array.isArray(value) ? value.join(", ") : value)}</div>
+        </div>
+      `).join("")}
+    </div>`;
 }
 
 async function renderComponentTrace(payload, selected) {
@@ -1325,11 +1381,20 @@ async function renderComponentTrace(payload, selected) {
     traceRootEl.innerHTML = `<div style="color:var(--text-muted);padding:20px;">${escapeHtml(payload?.message || "No route was resolved for this component.")}</div>`;
     return;
   }
-  traceRootEl.innerHTML = "";
+  traceRootEl.innerHTML = '<div id="cloud-arch-trace-diagram"></div>';
+  const traceDiagramEl = document.getElementById("cloud-arch-trace-diagram");
+  const details = document.createElement("div");
+  details.id = "cloud-arch-trace-details";
+  details.hidden = true;
+  details.style.cssText = "margin-top:12px;padding:12px;border:1px solid var(--border);border-radius:8px;";
+  traceRootEl.appendChild(details);
   if (activeMermaidCssText) applyMermaidCss(activeMermaidCssText);
+  const uniformStyle = document.createElement("style");
+  uniformStyle.textContent = "#cloud-arch-trace-diagram svg .node rect,#cloud-arch-trace-diagram svg .node foreignObject{width:180px!important;height:64px!important;}";
+  traceRootEl.insertBefore(uniformStyle, traceDiagramEl);
   await renderMermaidDiagram({
     source: sanitizeMermaidSource(best.mermaid),
-    rootEl: traceRootEl,
+    rootEl: traceDiagramEl,
     onRendered: async (svgEl) => {
       postProcessSvg(svgEl);
       enhancePlaceholderGlyphs(svgEl);
@@ -1402,6 +1467,15 @@ async function loadComponentTrace() {
     if (traceRootEl) traceRootEl.innerHTML = '<div style="color:var(--red);padding:20px;">Choose a component from the autocomplete suggestions.</div>';
     return;
   }
+  const submitButton = traceFormEl?.querySelector('button[type="submit"]');
+  if (submitButton) {
+    submitButton.disabled = true;
+    submitButton.textContent = "Tracing…";
+  }
+  if (tracePanelEl) tracePanelEl.hidden = false;
+  if (traceRootEl) {
+    traceRootEl.innerHTML = '<div style="color:var(--text-muted);padding:20px;">Resolving connection path…</div>';
+  }
   try {
     const params = new URLSearchParams({
       component_id: selected.id,
@@ -1420,6 +1494,11 @@ async function loadComponentTrace() {
   } catch (err) {
     if (tracePanelEl) tracePanelEl.hidden = false;
     if (traceRootEl) traceRootEl.innerHTML = `<div style="color:var(--red);padding:20px;">${escapeHtml(err.message || String(err))}</div>`;
+  } finally {
+    if (submitButton) {
+      submitButton.disabled = false;
+      submitButton.textContent = "Show connection";
+    }
   }
 }
 
@@ -1517,6 +1596,9 @@ function openDrilldownModal(nodeData, subId, fallback = null) {
     ingress: Array.isArray(nodeData?.ingress) ? nodeData.ingress : [],
     egress:  Array.isArray(nodeData?.egress)  ? nodeData.egress  : [],
     ...data,
+    title: nodeData?.name || nodeData?.title || data?.title || data?.name,
+    __node_label: nodeData?.name || nodeData?.title || data?.__node_label,
+    icon_path: nodeData?.icon_path || data?.icon_path,
   });
 
   const url = new URL(`/api/subscriptions/${encodeURIComponent(subId)}/drilldown`, window.location.origin);
@@ -1780,6 +1862,18 @@ function normalizeModalText(value) {
     .trim();
 }
 
+function isAksClusterDetails(data) {
+  return /managedclusters|kubernetes cluster|\baks\b/i.test(
+    String(data?.type || data?.resourceType || data?.type_label || "")
+  );
+}
+
+function isClusterDetails(data) {
+  return isAksClusterDetails(data) || /servicefabric\/clusters|service fabric cluster/i.test(
+    String(data?.type || data?.resourceType || data?.type_label || "")
+  );
+}
+
 function collectPublicIps(data) {
   const candidates = [
     data?.public_ip,
@@ -1802,6 +1896,7 @@ function collectPublicIps(data) {
 function collectFqdns(data) {
   const candidates = [
     data?.fqdn,
+    ...(Array.isArray(data?.fqdns) ? data.fqdns : []),
     data?.configuration?.hostname,
     ...(Array.isArray(data?.dns_names) ? data.dns_names : []),
     ...(Array.isArray(data?.network?.dns_names) ? data.network.dns_names : []),
@@ -2064,7 +2159,7 @@ function buildParentResourceFields(parentResource) {
   if (parentNetworkType) fields.push(`<div class="cloud-arch-modal-field"><div class="cloud-arch-modal-field-label">Inherited Virtual Network Type</div><div class="cloud-arch-modal-field-value">${escapeHtml(parentNetworkType)}</div></div>`);
   const parentDnsNames = collectFqdns(parentResource);
   if (parentDnsNames.length > 0) {
-    fields.push(`<div class="cloud-arch-modal-field cloud-arch-modal-field--full"><div class="cloud-arch-modal-field-label">${parentDnsNames.length > 1 ? "DNS Names" : "DNS Name"}</div><div class="cloud-arch-modal-field-value">${parentDnsNames.map((fqdn) => `<code>${escapeHtml(String(fqdn))}</code>`).join("<br/>")}</div></div>`);
+    fields.push(`<div class="cloud-arch-modal-field cloud-arch-modal-field--full"><div class="cloud-arch-modal-field-label">${parentDnsNames.length > 1 ? "DNS Names" : "DNS Name"}</div><div class="cloud-arch-modal-field-value" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px 16px;">${parentDnsNames.map((fqdn) => `<code style="white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${escapeHtml(String(fqdn))}</code>`).join("")}</div></div>`);
   }
   return fields.join("");
 }
@@ -2499,7 +2594,11 @@ function renderTabularModalContent(data) {
     normalizeModalText(firstNonEmpty(data?.title, data?.name, "")).toLowerCase() === "simulation-knowledgecentre-uksouth" &&
     normalizeModalText(firstNonEmpty(data?.type_label, data?.type, data?.resourceType, "")).toLowerCase().includes("app service plan");
 
-  const parentResource = data?.parent_resource && typeof data.parent_resource === "object" ? data.parent_resource : null;
+  const parentResource = !isClusterDetails(data) &&
+    data?.parent_resource &&
+    typeof data.parent_resource === "object"
+    ? data.parent_resource
+    : null;
   const parentResourceSection = parentResource
     ? `
       <div class="cloud-arch-modal-section">
@@ -2755,7 +2854,11 @@ function renderModalContent(data) {
   const publicNetworkAccess = collectPublicNetworkAccess(data);
   const ipRestrictions = collectIpRestrictions(data);
   const childNodes = Array.isArray(data.__node_children) ? data.__node_children : [];
-  const parentResource = data.parent_resource && typeof data.parent_resource === "object" ? data.parent_resource : null;
+  const parentResource = !isClusterDetails(data) &&
+    data.parent_resource &&
+    typeof data.parent_resource === "object"
+    ? data.parent_resource
+    : null;
   const parentResourceSection = parentResource
     ? `
       <div class="cloud-arch-modal-section">
@@ -2824,8 +2927,9 @@ function renderModalContent(data) {
   if (fqdns.length > 0) {
     networkFields.push({
       label: fqdns.length > 1 ? "DNS Names" : "DNS Name",
-      value: fqdns.map((fqdn) => `<code>${escapeHtml(normalizeModalText(fqdn))}</code>`).join("<br/>"),
+      value: `<span style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px 16px;">${fqdns.map((fqdn) => `<code style="white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${escapeHtml(normalizeModalText(fqdn))}</code>`).join("")}</span>`,
       isHtml: true,
+      fullWidth: true,
     });
   }
   if (publicIps.length > 0) {

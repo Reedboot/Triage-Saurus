@@ -30,6 +30,49 @@ def test_subscription_asset_tier_keeps_monitoring_noise_hidden():
     assert subscription_asset_tier("Microsoft.Insights/activityLogAlerts") == "other"
 
 
+def test_subscription_assets_exclude_deployment_slots_from_diagram_nodes():
+    rows = [
+        (
+            "orders-fn",
+            "Microsoft.Web/sites",
+            "rg-app",
+            "orders-fn.azurewebsites.net",
+            1,
+            "Y1",
+            "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/orders-fn",
+            0,
+            None,
+            0,
+            None,
+            None,
+            '{"kind":"functionapp"}',
+            None,
+            None,
+        ),
+        (
+            "staging",
+            "Microsoft.Web/sites/slots",
+            "rg-app",
+            "orders-fn-staging.azurewebsites.net",
+            0,
+            "Y1",
+            "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/orders-fn/slots/staging",
+            0,
+            None,
+            0,
+            None,
+            None,
+            '{"kind":"functionapp"}',
+            None,
+            None,
+        ),
+    ]
+
+    assets = subscription_assets_from_rows(rows, lambda arm_type: arm_type.split("/")[-1])
+
+    assert [asset["name"] for asset in assets] == ["orders-fn"]
+
+
 def test_subscription_apply_plan_hierarchy_inherits_ase_network():
     rows = [
         (
@@ -124,6 +167,93 @@ def test_subscription_apply_plan_hierarchy_inherits_hosted_site_network():
     assert plan["subnet_id"] == subnet_id
 
 
+def test_resource_group_view_renders_function_app_plan_and_ase_chain():
+    rows = [
+        (
+            "orders-fn",
+            "Microsoft.Web/sites",
+            "rg-app",
+            "orders-fn.azurewebsites.net",
+            0,
+            None,
+            "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/orders-fn",
+            0,
+            None,
+            0,
+            None,
+            None,
+            '{"kind":"functionapp","properties":{"siteConfig":{}}}',
+            None,
+            None,
+        ),
+        (
+            "plan-one",
+            "Microsoft.Web/serverfarms",
+            "rg-app",
+            "",
+            0,
+            "P1v3",
+            "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/serverfarms/plan-one",
+            0,
+            None,
+            0,
+            None,
+            None,
+            '{"properties":{"hostingEnvironmentProfile":{"id":"/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/ase-one"}}}',
+            None,
+            None,
+        ),
+        (
+            "ase-one",
+            "Microsoft.Web/hostingEnvironments",
+            "rg-app",
+            "ase-one.appserviceenvironment.net",
+            0,
+            "ASEv3",
+            "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/ase-one",
+            0,
+            None,
+            0,
+            None,
+            None,
+            '{"properties":{}}',
+            None,
+            None,
+        ),
+    ]
+
+    diagrams = build_subscription_diagrams_by_rg(
+        "Test Subscription",
+        "production",
+        rows,
+        sanitise_node_id=lambda value: value.replace("-", "_").replace("/", "_").replace(".", "_"),
+        friendly_type=lambda arm_type: arm_type.split("/")[-1],
+        get_icon_path=lambda arm_type: f"/icons/{arm_type}",
+        normalize_attack_paths=lambda raw_paths, reviewer=None: raw_paths,
+        plan_links=[("rg-app", "orders-fn", "rg-app", "plan-one")],
+    )
+
+    mermaid = diagrams[0]["views"]["connectivity"]["mermaid"]
+    app_nid = subscription_node_id(
+        {"name": "orders-fn", "rg": "rg-app"},
+        lambda value: value.replace("-", "_").replace("/", "_").replace(".", "_"),
+    )
+    plan_nid = subscription_node_id(
+        {"name": "plan-one", "rg": "rg-app"},
+        lambda value: value.replace("-", "_").replace("/", "_").replace(".", "_"),
+    )
+    ase_nid = subscription_node_id(
+        {"name": "ase-one", "rg": "rg-app"},
+        lambda value: value.replace("-", "_").replace("/", "_").replace(".", "_"),
+    )
+
+    assert f"{app_nid} -->|\"hosted on\"| {plan_nid}" in mermaid
+    assert f'{plan_nid} -->|"Hosted in"| {ase_nid}' in mermaid
+    assert "stroke-dasharray:4,2" in mermaid
+    assert app_nid in mermaid
+    assert "/icons/Microsoft.Web/functionApps" in mermaid
+
+
 def test_aks_route_backend_prefers_ingress_hostname_over_cluster():
     rows = [
         (
@@ -199,7 +329,7 @@ def test_aks_route_backend_prefers_ingress_hostname_over_cluster():
         lambda value: value.replace("-", "_").replace("/", "_").replace(".", "_"),
     )
     service_nid = subscription_node_id(
-        {"name": "SharedAKS-default-portalui-80", "rg": "rg-aks"},
+        {"name": "SharedAKS-default-portalui-80-service", "rg": "rg-aks"},
         lambda value: value.replace("-", "_").replace("/", "_").replace(".", "_"),
     )
     cluster_nid = subscription_node_id(
@@ -209,8 +339,9 @@ def test_aks_route_backend_prefers_ingress_hostname_over_cluster():
 
     assert "production-portalui2.internal.cbinnovation.uk" in mermaid
     assert f"{portalui_nid} --> {ingress_nid}" in mermaid
-    assert f"{ingress_nid} --> {cluster_nid}" in mermaid
-    assert f"{service_nid}[" not in mermaid
+    assert f"{ingress_nid} --> {service_nid}" in mermaid
+    assert f"{service_nid} --> {cluster_nid}" in mermaid
+    assert f"    {ingress_nid} --> {cluster_nid}" not in mermaid.splitlines()
 
 
 def test_kubernetes_service_nodes_are_hidden_when_orphaned():
