@@ -3147,10 +3147,10 @@ class TestSubscriptionNetworkRendering:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "/subscriptions/sub-1/resourceGroups/core-sh2-uksouth/providers/Microsoft.ServiceFabric/clusters/core-sh2",
+                "/subscriptions/sub-1/resourceGroups/main-sh2-uksouth/providers/Microsoft.ServiceFabric/clusters/main-sh2",
                 "sub-1",
-                "core-sh2-uksouth",
-                "core-sh2",
+                "main-sh2-uksouth",
+                "main-sh2",
                 "Microsoft.ServiceFabric/clusters",
                 "uksouth",
                 None,
@@ -3173,9 +3173,9 @@ class TestSubscriptionNetworkRendering:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "/subscriptions/sub-1/resourceGroups/core-sh2-uksouth/providers/Microsoft.Compute/virtualMachineScaleSets/svc1",
+                "/subscriptions/sub-1/resourceGroups/main-sh2-uksouth/providers/Microsoft.Compute/virtualMachineScaleSets/svc1",
                 "sub-1",
-                "core-sh2-uksouth",
+                "main-sh2-uksouth",
                 "svc1",
                 "Microsoft.Compute/virtualMachineScaleSets",
                 "uksouth",
@@ -3194,9 +3194,9 @@ class TestSubscriptionNetworkRendering:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "/subscriptions/sub-1/resourceGroups/core-sh2-uksouth/providers/Microsoft.Compute/virtualMachineScaleSets/system1",
+                "/subscriptions/sub-1/resourceGroups/main-sh2-uksouth/providers/Microsoft.Compute/virtualMachineScaleSets/system1",
                 "sub-1",
-                "core-sh2-uksouth",
+                "main-sh2-uksouth",
                 "system1",
                 "Microsoft.Compute/virtualMachineScaleSets",
                 "uksouth",
@@ -3213,8 +3213,8 @@ class TestSubscriptionNetworkRendering:
             conn,
             "sub-1",
             "Microsoft.ServiceFabric/clusters",
-            [{"rg": "core-sh2-uksouth", "name": "core-sh2"}],
-            node={"title": "core-sh2"},
+            [{"rg": "main-sh2-uksouth", "name": "main-sh2"}],
+            node={"title": "main-sh2"},
         )
 
         assert result["view_type"] == "table"
