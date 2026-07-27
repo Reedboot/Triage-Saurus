@@ -293,7 +293,7 @@ const MermaidIconInjector = (() => {
    */
   async function injectIconForNode(node, iconMap, svgElement) {
     // Skip nodes that already have an injected icon (idempotency guard)
-    if (node.querySelector('.mermaid-icon')) return false;
+    if (node.querySelector('.mermaid-icon, img.ni')) return false;
 
     // Extract resource type from the CSS class applied to the node
     const resourceType = extractResourceTypeFromClass(node);

@@ -241,6 +241,18 @@ _BASE_TABLES_SQL = """
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS subscription_trace_cache (
+      cache_key TEXT PRIMARY KEY,
+      sub_id TEXT NOT NULL,
+      trace_type TEXT NOT NULL,
+      request_json TEXT NOT NULL,
+      cache_signature TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_subscription_trace_cache_sub
+      ON subscription_trace_cache(sub_id);
+
     CREATE TABLE IF NOT EXISTS write_operation_log (
       id INTEGER PRIMARY KEY,
       idempotency_key TEXT NOT NULL UNIQUE,

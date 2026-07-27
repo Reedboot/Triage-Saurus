@@ -51,6 +51,12 @@ def test_seed_dummy_azure_subscription_populates_cozo(tmp_path):
         assert sub is not None
         assert sub["display_name"] == "marketlane-demo"
         assert sub["environment"] == "dev"
+        cached_diagram = conn.execute(
+            "SELECT payload_json FROM subscription_diagram_cache WHERE sub_id = ?",
+            (sub["id"],),
+        ).fetchone()
+        assert cached_diagram is not None
+        assert json.loads(cached_diagram["payload_json"])["ingress_diagram"]["mermaid"]
 
         assets = conn.execute(
             "SELECT name, resource_group, COALESCE(fqdn, '') AS fqdn FROM provisioned_assets ORDER BY name"

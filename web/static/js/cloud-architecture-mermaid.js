@@ -25,7 +25,6 @@ const FIREFOX_VIEWBOX_PADDING_TOP = 150;
 const FIREFOX_VIEWBOX_PADDING_BOTTOM = 18;
 let mermaidNodeDataById = new Map();
 let mermaidOriginalIdByNodeId = new Map();
-let mermaidClickHandler = null;
 let currentMermaidSubscriptionId = "";
 
 const mermaidViewEl = document.getElementById("cloud-arch-mermaid-view");
@@ -40,6 +39,16 @@ const modalTitle = document.getElementById("modal-title");
 const modalSubtitle = document.getElementById("modal-subtitle");
 const modalBody = document.getElementById("modal-body");
 const modalIcon = document.getElementById("modal-icon");
+const traceFormEl = document.getElementById("cloud-arch-trace-form");
+const componentInputEl = document.getElementById("cloud-arch-component-input");
+const componentOptionsEl = document.getElementById("cloud-arch-component-options");
+const componentDropdownEl = document.getElementById("cloud-arch-component-dropdown");
+const traceDirectionEl = document.getElementById("cloud-arch-trace-direction");
+const tracePanelEl = document.getElementById("cloud-arch-trace-panel");
+const traceRootEl = document.getElementById("cloud-arch-trace-root");
+const traceTitleEl = document.getElementById("cloud-arch-trace-title");
+const traceClearEl = document.getElementById("cloud-arch-trace-clear");
+let componentTraceIndex = new Map();
 
 let activeViewMode = normalizeViewMode(CONFIG.initialViewMode || "mermaid");
 const isFirefox = /firefox/i.test(navigator.userAgent || "");
@@ -52,6 +61,7 @@ let mermaidFitRaf = null;
 let mermaidFitTimeout = null;
 let mermaidFitResizeObserver = null;
 let mermaidManualZoom = false;
+let activeMermaidCssText = "";
 
 function cancelMermaidDiagramFit() {
   if (mermaidFitRaf) cancelAnimationFrame(mermaidFitRaf);
@@ -420,6 +430,7 @@ function bindFirefoxOverlaySync(svgEl) {
 function applyMermaidCss(cssText) {
   let styleEl = document.getElementById(MERMAID_STYLE_ID);
   const css = String(cssText || "").trim();
+  activeMermaidCssText = css;
   if (!css) {
     if (styleEl) {
       styleEl.remove();
@@ -431,7 +442,10 @@ function applyMermaidCss(cssText) {
     styleEl.id = MERMAID_STYLE_ID;
     document.head.appendChild(styleEl);
   }
-  styleEl.textContent = css;
+  styleEl.textContent = css.replace(
+    /#cloud-arch-mermaid-root\b/g,
+    ":is(#cloud-arch-mermaid-root, #cloud-arch-trace-root)"
+  );
 }
 
 function normalizeMermaidNodeId(rawId) {
@@ -446,19 +460,69 @@ function resolveMermaidOriginalId(nodeId) {
   return mermaidOriginalIdByNodeId.get(compactId) || compactId;
 }
 
+function findMermaidNodeData(nodeId, nodeGroup = null) {
+  const rawId = String(nodeId || "").trim();
+  const candidates = [
+    rawId,
+    normalizeMermaidNodeId(rawId),
+    resolveMermaidOriginalId(rawId),
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    const data = mermaidNodeDataById.get(candidate);
+    if (data) return data;
+  }
+
+  const label = String(
+    nodeGroup?.querySelector(".nodeLabel")?.textContent ||
+    nodeGroup?.querySelector("text")?.textContent ||
+    ""
+  ).trim().toLowerCase();
+  if (!label) return null;
+  for (const data of mermaidNodeDataById.values()) {
+    const values = [data?.label, data?.title, data?.name]
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter(Boolean);
+    if (values.some((value) => value === label || label.includes(value) || value.includes(label))) {
+      return data;
+    }
+  }
+  return null;
+}
+
+function fallbackMermaidNodeData(nodeId, nodeGroup = null) {
+  const label = String(
+    nodeGroup?.querySelector(".nodeLabel")?.textContent ||
+    nodeGroup?.querySelector("text")?.textContent ||
+    nodeId ||
+    "Cloud resource"
+  ).trim();
+  const classes = String(nodeGroup?.getAttribute("class") || "").toLowerCase();
+  const armType = classes.includes("application_gateway")
+    ? "Microsoft.Network/applicationGateways"
+    : "";
+  return {
+    id: nodeId,
+    title: label,
+    label,
+    arm_type: armType,
+    resources: [],
+  };
+}
+
 function attachMermaidDrilldownHandlers(svg) {
   if (!svg) return;
 
   svg.querySelectorAll("g.node[id], g.cluster[id]").forEach((el) => {
     const rawId = el.getAttribute("id") || "";
     const nodeId = normalizeMermaidNodeId(rawId);
-    const nodeData = mermaidNodeDataById.get(nodeId);
-    if (!nodeData || nodeData.summaryNode) return;
+    const nodeData = findMermaidNodeData(nodeId, el) || fallbackMermaidNodeData(nodeId, el);
     el.classList.add("node-drillable");
     el.style.cursor = "pointer";
     el.setAttribute("title", `Click to explore ${nodeData.title || nodeId}`);
     el.setAttribute("tabindex", "0");
     el.addEventListener("click", (evt) => {
+      if (evt.__cloudArchNodeClickHandled) return;
+      evt.__cloudArchNodeClickHandled = true;
       evt.stopPropagation();
       evt.preventDefault();
       openNodePopup(nodeId, nodeData);
@@ -472,11 +536,11 @@ function attachMermaidDrilldownHandlers(svg) {
 }
 
 function ensureMermaidClickHandler(svg) {
-  if (mermaidClickHandler || !svg) {
+  if (!svg || svg.dataset.cloudArchClickHandler === "true") {
     return;
   }
 
-  mermaidClickHandler = (event) => {
+  const mermaidClickHandler = (event) => {
     const target = event.target instanceof Element ? event.target : null;
     let nodeGroup = null;
 
@@ -511,11 +575,27 @@ function ensureMermaidClickHandler(svg) {
     if (!nodeGroup) return;
 
     const nodeId = normalizeMermaidNodeId(nodeGroup.getAttribute("id") || "");
-    const nodeData = mermaidNodeDataById.get(nodeId);
-    if (!nodeData || nodeData.summaryNode) return;
+    const nodeData = findMermaidNodeData(nodeId, nodeGroup) || fallbackMermaidNodeData(nodeId, nodeGroup);
+    if (event.__cloudArchNodeClickHandled) return;
+    event.__cloudArchNodeClickHandled = true;
     openNodePopup(nodeId, nodeData);
   };
   svg.addEventListener("click", mermaidClickHandler);
+  svg.dataset.cloudArchClickHandler = "true";
+}
+
+function bindMermaidRootClickFallback() {
+  if (!mermaidRootEl || mermaidRootEl.dataset.clickFallbackBound === "true") return;
+  mermaidRootEl.dataset.clickFallbackBound = "true";
+  mermaidRootEl.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const nodeGroup = target?.closest?.("g.node[id], g.cluster[id]");
+    if (!nodeGroup || !mermaidRootEl.contains(nodeGroup)) return;
+    const nodeId = normalizeMermaidNodeId(nodeGroup.getAttribute("id") || "");
+    const nodeData = findMermaidNodeData(nodeId, nodeGroup) || fallbackMermaidNodeData(nodeId, nodeGroup);
+    event.__cloudArchNodeClickHandled = true;
+    openNodePopup(nodeId, nodeData);
+  }, true);
 }
 
 function escapeMermaidText(value) {
@@ -826,8 +906,6 @@ function buildMermaidGraph(payload, subscriptionName) {
       /\bvnet\b/,
       /\bnetwork\b/,
       /\bsubnet\b/,
-      /\bvirtual[_\s-]*machine[_\s-]*scale[_\s-]*set(s)?\b/,
-      /\bvirtualmachinescalesets\b/,
       /\bapp[_\s-]*service[_\s-]*environment\b/,
       /\bhostingenvironment(s)?\b/,
       /\bnsg\b/,
@@ -927,10 +1005,18 @@ function buildMermaidGraph(payload, subscriptionName) {
     const groupId = `grp_${sanitizeMermaidId(providerKey, "provider")}`;
     lines.push(`  subgraph ${groupId}["${escapeMermaidText(theme.label)}"]`);
     const rootNodes = bucket.filter((node) => {
+      const isVmssNode = /virtualmachinescalesets/i.test(
+        String(node?.data?.resourceType || node?.data?.arm_type || node?.data?.type || "")
+      );
+      if (node?.hidden && !isVmssNode) return false;
       const parentId = node?.data?.parentNodeId ? String(node.data.parentNodeId) : "";
       if (!parentId) return true;
       const parent = hierarchy.nodeById.get(parentId);
-      return !parent || (parent?.data?.providerKey || "unknown") !== providerKey;
+      return (
+        !parent ||
+        parent?.hidden ||
+        (parent?.data?.providerKey || "unknown") !== providerKey
+      );
     });
 
     const networkRootNodes = [];
@@ -1033,6 +1119,11 @@ async function renderMermaidGraph(payload, subscriptionName) {
   if (!mermaidViewEl || !mermaidRootEl) {
     return;
   }
+  const mermaidScrollEl = document.getElementById("cloud-arch-mermaid-scroll");
+  if (mermaidScrollEl) {
+    mermaidScrollEl.scrollTop = 0;
+    mermaidScrollEl.scrollLeft = 0;
+  }
 
   const directDiagram = String(payload?.mermaid || "").trim();
   const mermaidSource = sanitizeMermaidSource(directDiagram || buildMermaidGraph(payload, subscriptionName));
@@ -1043,11 +1134,14 @@ async function renderMermaidGraph(payload, subscriptionName) {
         .filter(([id, data]) => id && data)
     );
   } else {
-    mermaidNodeDataById = new Map(
-      (Array.isArray(payload?.nodes) ? payload.nodes : [])
-        .map((node) => [String(node?.id || ""), node?.data || null])
-        .filter(([id, data]) => id && data)
-    );
+    mermaidNodeDataById = new Map();
+    for (const node of Array.isArray(payload?.nodes) ? payload.nodes : []) {
+      const originalId = String(node?.id || "").trim();
+      const data = node?.data || null;
+      if (!originalId || !data) continue;
+      mermaidNodeDataById.set(originalId, data);
+      mermaidNodeDataById.set(sanitizeMermaidId(originalId, originalId), data);
+    }
   }
   mermaidOriginalIdByNodeId = new Map(
     Object.entries(payload?.id_map || {})
@@ -1088,6 +1182,244 @@ async function renderMermaidGraph(payload, subscriptionName) {
     console.error("[cloud-architecture] Mermaid render failed:", err);
     mermaidRootEl.innerHTML = `<pre style="color: var(--red); white-space: pre-wrap;">${escapeHtml(err.message || String(err))}</pre>`;
     return false;
+  }
+}
+
+function populateComponentTraceOptions() {
+  if (!componentOptionsEl || !componentDropdownEl) return;
+  componentTraceIndex = new Map();
+  const options = [];
+  for (const [nodeId, rawData] of mermaidNodeDataById.entries()) {
+    const data = rawData || {};
+    const rawType = String(data.arm_type || data.type || data.resourceType || data.typeLabel || "").trim();
+    const type = normalizeModalText(rawType);
+    const normalizedType = rawType.toLowerCase();
+    const routeCapable =
+      normalizedType.includes("applicationgateway") ||
+      normalizedType.includes("apimanagement") ||
+      normalizedType.includes("kubernetes") ||
+      normalizedType.includes("ingress") ||
+      normalizedType.includes("backend") ||
+      data.fqdn ||
+      data.routing_targets ||
+      data.ingress ||
+      data.egress;
+    if (!routeCapable) continue;
+    const resources = Array.isArray(data.resources) ? data.resources : [];
+    const rawLabel = String(
+      data.label ||
+      data.title ||
+      resources[0]?.name ||
+      nodeId
+    ).trim();
+    const label = normalizeModalText(rawLabel);
+    const display = `${label}${type ? ` — ${type}` : ""}`;
+    if (componentTraceIndex.has(display)) continue;
+    componentTraceIndex.set(display, {
+      id: nodeId,
+      name: rawLabel,
+      displayName: label,
+      type,
+      fqdn: String(data.fqdn || resources[0]?.fqdn || "").trim(),
+    });
+    options.push(`<option value="${escapeHtml(display)}"></option>`);
+  }
+  componentOptionsEl.innerHTML = options.sort().join("");
+  renderComponentDropdown("");
+}
+
+function renderComponentDropdown(query = "") {
+  if (!componentDropdownEl) return;
+  const normalizedQuery = String(query || "").trim().toLowerCase();
+  const matches = Array.from(componentTraceIndex.keys())
+    .filter((value) => !normalizedQuery || value.toLowerCase().includes(normalizedQuery))
+    .sort();
+  componentDropdownEl.innerHTML = matches.length
+    ? matches.map((value, index) => (
+      `<div class="cloud-arch-subscription-option" role="option" id="cloud-arch-component-option-${index}" data-value="${escapeHtml(value)}">${escapeHtml(value)}</div>`
+    )).join("")
+    : '<div class="cloud-arch-subscription-empty">No matching components</div>';
+}
+
+function openComponentDropdown() {
+  if (!componentDropdownEl || !componentTraceIndex.size) return;
+  renderComponentDropdown(componentInputEl?.value || "");
+  componentDropdownEl.hidden = false;
+  componentInputEl?.setAttribute("aria-expanded", "true");
+}
+
+function closeComponentDropdown() {
+  if (!componentDropdownEl) return;
+  componentDropdownEl.hidden = true;
+  componentInputEl?.setAttribute("aria-expanded", "false");
+}
+
+function closeComponentTrace() {
+  if (tracePanelEl) tracePanelEl.hidden = true;
+  if (traceRootEl) traceRootEl.innerHTML = "";
+  if (traceClearEl) traceClearEl.hidden = true;
+}
+
+function traceNodeId(rawId) {
+  return String(rawId || "").replace(/[^A-Za-z0-9_]/g, "_") || "";
+}
+
+function attachComponentTraceHandlers(svg, chain) {
+  if (!svg) return;
+  const stepsByNodeId = new Map(
+    (Array.isArray(chain) ? chain : [])
+      .map((step) => [traceNodeId(step?.node_id), step])
+      .filter(([id, step]) => id && step)
+  );
+  svg.querySelectorAll("g.node[id]").forEach((nodeEl) => {
+    const step = stepsByNodeId.get(normalizeMermaidNodeId(nodeEl.getAttribute("id") || ""));
+    if (!step) return;
+    nodeEl.classList.add("node-drillable");
+    nodeEl.style.cursor = "pointer";
+    nodeEl.setAttribute("tabindex", "0");
+    const label = normalizeModalText(step.label || step.node_id || "Trace element");
+    nodeEl.setAttribute("title", `Click to explore ${label}`);
+    const resourceName = String(step.name || label).trim();
+    const resourceType = String(step.arm_type || step.resource_type || "").trim();
+    const nodeData = {
+      title: label,
+      label,
+      arm_type: resourceType,
+      fqdn: step.hostname || "",
+      resources: resourceName || step.resource_group
+        ? [{ name: resourceName, rg: step.resource_group || "" }]
+        : [],
+    };
+    const open = (event) => {
+      event?.stopPropagation();
+      event?.preventDefault();
+      openModal(String(step.node_id || ""), nodeData, {
+        id: String(step.node_id || ""),
+        name: resourceName,
+        resourceGroup: step.resource_group || "",
+        type: resourceType,
+        subscription: currentMermaidSubscriptionId,
+        nodeId: String(step.node_id || ""),
+      });
+    };
+    nodeEl.addEventListener("click", open);
+    nodeEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") open(event);
+    });
+  });
+}
+
+async function renderComponentTrace(payload, selected) {
+  if (!tracePanelEl || !traceRootEl) return;
+  const traces = Array.isArray(payload?.traces) ? payload.traces : [];
+  const best = traces[0];
+  tracePanelEl.hidden = false;
+  if (traceClearEl) traceClearEl.hidden = false;
+  if (traceTitleEl) {
+    const selectedName = selected.displayName || normalizeModalText(selected.name);
+    traceTitleEl.textContent = best
+      ? `${selectedName} — ${best.chain?.length || 0} hops`
+      : `${selectedName} — no connection found`;
+  }
+  if (!best?.mermaid) {
+    traceRootEl.innerHTML = `<div style="color:var(--text-muted);padding:20px;">${escapeHtml(payload?.message || "No route was resolved for this component.")}</div>`;
+    return;
+  }
+  traceRootEl.innerHTML = "";
+  if (activeMermaidCssText) applyMermaidCss(activeMermaidCssText);
+  await renderMermaidDiagram({
+    source: sanitizeMermaidSource(best.mermaid),
+    rootEl: traceRootEl,
+    onRendered: async (svgEl) => {
+      postProcessSvg(svgEl);
+      enhancePlaceholderGlyphs(svgEl);
+      applyEmojiIconFallback(svgEl);
+      attachComponentTraceHandlers(svgEl, best.chain);
+      await injectDiagramIconsIntoSvg(svgEl, "all");
+      requestAnimationFrame(fitTraceDiagram);
+    },
+  });
+}
+
+function fitTraceDiagram() {
+  if (!traceRootEl) return;
+  traceRootEl.dataset.diagramManualZoom = "false";
+  const scale = autoFitDiagram(traceRootEl, traceRootEl);
+  traceRootEl.dataset.diagramScale = String(scale || 1);
+}
+
+function bindTraceDiagramInteractions() {
+  if (!traceRootEl || traceRootEl.dataset.interactionsBound === "true") return;
+  traceRootEl.dataset.interactionsBound = "true";
+  let panning = false;
+  let startX = 0;
+  let startY = 0;
+  let startScrollLeft = 0;
+  let startScrollTop = 0;
+
+  traceRootEl.addEventListener("pointerdown", (event) => {
+    if (event.target.closest("a,button")) return;
+    panning = true;
+    startX = event.pageX;
+    startY = event.pageY;
+    startScrollLeft = traceRootEl.scrollLeft;
+    startScrollTop = traceRootEl.scrollTop;
+    traceRootEl.setPointerCapture?.(event.pointerId);
+  });
+  const stopPanning = () => { panning = false; };
+  traceRootEl.addEventListener("pointermove", (event) => {
+    if (!panning) return;
+    traceRootEl.scrollLeft = startScrollLeft - (event.pageX - startX);
+    traceRootEl.scrollTop = startScrollTop - (event.pageY - startY);
+  });
+  traceRootEl.addEventListener("pointerup", stopPanning);
+  traceRootEl.addEventListener("pointercancel", stopPanning);
+  traceRootEl.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    const current = parseFloat(traceRootEl.dataset.diagramScale || "1") || 1;
+    const factor = Math.exp(-event.deltaY * 0.0015);
+    applyDiagramScale(traceRootEl, current * factor);
+    traceRootEl.dataset.diagramScale = String(
+      parseFloat(traceRootEl.dataset.diagramScale || "1") || 1
+    );
+    traceRootEl.dataset.diagramManualZoom = "true";
+  }, { passive: false });
+
+  document.getElementById("cloud-arch-trace-zoom-in")?.addEventListener(
+    "click", () => applyDiagramScale(traceRootEl, (parseFloat(traceRootEl.dataset.diagramScale || "1") || 1) * 1.2)
+  );
+  document.getElementById("cloud-arch-trace-zoom-out")?.addEventListener(
+    "click", () => applyDiagramScale(traceRootEl, (parseFloat(traceRootEl.dataset.diagramScale || "1") || 1) * 0.8)
+  );
+  document.getElementById("cloud-arch-trace-fit")?.addEventListener("click", fitTraceDiagram);
+}
+
+async function loadComponentTrace() {
+  if (!componentInputEl || !currentMermaidSubscriptionId) return;
+  const selected = componentTraceIndex.get(componentInputEl.value.trim());
+  if (!selected) {
+    if (tracePanelEl) tracePanelEl.hidden = false;
+    if (traceRootEl) traceRootEl.innerHTML = '<div style="color:var(--red);padding:20px;">Choose a component from the autocomplete suggestions.</div>';
+    return;
+  }
+  try {
+    const params = new URLSearchParams({
+      component_id: selected.id,
+      component_name: selected.name,
+      component_type: selected.type,
+      component_fqdn: selected.fqdn,
+      direction: traceDirectionEl?.value || "both",
+    });
+    const response = await fetch(
+      `/api/subscriptions/${encodeURIComponent(currentMermaidSubscriptionId)}/trace-component?${params.toString()}`,
+      { headers: { Accept: "application/json" }, cache: "no-store" }
+    );
+    const payload = await readJsonResponse(response);
+    if (!response.ok) throw new Error(payload?.error || `HTTP ${response.status}`);
+    await renderComponentTrace(payload, selected);
+  } catch (err) {
+    if (tracePanelEl) tracePanelEl.hidden = false;
+    if (traceRootEl) traceRootEl.innerHTML = `<div style="color:var(--red);padding:20px;">${escapeHtml(err.message || String(err))}</div>`;
   }
 }
 
@@ -1173,6 +1505,12 @@ function openNodePopup(resourceId, nodeData) {
 function openDrilldownModal(nodeData, subId, fallback = null) {
   if (!modalOverlay || !subId) return;
   const controller = startModalRequest();
+  modalOverlay.hidden = false;
+  if (modalTitle) modalTitle.textContent = "Loading details…";
+  if (modalSubtitle) modalSubtitle.textContent = "";
+  if (modalBody) {
+    modalBody.innerHTML = '<div class="cloud-arch-modal-loading">Loading details…</div>';
+  }
 
   // Carry diagram-level ingress/egress so renderModalContent can append the table.
   const withTrafficFlow = (data) => ({
@@ -2053,6 +2391,49 @@ function buildApimBackendUsageSection(data) {
   `;
 }
 
+function buildApimOperationsSection(data) {
+  const operations = Array.isArray(data?.operations) ? data.operations.filter(Boolean) : [];
+  const isApimApi = String(firstNonEmpty(data?.type_label, data?.type, data?.resourceType, "")).toLowerCase().includes("apim api");
+  if (!isApimApi) return "";
+
+  const table = operations.length
+    ? `
+      <div style="overflow:auto;border:1px solid var(--border);border-radius:8px;">
+        <table style="width:100%;border-collapse:collapse;font-size:0.84rem;">
+          <thead>
+            <tr>
+              ${["Method", "Operation", "Path", "Description", "Subscription Key"].map(
+                (column) => `<th style="padding:8px 10px;text-align:left;background:var(--bg-base);border-bottom:1px solid var(--border);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.03em;color:var(--text-muted);">${escapeHtml(column)}</th>`
+              ).join("")}
+            </tr>
+          </thead>
+          <tbody>
+            ${operations.map((operation) => `
+              <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:8px 10px;vertical-align:top;"><strong>${escapeHtml(firstNonEmpty(operation.method, "GET"))}</strong></td>
+                <td style="padding:8px 10px;vertical-align:top;">${escapeHtml(firstNonEmpty(operation.name, operation.id, "—"))}</td>
+                <td style="padding:8px 10px;vertical-align:top;"><code>${escapeHtml(firstNonEmpty(operation.path, "/"))}</code></td>
+                <td style="padding:8px 10px;vertical-align:top;">${escapeHtml(firstNonEmpty(operation.description, "—"))}</td>
+                <td style="padding:8px 10px;vertical-align:top;">${operation.requires_subscription ? "Required" : "Not required"}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    `
+    : '<div class="cloud-arch-modal-empty" style="margin:0;">No API operations were found.</div>';
+
+  return `
+    <div class="cloud-arch-modal-section">
+      <div class="cloud-arch-modal-section-title">
+        <span class="cloud-arch-modal-section-icon">🔧</span>
+        API Operations
+      </div>
+      ${table}
+    </div>
+  `;
+}
+
 /**
  * Build the Traffic Flow HTML section (ingress/egress table) from diagram node data.
  * Returns an empty string when both arrays are empty.
@@ -2429,6 +2810,16 @@ function renderModalContent(data) {
     sections.push({ title: "Configuration", icon: "⚙️", fields: configFields });
   }
 
+  const apimOperationsSection = buildApimOperationsSection(data);
+  if (apimOperationsSection) {
+    sections.push({
+      title: "",
+      icon: "",
+      fields: [],
+      __rawHtml: apimOperationsSection,
+    });
+  }
+
   const networkFields = [];
   if (fqdns.length > 0) {
     networkFields.push({
@@ -2700,6 +3091,7 @@ async function loadMermaidView(subscriptionName) {
           },
           subscription_name: payload?.subscription_name || subscriptionName,
         };
+
       }
     }
 
@@ -2730,6 +3122,7 @@ async function loadMermaidView(subscriptionName) {
       mermaidRootEl.innerHTML = "";
     } else {
       await renderMermaidGraph(renderPayload, subscriptionName);
+      populateComponentTraceOptions();
     }
 
     renderSummary(summaryPayload, summaryPayload?.subscription_name || subscriptionName, activeViewMode);
@@ -2753,6 +3146,35 @@ if (formEl) {
   });
 }
 
+if (traceFormEl) {
+  traceFormEl.addEventListener("submit", (event) => {
+    event.preventDefault();
+    loadComponentTrace();
+  });
+}
+
+componentInputEl?.addEventListener("focus", openComponentDropdown);
+componentInputEl?.addEventListener("input", () => {
+  renderComponentDropdown(componentInputEl.value);
+  openComponentDropdown();
+});
+componentDropdownEl?.addEventListener("click", (event) => {
+  const option = event.target.closest("[data-value]");
+  if (!option || !componentInputEl) return;
+  componentInputEl.value = option.dataset.value || "";
+  closeComponentDropdown();
+});
+document.addEventListener("click", (event) => {
+  if (!event.target.closest(".cloud-arch-component-combobox")) {
+    closeComponentDropdown();
+  }
+});
+
+traceClearEl?.addEventListener("click", closeComponentTrace);
+document.getElementById("cloud-arch-trace-close")?.addEventListener("click", closeComponentTrace);
+bindTraceDiagramInteractions();
+bindMermaidRootClickFallback();
+
 for (const button of viewButtons) {
   button.addEventListener("click", () => {
     const mode = normalizeViewMode(button.dataset.cloudArchView || "");
@@ -2773,25 +3195,30 @@ for (const button of viewButtons) {
   const mermaidScroll = document.getElementById("cloud-arch-mermaid-scroll");
   if (!mermaidScroll) return;
   let panning = false, panX = 0, panY = 0, sl0 = 0, st0 = 0;
-  mermaidScroll.addEventListener("mousedown", (e) => {
-    if (e.target.closest("a,button")) return;
+  const startPan = (e) => {
+    if (e.target.closest("a,button,g.node,g.cluster")) return;
     panning = true;
     panX = e.pageX; panY = e.pageY;
     sl0 = mermaidScroll.scrollLeft; st0 = mermaidScroll.scrollTop;
-  });
-  document.addEventListener("mousemove", (e) => {
+    mermaidScroll.setPointerCapture?.(e.pointerId);
+  };
+  const movePan = (e) => {
     if (!panning) return;
     mermaidScroll.scrollLeft = sl0 - (e.pageX - panX);
     mermaidScroll.scrollTop  = st0 - (e.pageY - panY);
-  });
-  document.addEventListener("mouseup", () => { panning = false; });
+  };
+  const stopPan = () => { panning = false; };
+  mermaidScroll.addEventListener("pointerdown", startPan);
+  mermaidScroll.addEventListener("pointermove", movePan);
+  mermaidScroll.addEventListener("pointerup", stopPan);
+  mermaidScroll.addEventListener("pointercancel", stopPan);
   mermaidScroll.addEventListener("wheel", (e) => {
     e.preventDefault();
     const container = document.getElementById("cloud-arch-mermaid-root");
-    if (container && window.applyDiagramScale) {
+    if (container) {
       const current = parseFloat(container.dataset.diagramScale || "1") || 1;
       const zoomFactor = Math.exp(-e.deltaY * 0.0015);
-      window.applyDiagramScale(container, current * zoomFactor);
+      applyDiagramScale(container, current * zoomFactor);
       container.dataset.diagramManualZoom = "true";
       mermaidManualZoom = true;
       cancelMermaidDiagramFit();

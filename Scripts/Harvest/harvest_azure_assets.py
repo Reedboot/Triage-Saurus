@@ -67,6 +67,7 @@ from Azure._helpers import set_probe_enabled
 import appgw_routing_map
 import apim_routing_map
 import private_dns_map
+from precompute_subscription_diagram import precompute_subscription_diagram
 
 # ---------------------------------------------------------------------------
 # Providers registry — order matters: gateways/APIM first for correlation
@@ -134,6 +135,10 @@ ProgressCallback = Callable[[str], None]
 _MAX_PROVIDER_WORKERS = 6
 _PROGRESS_REFRESH_SECONDS = 10.0
 _PROVIDER_WRITE_CHUNK = 250
+
+
+def _precompute_subscription_diagram(sub_id: str) -> None:
+    precompute_subscription_diagram(REPO_ROOT / "Output" / "Data" / "cozo.db", sub_id)
 
 
 def _normalize_provider_filters(raw_filters: list[str] | None) -> list[str]:
@@ -872,6 +877,17 @@ def harvest_subscription(
                 print(f"    - {a['type']}/{a['name']} (rg: {a['resource_group']}, last seen: {a['last_synced']})")
             print("  To confirm removal:  UPDATE provisioned_assets SET status='removed' WHERE id='<id>';")
             print("  To restore (false positive):  UPDATE provisioned_assets SET status='active' WHERE id='<id>';")
+
+    if not dry_run and not skip_post_harvest:
+        print("  [Mermaid Diagram] precomputing subscription diagram payload...", flush=True)
+        try:
+            conn.commit()
+            _precompute_subscription_diagram(sub_id)
+            print("  [Mermaid Diagram] payload cached")
+        except Exception as exc:
+            print(f"  [Mermaid Diagram] FAILED ({exc})")
+    elif skip_post_harvest:
+        print("  [Mermaid Diagram] skipped with post-harvest steps")
 
     print(f"  [total] {total} assets for {sub_name}")
     return total

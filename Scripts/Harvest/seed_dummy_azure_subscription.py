@@ -24,6 +24,7 @@ if str(PERSIST_DIR) not in sys.path:
     sys.path.insert(0, str(PERSIST_DIR))
 
 from db_helpers import _ensure_schema  # type: ignore
+from precompute_subscription_diagram import precompute_subscription_diagram
 
 
 DEFAULT_BRAND = "marketlane"
@@ -2035,6 +2036,8 @@ def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: s
         conn.commit()
     finally:
         conn.close()
+
+    precompute_subscription_diagram(db_path, subscription_id)
 
 
 def parse_args() -> argparse.Namespace:

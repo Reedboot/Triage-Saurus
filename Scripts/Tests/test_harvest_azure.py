@@ -10,6 +10,7 @@ import re
 import sys
 import sqlite3
 import threading
+import types
 from concurrent.futures import Future
 from pathlib import Path
 
@@ -54,6 +55,33 @@ class _ImmediateExecutor:
         future = Future()
         future.set_result(fn(*args, **kwargs))
         return future
+
+
+class TestDiagramPrecomputation:
+    def test_warms_subscription_diagram_endpoint(self, monkeypatch):
+        requests = []
+
+        class _App:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def test_request_context(self, path):
+                requests.append(path)
+                return self
+
+        fake_web_app = types.ModuleType("web.app")
+        fake_web_app.app = _App()
+        fake_web_app.api_subscription_diagram = lambda sub_id: types.SimpleNamespace(status_code=200)
+        fake_web_app.api_cloud_route_trace = lambda sub_id: types.SimpleNamespace(status_code=200)
+        fake_web_app.api_cloud_component_trace = lambda sub_id: types.SimpleNamespace(status_code=200)
+        monkeypatch.setitem(sys.modules, "web.app", fake_web_app)
+
+        harvest_azure_assets._precompute_subscription_diagram("sub-1")
+
+        assert requests == ["/api/subscriptions/sub-1/diagram"]
 
 
 # ---------------------------------------------------------------------------

@@ -1872,6 +1872,17 @@ function App() {
     const mode = normalizeViewMode(viewMode || activeViewMode || "mermaid");
     activeViewMode = mode;
     syncViewButtons();
+
+    if (mode === "mermaid") {
+      if (typeof window.__triageCloudArchLoadMermaid !== "function") {
+        await import("./cloud-architecture-mermaid.js?v=27");
+      }
+      if (typeof window.__triageCloudArchLoadMermaid === "function") {
+        await window.__triageCloudArchLoadMermaid(sub || CONFIG.initialSubscription || "");
+      }
+      return;
+    }
+
     if (sub) {
       url.searchParams.set("sub", sub);
     }
@@ -2092,6 +2103,14 @@ function App() {
   }, [hideError, renderSummary, showError]);
 
   useEffect(() => {
+    if (window.__triageCloudArchMermaidInitialLoaded) {
+      delete window.__triageCloudArchMermaidInitialLoaded;
+      return;
+    }
+    if (activeViewMode === "mermaid" && typeof window.__triageCloudArchLoadMermaid === "function") {
+      window.__triageCloudArchLoadMermaid(CONFIG.initialSubscription || "");
+      return;
+    }
     loadGraph(CONFIG.initialSubscription || "");
   }, [loadGraph]);
 

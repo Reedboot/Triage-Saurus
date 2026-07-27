@@ -6,6 +6,7 @@ ENDPOINTS = {
     "api_cloud_architecture",
     "api_cloud_resource_details",
     "api_cloud_route_trace",
+    "api_cloud_component_trace",
     "get_group_members",
     "get_resource_children",
     "get_apim_child_apis",

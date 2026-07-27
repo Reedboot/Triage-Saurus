@@ -16670,6 +16670,117 @@ def api_cloud_resource_details():
                     "parent_resource": parent_resource,
                 })
 
+        # APIM APIs are harvested into apim_api_routes and represented as
+        # synthetic diagram nodes rather than provisioned_assets rows.
+        if (
+            _table_exists(conn, "apim_api_routes")
+            and ("apim api" in lookup_type_lc or lookup_name.count("::") == 1)
+        ):
+            apim_name, api_name = (lookup_name.split("::", 1) if "::" in lookup_name else ("", lookup_name))
+            apim_name = apim_name.strip()
+            api_name = api_name.strip()
+            api_row = None
+            if apim_name and api_name:
+                api_row = conn.execute(
+                    """
+                    SELECT
+                        api_name, api_display_name, api_path, api_protocols,
+                        backend_url, service_url, exposure_level,
+                        requires_subscription, apim_name
+                    FROM apim_api_routes
+                    WHERE subscription_id = ?
+                      AND LOWER(apim_name) = LOWER(?)
+                      AND LOWER(api_name) = LOWER(?)
+                    LIMIT 1
+                    """,
+                    (resolved_sub_id or lookup_sub or "", apim_name, api_name),
+                ).fetchone()
+
+            if api_row:
+                operations = []
+                if _table_exists(conn, "apim_api_operations"):
+                    operation_rows = conn.execute(
+                        """
+                        SELECT operation_id, display_name, method, url_template,
+                               description, requires_subscription
+                        FROM apim_api_operations
+                        WHERE subscription_id = ? AND LOWER(apim_name) = LOWER(?)
+                          AND LOWER(api_name) = LOWER(?)
+                        ORDER BY method, url_template
+                        LIMIT 200
+                        """,
+                        (
+                            resolved_sub_id or lookup_sub or "",
+                            api_row["apim_name"],
+                            api_row["api_name"],
+                        ),
+                    ).fetchall()
+                    operations = [
+                        {
+                            "id": row["operation_id"],
+                            "name": row["display_name"] or row["operation_id"],
+                            "method": row["method"] or "GET",
+                            "path": row["url_template"] or "/",
+                            "description": row["description"] or "",
+                            "requires_subscription": bool(row["requires_subscription"]),
+                        }
+                        for row in operation_rows
+                    ]
+
+                parent_resource = None
+                parent_row = conn.execute(
+                    """
+                    SELECT id, name, type, resource_group, location, sku, fqdn, raw_json
+                    FROM provisioned_assets
+                    WHERE subscription_id = ?
+                      AND LOWER(name) = LOWER(?)
+                      AND LOWER(type) LIKE '%apimanagement/service%'
+                    ORDER BY last_synced DESC
+                    LIMIT 1
+                    """,
+                    (resolved_sub_id or lookup_sub or "", api_row["apim_name"]),
+                ).fetchone()
+                if parent_row:
+                    parent_resource = {
+                        "id": parent_row["id"],
+                        "name": parent_row["name"],
+                        "type": parent_row["type"],
+                        "type_label": _friendly_type(parent_row["type"]),
+                        "resource_group": parent_row["resource_group"],
+                        "icon_path": _resource_icon_path(parent_row["type"] or ""),
+                    }
+
+                protocols = _parse_json_list_field(api_row["api_protocols"])
+                return jsonify({
+                    "id": resource_id,
+                    "name": api_row["api_display_name"] or api_row["api_name"],
+                    "type": "APIM API",
+                    "type_label": "APIM API",
+                    "is_virtual": True,
+                    "subscription": sub_row["display_name"] if lookup_sub and sub_row else lookup_sub,
+                    "resource_group": parent_resource["resource_group"] if parent_resource else lookup_rg,
+                    "configuration": {
+                        "apim_name": api_row["apim_name"],
+                        "api_name": api_row["api_name"],
+                        "path": api_row["api_path"] or "/",
+                        "protocols": protocols,
+                        "backend_url": api_row["backend_url"],
+                        "service_url": api_row["service_url"],
+                        "requires_subscription": bool(api_row["requires_subscription"]),
+                        "operation_count": len(operations),
+                    },
+                    "security": {
+                        "exposure": api_row["exposure_level"] or "Unknown",
+                        "is_public": str(api_row["exposure_level"] or "").lower() == "public",
+                        "public_network_access": api_row["exposure_level"] or "Unknown",
+                    },
+                    "network": {
+                        "dns_names": [api_row["service_url"]] if api_row["service_url"] else [],
+                    },
+                    "operations": operations,
+                    "parent_resource": parent_resource,
+                })
+
         # Regular provisioned asset
         asset_row = None
         if _table_exists(conn, "provisioned_assets"):
@@ -19328,7 +19439,7 @@ def _trace_subscription_endpoint(
                     score += 1000
                 if endpoint_terms.intersection(api_terms):
                     score += 500
-                if api_path and path.startswith(_normalize_route_path(api_path) or "/"):
+                if api_path and _route_path_matches(api_path, path):
                     score += 200
                 if score > chosen_api_score:
                     chosen_api = row
@@ -19572,6 +19683,109 @@ def _trace_subscription_endpoint(
             sub_id = str(sub_row["id"] or "").strip()
             if not sub_id:
                 continue
+
+            # An internal AKS backend can still be publicly reachable through APIM.
+            # Prefer that confirmed public route over labelling the backend itself
+            # as Internet-facing.
+            public_apim_chain: list[dict] = []
+            if _table_exists(conn, "apim_api_routes") and _table_exists(conn, "provisioned_assets"):
+                apim_route = conn.execute(
+                    """
+                    SELECT api_name, api_display_name, api_path, backend_url, service_url,
+                           apim_name, exposure_level
+                    FROM apim_api_routes
+                    WHERE subscription_id = ?
+                      AND LOWER(COALESCE(exposure_level, '')) = 'public'
+                    ORDER BY api_display_name, api_name
+                    """,
+                    (sub_id,),
+                ).fetchall()
+                for route_row in apim_route:
+                    backend_url = str(route_row["backend_url"] or route_row["service_url"] or "").strip()
+                    if _host_from_url(backend_url) != host:
+                        continue
+                    apim_name = str(route_row["apim_name"] or "").strip()
+                    apim_row = conn.execute(
+                        """
+                        SELECT name, resource_group, fqdn
+                        FROM provisioned_assets
+                        WHERE subscription_id = ?
+                          AND LOWER(name) = LOWER(?)
+                          AND LOWER(type) LIKE '%apimanagement/service%'
+                        ORDER BY last_synced DESC
+                        LIMIT 1
+                        """,
+                        (sub_id, apim_name),
+                    ).fetchone()
+                    if not apim_row:
+                        continue
+                    api_name = str(route_row["api_name"] or route_row["api_display_name"] or "").strip()
+                    backend_id = ""
+                    backend_title = ""
+                    backend_url_value = backend_url
+                    if _table_exists(conn, "apim_backends"):
+                        backend_row = conn.execute(
+                            """
+                            SELECT backend_id, title, url
+                            FROM apim_backends
+                            WHERE subscription_id = ? AND LOWER(apim_name) = LOWER(?)
+                              AND LOWER(url) = LOWER(?)
+                            ORDER BY title, backend_id
+                            LIMIT 1
+                            """,
+                            (sub_id, apim_name, backend_url),
+                        ).fetchone()
+                        if backend_row:
+                            backend_id = str(backend_row["backend_id"] or "").strip()
+                            backend_title = str(backend_row["title"] or "").strip()
+                            backend_url_value = str(backend_row["url"] or backend_url).strip()
+                    public_apim_chain = [
+                        *direct_prefix,
+                        _node(
+                            "apim_api",
+                            f"apim_api::{apim_name}::{api_name}",
+                            api_name,
+                            route=str(route_row["api_path"] or "").strip() or None,
+                            backend_url=backend_url,
+                            api_display_name=str(route_row["api_display_name"] or "").strip() or None,
+                        ),
+                        _node(
+                            "apim_service",
+                            f"apim_service::{apim_name}",
+                            "APIM",
+                            fqdn=str(apim_row["fqdn"] or "").strip() or None,
+                            resource_group=str(apim_row["resource_group"] or "").strip() or None,
+                            apim_name=apim_name,
+                        ),
+                        _node(
+                            "apim_backend",
+                            f"apim_backend::{apim_name}::{backend_id or backend_title or backend_url}",
+                            backend_title or backend_id or backend_url,
+                            backend_url=backend_url_value,
+                        ),
+                    ]
+                    public_apim_chain.extend(_resolve_aks_downstream(sub_id, host))
+                    break
+            if len(public_apim_chain) > len(direct_prefix):
+                direct_matches.append({
+                    "subscription_id": sub_id,
+                    "subscription_name": str(sub_row["display_name"] or sub_id).strip(),
+                    "route_trace": {
+                        "route": {
+                            "hostname": host,
+                            "url_path": path,
+                            "exposure_level": "Public",
+                            "rule_name": "public APIM backend lookup",
+                        },
+                        "chain": public_apim_chain,
+                        "resolved_backend": host,
+                        "mermaid": _render_mermaid(public_apim_chain),
+                        "depth": len(public_apim_chain),
+                        "score": len(public_apim_chain) + 100,
+                    },
+                })
+                continue
+
             direct_chain = _trace_backend_target(sub_id, host, direct_prefix)
             if len(direct_chain) > len(direct_prefix):
                 direct_matches.append({
@@ -19781,6 +19995,395 @@ def _collect_function_app_triggers(conn, subscription_id: str, function_app_id: 
     return triggers
 
 
+def _render_component_trace_mermaid(chain: list[dict]) -> str:
+    """Render a focused component trace without depending on the full graph payload."""
+    icon_classes = {
+        "internet": "icon_external",
+        "listener": "icon_azurerm_app_gateway_listener_https",
+        "appgw": "icon_azurerm_application_gateway",
+        "backend_pool": "icon_azurerm_app_gateway_backend_pool",
+        "apim_api": "icon_azurerm_api_management_api",
+        "apim_service": "icon_azurerm_api_management_api",
+        "apim_backend": "icon_azurerm_app_gateway_backend_pool",
+        "aks_ingress": "icon_kubernetes_ingress",
+        "aks_service": "icon_kubernetes_service",
+        "aks_deployment": "icon_azurerm_kubernetes_service",
+        "aks_cluster": "icon_azurerm_kubernetes_service",
+        "workload": "icon_azurerm_app_service",
+    }
+    icon_styles = {
+        "icon_external": "stroke:#d32f2f,stroke-width:2px,fill:#3b0a0a,color:#e2e8f0;",
+        "icon_azurerm_app_gateway_listener_https": "stroke:#00897b,stroke-width:2px,fill:#0f2f2b,color:#e2e8f0;",
+        "icon_azurerm_application_gateway": "stroke:#ea580c,stroke-width:2px,fill:#3d1c0d,color:#e2e8f0;",
+        "icon_azurerm_app_gateway_backend_pool": "stroke:#0e7490,stroke-width:2px,fill:#083344,color:#e2e8f0;",
+        "icon_azurerm_api_management_api": "stroke:#0ea5e9,stroke-width:2px,fill:#082f49,color:#e2e8f0;",
+        "icon_kubernetes_ingress": "stroke:#ea580c,stroke-width:2px,fill:#3d1c0d,color:#e2e8f0;",
+        "icon_kubernetes_service": "stroke:#22c55e,stroke-width:2px,fill:#052e16,color:#e2e8f0;",
+        "icon_azurerm_kubernetes_service": "stroke:#22c55e,stroke-width:2px,fill:#052e16,color:#e2e8f0;",
+        "icon_azurerm_app_service": "stroke:#22c55e,stroke-width:2px,fill:#052e16,color:#e2e8f0;",
+    }
+    trace_arm_types = {
+        "listener": "microsoft.network/applicationgatewaylisteners/https",
+        "appgw": "microsoft.network/applicationgateways",
+        "backend_pool": "microsoft.network/applicationgatewaybackendpools",
+        "apim_api": "microsoft.apimanagement/apis",
+        "apim_service": "microsoft.apimanagement/service",
+        "apim_backend": "apim backend target",
+        "aks_ingress": "microsoft.kubernetes/ingresses",
+        "aks_service": "kubernetes_service",
+        "aks_deployment": "microsoft.containerservice/managedclusters",
+        "aks_cluster": "microsoft.containerservice/managedclusters",
+        "workload": "microsoft.web/sites",
+    }
+    icon_classes_used = {
+        icon_classes.get(str(step.get("kind") or "").strip())
+        for step in chain
+    } - {None}
+    lines = ["flowchart LR"]
+    for icon_class in sorted(icon_classes_used):
+        lines.append(f"    classDef {icon_class} {icon_styles.get(icon_class, 'stroke:#666666,stroke-width:2px;')}")
+
+    edge_index = 0
+
+    def edge_style(kind: str) -> str:
+        if kind == "internet":
+            return "stroke:#d32f2f,stroke-width:2px"
+        if kind in {"listener", "appgw", "backend_pool", "apim_api", "apim_service"}:
+            return "stroke:#f97316,stroke-width:2px"
+        if kind in {"apim_backend", "aks_ingress"}:
+            return "stroke:#22c55e,stroke-width:2px"
+        return ""
+
+    previous_node_id = None
+    previous_kind = ""
+    for index, step in enumerate(chain):
+        raw_id = str(step.get("node_id") or f"trace_{index}").strip()
+        node_id = re.sub(r"[^A-Za-z0-9_]", "_", raw_id) or f"trace_{index}"
+        kind = str(step.get("kind") or "").strip()
+        label = str(step.get("label") or raw_id)
+        arm_type = trace_arm_types.get(kind)
+        if arm_type:
+            lines.append(_subscription_html_node(node_id, label, arm_type))
+        else:
+            safe_label = label.replace('"', "&quot;")
+            lines.append(f'    {node_id}["{safe_label}"]')
+        icon_class = icon_classes.get(kind)
+        if icon_class:
+            lines.append(f"    class {node_id} {icon_class};")
+        if previous_node_id:
+            lines.append(f"    {previous_node_id} --> {node_id}")
+            style = edge_style(previous_kind)
+            if style:
+                lines.append(f"    linkStyle {edge_index} {style}")
+            edge_index += 1
+        previous_node_id = node_id
+        previous_kind = kind
+    return "\n".join(lines)
+
+
+def _trace_subscription_component(
+    conn: sqlite3.Connection,
+    subscription_id: str,
+    component_id: str,
+    component_name: str,
+    component_type: str,
+    component_fqdn: str = "",
+    direction: str = "both",
+) -> dict:
+    """Return full ingress/egress chains containing a selected architecture component."""
+    selected_name = str(component_name or "").strip().lower()
+    selected_id = str(component_id or "").strip().lower()
+    selected_type = str(component_type or "").strip().lower()
+    direction = direction if direction in {"both", "inbound", "outbound"} else "both"
+    selected_name_parts = [
+        re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", part))).strip()
+        for part in re.split(r"<[^>]+>", str(component_name or ""))
+    ]
+    selected_name_parts = [
+        re.sub(r"\s*\(\d+\s+hostnames?\)\s*$", "", part, flags=re.IGNORECASE).strip().lower()
+        for part in selected_name_parts
+        if part.strip()
+    ]
+
+    def matches(step: dict) -> bool:
+        values = {
+            str(step.get("label") or "").strip().lower(),
+            str(step.get("node_id") or "").strip().lower(),
+            str(step.get("kind") or "").strip().lower(),
+        }
+        name_candidates = [selected_name, *selected_name_parts]
+        if any(
+            candidate and (candidate == value or candidate in value)
+            for candidate in name_candidates
+            for value in values
+            if value
+        ):
+            return True
+        if selected_id and any(selected_id == value or selected_id in value for value in values if value):
+            return True
+        if selected_name or selected_id:
+            return False
+        type_map = {
+            "applicationgateway": "appgw",
+            "apimanagement": "apim_service",
+            "kubernetes/services": "aks_service",
+            "kubernetes_service": "aks_service",
+            "kubernetes service": "aks_service",
+            "ingress": "aks_ingress",
+            "backend": "apim_backend",
+        }
+        expected_kind = next((kind for marker, kind in type_map.items() if marker in selected_type), "")
+        return bool(expected_kind and expected_kind in values)
+
+    def orient(chain: list[dict]) -> list[dict]:
+        if direction == "both":
+            if "kubernetes service" in selected_type or "kubernetes_service" in selected_type:
+                return [
+                    step for step in chain
+                    if str(step.get("kind") or "").strip().lower() in {"internet", "aks_ingress"}
+                ]
+            return chain
+        index = next((idx for idx, step in enumerate(chain) if matches(step)), None)
+        if index is None:
+            return chain
+        return chain[: index + 1] if direction == "inbound" else chain[index:]
+
+    host_rows = []
+    if _table_exists(conn, "appgw_routing_rules"):
+        host_query = """
+            SELECT DISTINCT hostname
+            FROM appgw_routing_rules
+            WHERE subscription_id = ? AND hostname IS NOT NULL AND hostname != ''
+        """
+        host_params: list[str] = [subscription_id]
+        if "apimanagement" in selected_type:
+            apim_fqdns = conn.execute(
+                """
+                SELECT DISTINCT fqdn
+                FROM provisioned_assets
+                WHERE subscription_id = ?
+                  AND LOWER(type) LIKE '%apimanagement/service%'
+                  AND fqdn IS NOT NULL AND fqdn != ''
+                """,
+                (subscription_id,),
+            ).fetchall() if _table_exists(conn, "provisioned_assets") else []
+            fqdn_clauses = []
+            for row in apim_fqdns:
+                fqdn = str(row["fqdn"] or "").strip().lower()
+                if fqdn:
+                    fqdn_clauses.append("LOWER(COALESCE(backend_fqdns, '')) LIKE ?")
+                    host_params.append(f"%{fqdn}%")
+            if fqdn_clauses:
+                host_query += " AND (" + " OR ".join(fqdn_clauses) + ")"
+        host_query += " ORDER BY hostname"
+        host_rows = conn.execute(host_query, host_params).fetchall()
+        if "backend" in selected_type:
+            host_rows = []
+
+    traces: list[dict] = []
+    seen_chains: set[tuple[str, ...]] = set()
+    for row in host_rows:
+        hostname = str(row["hostname"] or "").strip()
+        if not hostname:
+            continue
+        payload = _trace_subscription_endpoint(
+            conn,
+            endpoint=f"https://{hostname}",
+            subscription_id=subscription_id,
+        )
+        chain = payload.get("resolved_chain") or []
+        if not any(matches(step) for step in chain):
+            continue
+        oriented_chain = orient(chain)
+        key = tuple(str(step.get("node_id") or "") for step in oriented_chain)
+        if not key or key in seen_chains:
+            continue
+        seen_chains.add(key)
+        traces.append({
+            "hostname": hostname,
+            "chain": oriented_chain,
+            "mermaid": _render_component_trace_mermaid(oriented_chain),
+            "depth": len(oriented_chain),
+        })
+
+    if not traces and selected_name and _table_exists(conn, "aks_routes"):
+        route_rows = conn.execute(
+            """
+            SELECT DISTINCT host
+            FROM aks_routes
+            WHERE subscription_id = ?
+              AND host IS NOT NULL AND host != ''
+              AND (
+                LOWER(service_name) = ?
+                OR LOWER(ingress_name) = ?
+                OR LOWER(deployment_name) = ?
+              )
+            ORDER BY host
+            """,
+            (subscription_id, selected_name, selected_name, selected_name),
+        ).fetchall()
+        for row in route_rows:
+            hostname = str(row["host"] or "").strip()
+            if not hostname:
+                continue
+            payload = _trace_subscription_endpoint(
+                conn,
+                endpoint=f"https://{hostname}",
+                subscription_id=subscription_id,
+            )
+            chain = payload.get("resolved_chain") or []
+            if not any(matches(step) for step in chain):
+                continue
+            oriented_chain = orient(chain)
+            key = tuple(str(step.get("node_id") or "") for step in oriented_chain)
+            if not key or key in seen_chains:
+                continue
+            seen_chains.add(key)
+            traces.append({
+                "hostname": hostname,
+                "chain": oriented_chain,
+                "mermaid": _render_component_trace_mermaid(oriented_chain),
+                "depth": len(oriented_chain),
+            })
+
+    if not traces and ("backend" in selected_type or "backend" in selected_name):
+        if _table_exists(conn, "apim_backends"):
+            backend_rows = conn.execute(
+                """
+                SELECT DISTINCT apim_name, url
+                FROM apim_backends
+                WHERE subscription_id = ?
+                  AND (
+                    LOWER(COALESCE(backend_id, '')) = ?
+                    OR LOWER(COALESCE(title, '')) = ?
+                  )
+                  AND url IS NOT NULL AND url != ''
+                """,
+                (subscription_id, selected_name, selected_name),
+            ).fetchall()
+            for row in backend_rows:
+                backend_url = str(row["url"] or "").strip()
+                apim_name = str(row["apim_name"] or "").strip()
+                if (
+                    backend_url
+                    and apim_name
+                    and _table_exists(conn, "apim_api_routes")
+                    and _table_exists(conn, "appgw_routing_rules")
+                    and _table_exists(conn, "provisioned_assets")
+                ):
+                    api_rows = conn.execute(
+                        """
+                        SELECT api_path, backend_url, service_url
+                        FROM apim_api_routes
+                        WHERE subscription_id = ? AND LOWER(apim_name) = LOWER(?)
+                          AND (
+                            LOWER(RTRIM(COALESCE(backend_url, ''), '/')) = LOWER(RTRIM(?, '/'))
+                            OR LOWER(RTRIM(COALESCE(service_url, ''), '/')) = LOWER(RTRIM(?, '/'))
+                          )
+                        """,
+                        (subscription_id, apim_name, backend_url, backend_url),
+                    ).fetchall()
+                    service_rows = conn.execute(
+                        """
+                        SELECT DISTINCT fqdn
+                        FROM provisioned_assets
+                        WHERE subscription_id = ?
+                          AND LOWER(name) = LOWER(?)
+                          AND LOWER(type) LIKE '%apimanagement/service%'
+                          AND fqdn IS NOT NULL AND fqdn != ''
+                        """,
+                        (subscription_id, apim_name),
+                    ).fetchall()
+                    for api_row in api_rows:
+                        api_path = str(api_row["api_path"] or "/").strip() or "/"
+                        api_path = "/" + api_path.lstrip("/")
+                        for service_row in service_rows:
+                            service_fqdn = str(service_row["fqdn"] or "").strip().lower()
+                            route_rows = conn.execute(
+                                """
+                                SELECT DISTINCT hostname
+                                FROM appgw_routing_rules
+                                WHERE subscription_id = ?
+                                  AND hostname IS NOT NULL AND hostname != ''
+                                  AND LOWER(COALESCE(backend_fqdns, '')) LIKE ?
+                                """,
+                                (subscription_id, f"%{service_fqdn}%"),
+                            ).fetchall()
+                            for route_row in route_rows:
+                                payload = _trace_subscription_endpoint(
+                                    conn,
+                                    endpoint=f"https://{route_row['hostname']}{api_path}",
+                                    subscription_id=subscription_id,
+                                )
+                                chain = payload.get("resolved_chain") or []
+                                if not chain:
+                                    continue
+                                oriented_chain = orient(chain)
+                                key = tuple(str(step.get("node_id") or "") for step in oriented_chain)
+                                if not key or key in seen_chains:
+                                    continue
+                                seen_chains.add(key)
+                                traces.append({
+                                    "hostname": str(route_row["hostname"] or "").strip(),
+                                    "chain": oriented_chain,
+                                    "mermaid": _render_component_trace_mermaid(oriented_chain),
+                                    "depth": len(oriented_chain),
+                                })
+                if traces:
+                    break
+                payload = _trace_subscription_endpoint(
+                    conn,
+                    endpoint=backend_url,
+                    subscription_id=subscription_id,
+                )
+                chain = payload.get("resolved_chain") or []
+                if not chain:
+                    continue
+                oriented_chain = orient(chain)
+                key = tuple(str(step.get("node_id") or "") for step in oriented_chain)
+                if not key or key in seen_chains:
+                    continue
+                seen_chains.add(key)
+                traces.append({
+                    "hostname": str(row["url"] or "").strip(),
+                    "chain": oriented_chain,
+                    "mermaid": _render_component_trace_mermaid(oriented_chain),
+                    "depth": len(oriented_chain),
+                })
+
+    if not traces and component_fqdn:
+        payload = _trace_subscription_endpoint(
+            conn,
+            endpoint=component_fqdn,
+            subscription_id=subscription_id,
+        )
+        chain = payload.get("resolved_chain") or []
+        if chain:
+            oriented_chain = orient(chain)
+            traces.append({
+                "hostname": component_fqdn,
+                "chain": oriented_chain,
+                "mermaid": _render_component_trace_mermaid(oriented_chain),
+                "depth": len(oriented_chain),
+            })
+
+    traces.sort(key=lambda item: int(item.get("depth") or 0), reverse=True)
+    return {
+        "subscription_id": subscription_id,
+        "component_id": component_id,
+        "component_name": component_name,
+        "component_type": component_type,
+        "direction": direction,
+        "matched_count": len(traces),
+        "traces": traces[:20],
+        "message": (
+            f"No route contains {component_name or component_id}."
+            if not traces
+            else f"{len(traces)} connection path(s) found."
+        ),
+    }
+
+
 @app.route("/api/cloud/route-trace")
 @app.route("/api/subscriptions/<sub_id>/trace-route")
 def api_cloud_route_trace(sub_id: str | None = None):
@@ -19798,14 +20401,66 @@ def api_cloud_route_trace(sub_id: str | None = None):
             sub_row = _cloud_resolve_subscription(conn, subscription_selector)
             if not sub_row:
                 return jsonify({"error": "Subscription not found"}), 404
+            resolved_sub_id = str(sub_row["id"] or "").strip()
+        else:
+            resolved_sub_id = ""
+
+        request_payload = {"endpoint": endpoint}
+        if resolved_sub_id:
+            request_payload["subscription_id"] = resolved_sub_id
+            trace_payload = _load_trace_cache(conn, resolved_sub_id, "route", request_payload)
+        else:
+            trace_payload = None
+        if trace_payload is None:
             trace_payload = _trace_subscription_endpoint(
                 conn,
                 endpoint=endpoint,
-                subscription_id=str(sub_row["id"] or "").strip(),
+                subscription_id=resolved_sub_id or None,
             )
-        else:
-            trace_payload = _trace_subscription_endpoint(conn, endpoint=endpoint, subscription_id=None)
+            if resolved_sub_id:
+                _store_trace_cache(conn, resolved_sub_id, "route", request_payload, trace_payload)
 
+        return jsonify(trace_payload)
+    finally:
+        conn.close()
+
+
+@app.route("/api/subscriptions/<sub_id>/trace-component")
+def api_cloud_component_trace(sub_id: str):
+    """Resolve all known routing chains containing a selected component."""
+    conn = _get_db_with_schema()
+    if conn is None:
+        return jsonify({"error": "DB unavailable"}), 503
+    try:
+        sub_row = _cloud_resolve_subscription(conn, sub_id)
+        if not sub_row:
+            return jsonify({"error": "Subscription not found"}), 404
+        component_name = (request.args.get("component_name") or "").strip()
+        component_id = (request.args.get("component_id") or "").strip()
+        component_type = (request.args.get("component_type") or "").strip()
+        component_fqdn = (request.args.get("component_fqdn") or "").strip()
+        if not component_name and not component_id:
+            return jsonify({"error": "component_name or component_id is required"}), 400
+        resolved_sub_id = str(sub_row["id"] or "").strip()
+        request_payload = {
+            "component_id": component_id,
+            "component_name": component_name,
+            "component_type": component_type,
+            "component_fqdn": component_fqdn,
+            "direction": (request.args.get("direction") or "both").strip().lower(),
+        }
+        trace_payload = _load_trace_cache(conn, resolved_sub_id, "component", request_payload)
+        if trace_payload is None:
+            trace_payload = _trace_subscription_component(
+                conn,
+                subscription_id=resolved_sub_id,
+                component_id=component_id,
+                component_name=component_name,
+                component_type=component_type,
+                component_fqdn=component_fqdn,
+                direction=request_payload["direction"],
+            )
+            _store_trace_cache(conn, resolved_sub_id, "component", request_payload, trace_payload)
         return jsonify(trace_payload)
     finally:
         conn.close()
@@ -20274,7 +20929,7 @@ def api_settings_post():
 
 @app.route("/api/settings/cloud-cache/clear", methods=["POST"])
 def api_settings_cloud_cache_clear():
-    """Clear persisted cloud diagram cache (DB + in-memory) used by subscription diagrams."""
+    """Clear persisted cloud diagram and trace caches (DB + in-memory)."""
     conn = _get_db_with_schema()
     if conn is None:
         return jsonify({"ok": False, "error": "DB unavailable"}), 503
@@ -20290,6 +20945,16 @@ def api_settings_cloud_cache_clear():
                     cleared_db_rows = int(row[0] or 0)
             conn.execute("DELETE FROM subscription_diagram_cache")
             conn.commit()
+        cleared_trace_rows = 0
+        if _table_exists(conn, "subscription_trace_cache"):
+            row = conn.execute("SELECT COUNT(*) AS n FROM subscription_trace_cache").fetchone()
+            if row is not None:
+                try:
+                    cleared_trace_rows = int(row["n"] or 0)
+                except (TypeError, KeyError, IndexError):
+                    cleared_trace_rows = int(row[0] or 0)
+            conn.execute("DELETE FROM subscription_trace_cache")
+            conn.commit()
 
         cleared_memory_entries = len(_SUBSCRIPTION_DIAGRAM_CACHE)
         _SUBSCRIPTION_DIAGRAM_CACHE.clear()
@@ -20298,6 +20963,7 @@ def api_settings_cloud_cache_clear():
                 "ok": True,
                 "cleared": {
                     "db_rows": cleared_db_rows,
+                    "trace_db_rows": cleared_trace_rows,
                     "memory_entries": cleared_memory_entries,
                 },
             }
@@ -20456,7 +21122,7 @@ _SUBSCRIPTION_DIAGRAM_CACHE: dict[str, tuple[float, str, dict]] = {}
 _SUBSCRIPTION_DIAGRAM_CACHE_TTL = 600  # 10 minutes
 # Bump this whenever diagram rendering logic changes (listener icons, pool icons, edge labels, etc.)
 # so the DB cache is automatically invalidated for all subscriptions.
-_DIAGRAM_CODE_VERSION = "v36"  # SF cluster diagrams now render VMSS containment edges
+_DIAGRAM_CODE_VERSION = "v38"  # SF VMSS are rendered as explicit Mermaid nodes
 
 
 def _subscription_diagram_cache_signature(conn, sub_id: str) -> tuple[str | None, tuple[str, str] | None]:
@@ -20533,6 +21199,70 @@ def _store_subscription_diagram_cache(conn, sub_id: str, signature: str, payload
           updated_at = CURRENT_TIMESTAMP
         """,
         (sub_id, signature, json.dumps(payload)),
+    )
+    conn.commit()
+
+
+def _trace_cache_key(
+    conn: sqlite3.Connection,
+    sub_id: str,
+    trace_type: str,
+    request_payload: dict,
+) -> tuple[str, str]:
+    import hashlib as _hashlib
+
+    signature, _ = _subscription_diagram_cache_signature(conn, sub_id)
+    cache_signature = signature or ""
+    request_json = json.dumps(request_payload, sort_keys=True, separators=(",", ":"))
+    cache_key = _hashlib.sha256(
+        "\0".join((sub_id, trace_type, cache_signature, request_json)).encode("utf-8")
+    ).hexdigest()
+    return cache_key, cache_signature
+
+
+def _load_trace_cache(
+    conn: sqlite3.Connection,
+    sub_id: str,
+    trace_type: str,
+    request_payload: dict,
+) -> dict | None:
+    if not _table_exists(conn, "subscription_trace_cache"):
+        return None
+    cache_key, _ = _trace_cache_key(conn, sub_id, trace_type, request_payload)
+    row = conn.execute(
+        "SELECT payload_json FROM subscription_trace_cache WHERE cache_key = ? AND sub_id = ?",
+        (cache_key, sub_id),
+    ).fetchone()
+    if not row:
+        return None
+    try:
+        return json.loads(row["payload_json"] or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _store_trace_cache(
+    conn: sqlite3.Connection,
+    sub_id: str,
+    trace_type: str,
+    request_payload: dict,
+    payload: dict,
+) -> None:
+    if not _table_exists(conn, "subscription_trace_cache"):
+        return
+    cache_key, cache_signature = _trace_cache_key(conn, sub_id, trace_type, request_payload)
+    request_json = json.dumps(request_payload, sort_keys=True, separators=(",", ":"))
+    conn.execute(
+        """
+        INSERT INTO subscription_trace_cache
+            (cache_key, sub_id, trace_type, request_json, cache_signature, payload_json, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(cache_key) DO UPDATE SET
+            payload_json = excluded.payload_json,
+            cache_signature = excluded.cache_signature,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (cache_key, sub_id, trace_type, request_json, cache_signature, json.dumps(payload)),
     )
     conn.commit()
 
@@ -21804,17 +22534,14 @@ def _subscription_asset_label(asset: dict, include_badges: bool = False, include
 
 def _subscription_html_node(node_id: str, label: str, arm_type: str | None = None) -> str:
     # Simplified node labels to avoid Mermaid 500-char line limit
-    print(f"DEBUG: _subscription_html_node called with node_id={node_id}, arm_type={arm_type}")  # DEBUG
     if arm_type:
         icon_path = _get_icon_path(arm_type)
         if icon_path:
             safe_label = label.replace("'", "&#39;").replace('"', "&quot;")
             # Compact HTML - use CSS classes instead of inline styles
             html = f"<div class='nd'><img src='{icon_path}' class='ni'/><div class='nl'>{safe_label}</div></div>"
-            print(f"DEBUG: Returning NEW format HTML ({len(html)} chars): {html[:100]}...")  # DEBUG
             return f'    {node_id}["{html}"]'
     safe_label = label.replace('"', "&quot;")
-    print(f"DEBUG: Returning plain label (no icon)")  # DEBUG
     return f'    {node_id}["{safe_label}"]'
 
 
@@ -23948,7 +24675,7 @@ def _build_ingress_diagram(
 
     service_fabric_vmss_names: set[str] = set()
     for row in rows:
-        if "servicefabric/clusters" not in str(row[2] or "").lower():
+        if "servicefabric/clusters" not in str(row[1] or "").lower():
             continue
         try:
             raw_cluster = json.loads(row[12] or "{}") if isinstance(row[12], str) else (row[12] or {})
@@ -23974,6 +24701,26 @@ def _build_ingress_diagram(
         if "virtualmachinescalesets" in str(item.get("type") or "").lower()
         and str(item.get("name") or "").strip().lower() in service_fabric_vmss_names
     ]
+    if not sf_vmss_items:
+        for row in rows:
+            row_name = str(row[0] or "").strip()
+            if (
+                "virtualmachinescalesets" not in str(row[1] or "").lower()
+                or row_name.lower() not in service_fabric_vmss_names
+            ):
+                continue
+            sf_vmss_items.append({
+                "name": row_name,
+                "type": row[1],
+                "arm_type": row[1],
+                "fqdn": row[3],
+                "public": bool(row[4]),
+                "rg": row[2] or "",
+                "raw_json": row[12] if len(row) > 12 else None,
+                "id": row[6] if len(row) > 6 else None,
+                "is_restricted": bool(row[9]) if len(row) > 9 else False,
+                "routing_targets": [],
+            })
     if sf_vmss_items:
         sf_vmss_keys = {str(item.get("name") or "").strip().lower() for item in sf_vmss_items}
         retained_groups: list[dict] = []
