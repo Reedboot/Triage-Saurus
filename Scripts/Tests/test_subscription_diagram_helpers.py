@@ -14,11 +14,26 @@ from subscription_diagram_helpers import (  # type: ignore
     subscription_asset_tier,
     subscription_is_allowlist_target,
     subscription_node_id,
+    subscription_asset_label,
 )
 
 
 def _friendly_type(_rtype: str) -> str:
     return "friendly"
+
+
+def test_load_balancer_label_includes_service_fabric_node_type():
+    label = subscription_asset_label(
+        {
+            "name": "management_internal",
+            "arm_type": "Microsoft.Network/loadBalancers",
+            "friendly_type": "Load Balancer",
+            "short_name": "management_internal",
+            "service_fabric_node_types": ["systemz"],
+        }
+    )
+
+    assert "SF node type: systemz" in label
 
 
 def test_extracts_aks_vnet_and_subnet_from_agent_pool_profiles():
@@ -641,6 +656,90 @@ def test_servicefabric_cluster_links_vmss_from_nested_properties_node_types():
     vmss_node_id = subscription_node_id(vmss, lambda s: s.replace("/", "_").replace("-", "_"))
 
     assert f'{cluster_node_id} -->|"contains"| {vmss_node_id}' in view["mermaid"]
+
+
+def test_servicefabric_load_balancer_links_to_vmss_node_type():
+    rows = [
+        (
+            "stock",
+            "Microsoft.Network/loadBalancers",
+            "rg-sf",
+            None,
+            True,
+            None,
+            "/subscriptions/000/resourceGroups/rg-sf/providers/Microsoft.Network/loadBalancers/stock",
+            False,
+            None,
+            False,
+            None,
+            None,
+            json.dumps({
+                "_extra": {
+                    "routing_targets": [
+                        {
+                            "target": "fpsz1",
+                            "name": "fpsz1",
+                            "type": "Microsoft.Compute/virtualMachineScaleSets",
+                        },
+                        {
+                            "target": "fpsz2",
+                            "name": "fpsz2",
+                            "type": "Microsoft.Compute/virtualMachineScaleSets",
+                        },
+                    ]
+                }
+            }),
+            None,
+        ),
+        (
+            "fpsz1",
+            "Microsoft.Compute/virtualMachineScaleSets",
+            "rg-sf",
+            None,
+            False,
+            None,
+            None,
+            "/subscriptions/000/resourceGroups/rg-sf/providers/Microsoft.Compute/virtualMachineScaleSets/fpsz1",
+            False,
+            None,
+            None,
+            False,
+            None,
+            None,
+            json.dumps({}),
+            None,
+        ),
+        (
+            "fpsz2",
+            "Microsoft.Compute/virtualMachineScaleSets",
+            "rg-sf",
+            None,
+            False,
+            None,
+            "/subscriptions/000/resourceGroups/rg-sf/providers/Microsoft.Compute/virtualMachineScaleSets/fpsz2",
+            False,
+            None,
+            False,
+            None,
+            None,
+            json.dumps({}),
+            None,
+        ),
+    ]
+
+    diagrams = build_subscription_diagrams_by_rg(
+        "Test Subscription",
+        "production",
+        rows,
+        sanitise_node_id=lambda value: value.replace("/", "_").replace("-", "_"),
+        friendly_type=lambda value: value,
+        get_icon_path=lambda _value: None,
+        normalize_attack_paths=lambda *args, **kwargs: [],
+    )
+
+    mermaid = next(d["views"]["connectivity"]["mermaid"] for d in diagrams if d["rg"] == "rg-sf")
+    assert "rg_sf_FPS -->|\"Load balancing\"| rg_sf_fpsz1" in mermaid
+    assert "rg_sf_FPS -->|\"Load balancing\"| rg_sf_fpsz2" in mermaid
 
 
 def test_collapses_apim_public_ip_into_apim_asset():

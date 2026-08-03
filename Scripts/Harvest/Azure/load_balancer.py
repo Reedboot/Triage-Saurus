@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from ._helpers import az, build_endpoints, infer_fqdn, infer_sku, safe_str
@@ -25,6 +26,41 @@ def _extract_public_ip_ids(resource: dict[str, Any]) -> list[str]:
                 seen.add(value.lower())
                 found.append(value)
     return found
+
+
+def _extract_frontend_subnet_ids(resource: dict[str, Any]) -> list[str]:
+    props = resource.get("properties") or {}
+    found: list[str] = []
+    seen: set[str] = set()
+    for config in props.get("frontendIPConfigurations") or []:
+        cfg_props = config.get("properties") or config
+        subnet = cfg_props.get("subnet") or {}
+        subnet_id = safe_str(subnet.get("id") if isinstance(subnet, dict) else subnet)
+        if subnet_id and subnet_id.lower() not in seen:
+            seen.add(subnet_id.lower())
+            found.append(subnet_id)
+    return found
+
+
+def _service_fabric_node_types(
+    routing_targets: list[dict[str, str]], resource_group: str | None
+) -> list[str]:
+    """Return node-type prefixes represented by an SF load balancer's VMSS targets."""
+    rg = (resource_group or "").lower()
+    if not ("servicefabric" in rg or re.search(r"(^|[-_])sf(?:ha)?([-_]|$)", rg)):
+        return []
+
+    names: list[str] = []
+    for target in routing_targets:
+        if target.get("type") != "Microsoft.Compute/virtualMachineScaleSets":
+            continue
+        name = safe_str(target.get("target"))
+        if not name:
+            continue
+        node_type = re.sub(r"\d+$", "", name)
+        if node_type and node_type not in names:
+            names.append(node_type)
+    return names
 
 
 def _is_public(resource: dict[str, Any]) -> bool:
@@ -123,14 +159,26 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
 
         fqdn = infer_fqdn(detailed)
         public_ip_ids = _extract_public_ip_ids(detailed)
+        frontend_subnet_ids = _extract_frontend_subnet_ids(detailed)
         props = detailed.get("properties") or {}
+        routing_targets = _extract_routing_targets(detailed)
+        node_types = _service_fabric_node_types(routing_targets, resource_group)
         extra = {
             "frontend_ip_configuration_count": len(props.get("frontendIPConfigurations") or []),
             "backend_pool_count": len(props.get("backendAddressPools") or []),
             "probe_count": len(props.get("probes") or []),
             "sku_tier": safe_str((detailed.get("sku") or {}).get("tier")),
             "public_ip_resource_ids": public_ip_ids,
-            "routing_targets": _extract_routing_targets(detailed),
+            "routing_targets": routing_targets,
+            "frontend_subnet_ids": frontend_subnet_ids,
+            "subnet_id": frontend_subnet_ids[0] if frontend_subnet_ids else None,
+            "subnet_name": frontend_subnet_ids[0].split("/subnets/")[-1] if frontend_subnet_ids else None,
+            "vnet_name": (
+                frontend_subnet_ids[0].split("/virtualNetworks/", 1)[1].split("/")[0]
+                if frontend_subnet_ids and "/virtualNetworks/" in frontend_subnet_ids[0]
+                else None
+            ),
+            "service_fabric_node_types": node_types,
         }
 
         results.append(

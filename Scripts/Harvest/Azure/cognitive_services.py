@@ -54,6 +54,34 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "raw_json": json.dumps({**acct, "_extra": extra}),
         })
 
+    # AI Foundry projects and model deployments are child ARM resources. They
+    # are useful attack-surface inventory even though they do not have their
+    # own network endpoint.
+    for resource_type in (
+        "Microsoft.CognitiveServices/accounts/projects",
+        "Microsoft.CognitiveServices/accounts/deployments",
+    ):
+        for child in az(["resource", "list", "--resource-type", resource_type], subscription_id):
+            parent_id = child["id"].rsplit("/projects/", 1)[0] if "/projects/" in child["id"] else child["id"].rsplit("/deployments/", 1)[0]
+            results.append({
+                "id": child["id"],
+                "subscription_id": subscription_id,
+                "resource_group": child.get("resourceGroup"),
+                "name": child.get("name"),
+                "type": child.get("type", resource_type),
+                "location": child.get("location"),
+                "sku": None,
+                "tags": json.dumps(child.get("tags") or {}),
+                "is_public": 0,
+                "is_restricted": 0,
+                "ip_restrictions": json.dumps([]),
+                "endpoints": json.dumps([]),
+                "auth_methods": json.dumps(["azure_ad"]),
+                "fqdn": None,
+                "pipeline_tag": None,
+                "raw_json": json.dumps({**child, "_extra": {"parent_resource_id": parent_id}}),
+            })
+
     return results
 
 

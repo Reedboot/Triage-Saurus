@@ -2340,8 +2340,8 @@ class TestIngressDiagramGeneration:
         assert "orders-api-8080 🔒" not in mermaid, mermaid
         assert "belongs to" not in mermaid, mermaid
 
-    def test_internal_aks_ingress_hostname_is_service_metadata(self):
-        """Internal AKS ingress DNS should be hidden and retained on the service drilldown."""
+    def test_internal_aks_ingress_hostname_is_rendered_for_service_hop(self):
+        """Internal AKS ingress DNS should remain visible for the confirmed service hop."""
         import json
 
         rows = [
@@ -2408,11 +2408,63 @@ class TestIngressDiagramGeneration:
             and "service" in str(value.get("arm_type") or "").lower()
         )
         assert "Internet -->" not in mermaid, mermaid
-        assert "production-authentication-totp.internal.cbinnovation.uk" not in mermaid, mermaid
+        assert "production-authentication-totp.internal.cbinnovation.uk" in mermaid, mermaid
         assert "authentication-totp 🔒" not in mermaid, mermaid
-        assert '["authentication-totp"]' in mermaid, mermaid
+        assert "authentication-totp" in mermaid, mermaid
+        assert any(
+            "-->" in line and "aks_ingress" in line and "authentication_totp_80" in line
+            for line in mermaid.splitlines()
+        ), mermaid
         assert service_node["ingress_host"] == "production-authentication-totp.internal.cbinnovation.uk", service_node
         assert service_node["ingress_path"] == "/*", service_node
+
+    def test_internal_aks_ingress_connects_to_service_in_overview(self):
+        """Private harvested ingress routes must retain the ingress→service hop."""
+        import json
+
+        rows = [
+            (
+                "production-shared-aks-uksouth",
+                "Microsoft.ContainerService/managedClusters",
+                "rg-aks",
+                "",
+                0,
+                "Standard",
+                "aks-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({}),
+                None,
+                None,
+            ),
+        ]
+        aks_route_rows = [
+            (
+                "production-shared-aks-uksouth",
+                "prodyellow-account-products",
+                "account-identification-ingress",
+                "prodyellow-account-identification.internal.cbinnovation.uk",
+                "/",
+                "Internal",
+                "account-identification-service",
+                "80",
+                "account-identification-deployment",
+                "accountidentification-sf",
+                "rg-aks",
+                json.dumps({"app": "account-identification"}),
+            )
+        ]
+
+        mermaid = self._call(rows=rows, aks_route_rows=aks_route_rows).get("mermaid", "")
+        service_nid = "rg_aks_aks_service_production_shared_aks_uksouth_prodgreen_account_products_account_identification_service_80"
+        assert service_nid in mermaid, mermaid
+        assert any(
+            "-->" in line and "aks_ingress" in line and service_nid in line
+            for line in mermaid.splitlines()
+        ), mermaid
 
     def test_appgw_routes_to_internal_aks_service_without_public_ingress_node(self):
         """A private AKS storefront should be reached through App Gateway, not directly from the Internet."""
@@ -3832,6 +3884,8 @@ class TestIngressDiagramGeneration:
         assert payload["type_label"] == "Kubernetes Service", payload
         assert payload["configuration"]["namespace"] == "orders", payload
         assert payload["configuration"]["ingress_fqdn"] == "orders.example.com", payload
+        assert payload["fqdn"] == "orders.example.com", payload
+        assert payload["fqdns"] == ["orders.example.com"], payload
         assert payload["configuration"]["port"] == "443", payload
         assert payload["parent_resource"]["location"] == "uksouth", payload
         assert payload["network"]["routing_targets"] == [{

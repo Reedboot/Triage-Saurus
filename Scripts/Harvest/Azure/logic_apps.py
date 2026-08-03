@@ -17,6 +17,19 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
         props = workflow.get("properties") or {}
         endpoint = safe_str(props.get("accessEndpoint"))
         state = safe_str(props.get("state"))
+        connection_names: list[str] = []
+        if workflow.get("name") and workflow.get("resourceGroup"):
+            detailed = az([
+                "logic", "workflow", "show",
+                "--name", workflow["name"],
+                "--resource-group", workflow["resourceGroup"],
+            ], subscription_id)
+            serialized = json.dumps(detailed)
+            connection_names = sorted({
+                fragment.split("/connections/", 1)[1].split("/", 1)[0]
+                for fragment in serialized.split('"')
+                if "/connections/" in fragment
+            })
 
         results.append({
             "id": workflow["id"],
@@ -40,6 +53,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
                     "access_endpoint": endpoint,
                     "state": state,
                     "version": props.get("version"),
+                    "connection_names": connection_names,
                 },
             }),
         })

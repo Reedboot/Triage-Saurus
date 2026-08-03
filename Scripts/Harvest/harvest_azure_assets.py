@@ -56,7 +56,7 @@ from Azure import cosmos_db, app_service_plan, service_bus, container_registry, 
 from Azure import redis_cache, event_hub, app_configuration, service_fabric, cognitive_services
 from Azure import data_factory, app_service_environment, app_insights, private_endpoint, traffic_manager
 from Azure import databricks, event_grid, kusto, logic_apps, search_service
-from Azure import machine_learning
+from Azure import machine_learning, private_link_service, purview, supplemental_services
 from Azure import front_door, firewall
 from Azure import network_security_group, route_table, public_ip, load_balancer, bastion_host
 from Azure import user_assigned_identity, virtual_machine, virtual_machine_scale_set, image
@@ -67,7 +67,7 @@ from Azure._helpers import set_probe_enabled
 import appgw_routing_map
 import apim_routing_map
 import private_dns_map
-from precompute_subscription_diagram import precompute_subscription_diagram
+from precompute_subscription_diagram import precompute_cloud_architecture, precompute_subscription_diagram
 
 # ---------------------------------------------------------------------------
 # Providers registry — order matters: gateways/APIM first for correlation
@@ -99,10 +99,12 @@ PROVIDERS = [
     ("Event Grid",              event_grid.harvest),
     ("Service Bus",             service_bus.harvest),
     ("Logic Apps",              logic_apps.harvest),
+    ("Supplemental Services",  supplemental_services.harvest),
     ("Data Factory",            data_factory.harvest),
     # ── AI / ML ─────────────────────────────────────────────────────────
     ("Machine Learning Workspaces", machine_learning.harvest),
     ("Cognitive Services",      cognitive_services.harvest),
+    ("Purview",                 purview.harvest),
     # ── Security / Config ────────────────────────────────────────────────
     ("Key Vaults",              key_vault.harvest),
     ("App Configuration",       app_configuration.harvest),
@@ -111,6 +113,7 @@ PROVIDERS = [
     ("Certificates",            app_service_certificate.harvest),
     ("Certificate Orders",      app_service_certificate_order.harvest),
     ("Private Endpoints",       private_endpoint.harvest),
+    ("Private Link Services",   private_link_service.harvest),
     # ── Observability ────────────────────────────────────────────────────
     ("App Insights",            app_insights.harvest),
     ("Log Analytics Workspaces", log_analytics_workspace.harvest),
@@ -135,7 +138,7 @@ ProgressCallback = Callable[[str], None]
 _MAX_PROVIDER_WORKERS = 6
 _PROGRESS_REFRESH_SECONDS = 10.0
 _PROVIDER_WRITE_CHUNK = 250
-_DIAGRAM_CHECKPOINT_ASSET_INTERVAL = 100
+_DIAGRAM_CHECKPOINT_ASSET_INTERVAL = 250
 
 
 def _precompute_subscription_diagram(sub_id: str, *, warm_traces: bool = True) -> None:
@@ -949,8 +952,12 @@ def harvest_subscription(
         print("  [Mermaid Diagram] precomputing subscription diagram payload...", flush=True)
         try:
             conn.commit()
-            _precompute_subscription_diagram(sub_id)
-            print("  [Mermaid Diagram] payload cached")
+            # Component trace warming is intentionally deferred to the API. It
+            # performs one trace request per asset and is unbounded for large
+            # subscriptions, making harvest appear to hang after this message.
+            _precompute_subscription_diagram(sub_id, warm_traces=False)
+            precompute_cloud_architecture(REPO_ROOT / "Output" / "Data" / "cozo.db", sub_id)
+            print("  [Mermaid Diagram] payload cached (traces load on demand)")
         except Exception as exc:
             print(f"  [Mermaid Diagram] FAILED ({exc})")
     elif skip_post_harvest:

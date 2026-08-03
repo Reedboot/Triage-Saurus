@@ -36,6 +36,24 @@ def precompute_subscription_diagram(
         precompute_subscription_traces(db_path, sub_id)
 
 
+def precompute_cloud_architecture(db_path: Path | str, sub_id: str) -> None:
+    """Warm the full cloud architecture endpoint cache after harvesting."""
+    from web.app import api_cloud_architecture, app
+    from web.core.db import configure_db_path
+
+    configure_db_path(Path(db_path))
+    with app.test_request_context(f"/api/cloud/architecture?sub={sub_id}&view=mermaid"):
+        response = api_cloud_architecture()
+    if response.status_code != 200:
+        try:
+            detail = response.get_json()
+        except Exception:
+            detail = response.get_data(as_text=True)
+        raise RuntimeError(
+            f"cloud architecture endpoint returned HTTP {response.status_code}: {detail}"
+        )
+
+
 def precompute_subscription_traces(db_path: Path | str, sub_id: str) -> None:
     """Warm route and component trace caches for known harvested assets."""
     from web.app import api_cloud_component_trace, api_cloud_route_trace, app

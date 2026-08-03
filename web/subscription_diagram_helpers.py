@@ -17,6 +17,13 @@ SUBSCRIPTION_DRILLABLE_ARM_TYPES = {
     "microsoft.containerservice/managedclusters",
     "microsoft.documentdb/databaseaccounts",
     "microsoft.machinelearningservices/workspaces",
+    "microsoft.cognitiveservices/accounts",
+    "microsoft.purview/accounts",
+    "microsoft.network/privatelinkservices",
+    "microsoft.network/privatednszones",
+    "microsoft.network/privatednszones/virtualnetworklinks",
+    "microsoft.automation/automationaccounts",
+    "microsoft.fabric/capacities",
     "microsoft.web/sites",
     "microsoft.web/serverfarms",
     "microsoft.web/hostingenvironments",
@@ -70,6 +77,57 @@ def subscription_is_function_app(item: dict) -> bool:
     return bool(item.get("is_function_app")) or "-fn-" in name or name.endswith("-fn") or "funcapp" in name or "functionapp" in name
 
 
+def _subscription_routing_targets_from_raw(raw_json: object) -> list[dict]:
+    """Extract load-balancer backend targets when the DB route column is empty."""
+    if isinstance(raw_json, str):
+        try:
+            raw_json = json.loads(raw_json)
+        except Exception:
+            return []
+    if not isinstance(raw_json, dict):
+        return []
+
+    targets: list[dict] = []
+    seen: set[str] = set()
+
+    def add_target(value: object, name: object = None, target_type: object = None) -> None:
+        target = str(value or "").strip()
+        if not target or target.lower() in seen:
+            return
+        seen.add(target.lower())
+        entry = {"target": target}
+        if name:
+            entry["name"] = str(name).strip()
+        if target_type:
+            entry["type"] = str(target_type).strip()
+        targets.append(entry)
+
+    extra = raw_json.get("_extra")
+    if isinstance(extra, dict):
+        for target in extra.get("routing_targets") or []:
+            if isinstance(target, dict):
+                add_target(target.get("target") or target.get("name"), target.get("name"), target.get("type"))
+            elif isinstance(target, str):
+                add_target(target)
+
+    props = raw_json.get("properties") if isinstance(raw_json.get("properties"), dict) else raw_json
+    for pool in props.get("backendAddressPools") or []:
+        if not isinstance(pool, dict):
+            continue
+        pool_props = pool.get("properties") if isinstance(pool.get("properties"), dict) else pool
+        pool_name = pool.get("name") or ""
+        for config in pool_props.get("backendIPConfigurations") or []:
+            config_id = config.get("id") if isinstance(config, dict) else config
+            parts = [part for part in str(config_id or "").split("/") if part]
+            lowered = [part.lower() for part in parts]
+            if "virtualmachinescalesets" in lowered:
+                index = lowered.index("virtualmachinescalesets")
+                vmss_name = parts[index + 1] if index + 1 < len(parts) else str(config_id)
+                add_target(vmss_name, vmss_name or pool_name, "Microsoft.Compute/virtualMachineScaleSets")
+
+    return targets
+
+
 def subscription_known_fqdn_suffix(arm_type: str) -> str | None:
     return SUBSCRIPTION_FQDN_SUFFIXES.get((arm_type or "").lower())
 
@@ -98,6 +156,7 @@ def subscription_asset_tier(arm_type: str, name: str = "") -> str:
         or "networksecuritygroup" in type_key
         or "routetable" in type_key
         or "privateendpoint" in type_key
+        or "privatelinkservices" in type_key
         or "privatednszones" in type_key
         or "privatednszone" in type_key
         or "hostingenvironment" in type_key
@@ -109,11 +168,16 @@ def subscription_asset_tier(arm_type: str, name: str = "") -> str:
         or "serverfarms" in type_key
         or "datafactory" in type_key
         or "cognitiveservices" in type_key
+        or "purview/accounts" in type_key
         or "machinelearningservices" in type_key
         or "containerregistry" in type_key
         or "servicefabric" in type_key
         or "logic/workflows" in type_key
         or "eventgrid/topics" in type_key
+        or "automationaccounts" in type_key
+        or "databasewatcher/watchers" in type_key
+        or "web/connections" in type_key
+        or "fabric/capacities" in type_key
         or "databricks/workspaces" in type_key
         # insights/components intentionally excluded — App Insights is a monitoring
         # sink, not a compute backend; classifying it as backend implies it routes traffic
@@ -380,6 +444,8 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
         waf_mode = row[10] if len(row) > 10 else None
         routing_targets = row[11] if len(row) > 11 else None
         raw_json = row[12] if len(row) > 12 else None
+        if not routing_targets:
+            routing_targets = _subscription_routing_targets_from_raw(raw_json)
         auth_methods_raw = row[13] if len(row) > 13 else None
         endpoints_raw = row[15] if len(row) > 15 else None
         parsed_raw = _parse_json(raw_json)
@@ -629,6 +695,24 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
                     asset["parent_vnet_id"] = subnet_id.rsplit("/subnets/", 1)[0]
             extra = parsed_raw.get("_extra") or {}
             if isinstance(extra, dict):
+                if extra.get("parent_resource_id"):
+                    asset["parent_resource_id"] = str(extra["parent_resource_id"]).strip()
+                if extra.get("linked_resource_id"):
+                    asset["linked_resource_id"] = str(extra["linked_resource_id"]).strip()
+                if extra.get("vnet_id"):
+                    asset["vnet_id"] = str(extra["vnet_id"]).strip()
+                if extra.get("connection_names"):
+                    asset["connection_names"] = [
+                        str(value).strip().lower()
+                        for value in extra.get("connection_names") or []
+                        if str(value).strip()
+                    ]
+                if extra.get("load_balancer_ids"):
+                    asset["load_balancer_ids"] = [
+                        str(value).strip().lower()
+                        for value in extra.get("load_balancer_ids") or []
+                        if str(value).strip()
+                    ]
                 if extra.get("subnet_id"):
                     asset["subnet_id"] = extra.get("subnet_id")
                 if extra.get("subnet_ids"):
@@ -638,6 +722,8 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
                     asset["parent_vnet_name"] = extra.get("vnet_name")
                 if extra.get("subnet_name"):
                     asset["subnet_name"] = extra.get("subnet_name")
+                if extra.get("service_fabric_node_types"):
+                    asset["service_fabric_node_types"] = list(extra.get("service_fabric_node_types") or [])
                 if extra.get("vnet_resource_group"):
                     asset["vnet_resource_group"] = extra.get("vnet_resource_group")
                     asset["parent_vnet_resource_group"] = extra.get("vnet_resource_group")
@@ -1229,6 +1315,9 @@ def subscription_asset_label(asset: dict, include_badges: bool = False, include_
             parts.append(host if len(host) <= 42 else host[:40] + "...")
         if path and path not in ("/*", "*"):
             parts.append(path)
+    node_types = asset.get("service_fabric_node_types") or []
+    if node_types and subscription_is_load_balancer(asset):
+        parts.append(f"SF node type: {', '.join(str(value) for value in node_types[:4])}")
     type_key = (asset.get("arm_type") or "").lower()
     if asset.get("parent_vnet_name") and any(token in type_key for token in ("subnet", "hostingenvironment", "serverfarms", "servicefabric")):
         parts.append(f"vnet: {asset.get('parent_vnet_name')}")
@@ -1885,6 +1974,73 @@ def build_subscription_diagrams_by_rg(
                 edge["dasharray"] = dasharray
             edges.append(edge)
 
+        # Explicit ARM parent links keep AI Foundry projects/deployments and
+        # other child resources attached to the service that owns them.
+        for asset in visible_rg_assets:
+            parent_id = str(asset.get("parent_resource_id") or "").strip().lower()
+            if parent_id and parent_id in asset_by_id:
+                add_edge(
+                    subscription_node_id(asset_by_id[parent_id], sanitise_node_id),
+                    subscription_node_id(asset, sanitise_node_id),
+                    "contains",
+                    "#64748b",
+                    dasharray="6,3",
+                )
+
+        # Private Link Services expose a specific load-balancer frontend;
+        # collapse that frontend ID to the parent load balancer node.
+        for asset in visible_rg_assets:
+            linked_ids = list(asset.get("load_balancer_ids") or [])
+            linked_resource_id = str(asset.get("linked_resource_id") or "").strip().lower()
+            if linked_resource_id:
+                linked_ids.append(linked_resource_id)
+            if "privateendpoints" in (asset.get("arm_type") or "").lower():
+                linked_ids.append(linked_resource_id)
+            for linked_id in linked_ids:
+                target = asset_by_id.get(str(linked_id).strip().lower())
+                if target:
+                    add_edge(
+                        subscription_node_id(asset, sanitise_node_id),
+                        subscription_node_id(target, sanitise_node_id),
+                        "private link",
+                        "#38bdf8",
+                        dasharray="4,2",
+                    )
+
+        for asset in visible_rg_assets:
+            vnet_id = str(asset.get("vnet_id") or "").strip().lower()
+            target = asset_by_id.get(vnet_id)
+            if target:
+                add_edge(
+                    subscription_node_id(target, sanitise_node_id),
+                    subscription_node_id(asset, sanitise_node_id),
+                    "DNS link",
+                    "#38bdf8",
+                    dasharray="4,2",
+                )
+
+        connection_assets_by_name: dict[str, list[dict]] = defaultdict(list)
+        for asset in visible_rg_assets:
+            if "web/connections" not in (asset.get("arm_type") or "").lower():
+                continue
+            for candidate in (asset.get("name"), asset.get("short_name")):
+                candidate_key = str(candidate or "").strip().lower()
+                if candidate_key:
+                    connection_assets_by_name[candidate_key].append(asset)
+        for workflow in visible_rg_assets:
+            if "logic/workflows" not in (workflow.get("arm_type") or "").lower():
+                continue
+            workflow_nid = subscription_node_id(workflow, sanitise_node_id)
+            for connection_name in workflow.get("connection_names") or []:
+                for connection in connection_assets_by_name.get(str(connection_name).lower(), []):
+                    add_edge(
+                        workflow_nid,
+                        subscription_node_id(connection, sanitise_node_id),
+                        "connector",
+                        "#38bdf8",
+                        dasharray="4,2",
+                    )
+
         def _entry_edge_style(asset: dict) -> tuple[str, str]:
             protected = bool(asset.get("has_waf") or asset.get("waf_mode"))
             restricted = bool(asset.get("is_restricted"))
@@ -2148,6 +2304,71 @@ def build_subscription_diagrams_by_rg(
                     route_nid = subscription_node_id(route_asset, sanitise_node_id)
                     if route_nid in seen_nodes:
                         add_edge(backend_nid, route_nid, "", "#f97316", dasharray="6,3")
+
+        # Load balancers route to Service Fabric node-type VMSS resources. These
+        # are entry-point relationships, not backend-to-ingress relationships.
+        service_fabric_lbs_by_rg: dict[str, list[dict]] = defaultdict(list)
+        for entry in entries:
+            if not subscription_is_load_balancer(entry) or not entry.get("service_fabric_node_types"):
+                continue
+            service_fabric_lbs_by_rg[str(entry.get("rg") or "").strip().lower()].append(entry)
+
+        for cluster_lbs in service_fabric_lbs_by_rg.values():
+            management_lbs = [
+                entry for entry in cluster_lbs
+                if any(
+                    node_type.lower() == "systemz"
+                    for node_type in (entry.get("service_fabric_node_types") or [])
+                )
+            ]
+            resolved_lbs = [
+                entry for entry in cluster_lbs
+                if entry not in management_lbs
+                and not any(
+                    node_type.lower() == "systemz"
+                    for node_type in (entry.get("service_fabric_node_types") or [])
+                )
+            ]
+            for management_lb in management_lbs:
+                management_nid = subscription_node_id(management_lb, sanitise_node_id)
+                if management_nid not in seen_nodes:
+                    continue
+                for resolved_lb in resolved_lbs:
+                    resolved_nid = subscription_node_id(resolved_lb, sanitise_node_id)
+                    if resolved_nid in seen_nodes:
+                        add_edge(
+                            management_nid,
+                            resolved_nid,
+                            "SF resolves",
+                            "#a78bfa",
+                            dasharray="4,2",
+                        )
+
+        for entry in entries:
+            targets = _parse_routing_targets(entry.get("routing_targets"))
+            if not targets:
+                continue
+            entry_nid = subscription_node_id(entry, sanitise_node_id)
+            if entry_nid not in seen_nodes:
+                continue
+            matched_route_nids: set[str] = set()
+            for target in targets:
+                for candidate in _routing_target_candidates(target):
+                    candidate_key = candidate.strip().lower()
+                    if not candidate_key:
+                        continue
+                    matched_route_nids.update(visible_nodes_by_name.get(candidate_key, set()))
+                    matched_route_nids.update(visible_nodes_by_fqdn.get(candidate_key, set()))
+                    normalized = _routing_lookup_key(candidate_key)
+                    if normalized:
+                        matched_route_nids.update(visible_nodes_by_name_normalized.get(normalized, set()))
+                        matched_route_nids.update(visible_nodes_by_fqdn_normalized.get(normalized, set()))
+                target_rid = str(target.get("target_resource_id") or "").strip().lower()
+                if target_rid and target_rid in visible_nodes_by_resource_id:
+                    matched_route_nids.add(visible_nodes_by_resource_id[target_rid])
+            route_label = "Load balancing" if subscription_is_load_balancer(entry) else "Routing"
+            for route_nid in matched_route_nids:
+                add_edge(entry_nid, route_nid, route_label, "#f97316")
 
         for cluster_asset in cluster_assets:
             cluster_key = _cluster_key(cluster_asset)

@@ -109,6 +109,28 @@ class TestSafeStr:
 
 
 class TestLoadBalancerHarvest:
+    def test_extracts_service_fabric_node_types_from_vmss_targets(self):
+        targets = [
+            {"target": "sharedz1", "type": "Microsoft.Compute/virtualMachineScaleSets"},
+            {"target": "sharedz2", "type": "Microsoft.Compute/virtualMachineScaleSets"},
+            {"target": "sharedz3", "type": "Microsoft.Compute/virtualMachineScaleSets"},
+        ]
+
+        assert load_balancer._service_fabric_node_types(targets, "rg-sf-uksouth") == ["sharedz"]
+        assert load_balancer._service_fabric_node_types(targets, "rg-network") == []
+
+    def test_extracts_private_frontend_subnet_ids(self):
+        subnet_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet/subnets/service_fabric"
+        resource = {
+            "properties": {
+                "frontendIPConfigurations": [
+                    {"properties": {"subnet": {"id": subnet_id}}},
+                ]
+            }
+        }
+
+        assert load_balancer._extract_frontend_subnet_ids(resource) == [subnet_id]
+
     def test_extract_public_ip_ids_from_frontend_configs(self):
         resource = {
             "properties": {

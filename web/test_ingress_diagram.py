@@ -62,7 +62,179 @@ def test_network_subgraphs_split_by_vnet():
     assert '["🔒 Network: blue-spoke-ukwest"]' in mermaid
     assert '["🔒 Network: green-spoke-ukwest"]' in mermaid
     assert "NetworkBoundary" not in mermaid
+
+
+def test_load_balancers_render_as_distinct_named_nodes():
+    rows = [
+        (
+            name,
+            "microsoft.network/loadbalancers",
+            rg,
+            "",
+            False,
+            "",
+            f"/subscriptions/000/resourceGroups/{rg}/providers/Microsoft.Network/loadBalancers/{name}",
+            False,
+            None,
+            False,
+            None,
+            None,
+            '{"properties":{}}',
+            None,
+            None,
+        )
+        for name, rg in [
+            ("shared", "rg-sf"),
+            ("management", "rg-sf"),
+            ("management_internal", "rg-sf"),
+            ("management", "rg-sfha"),
+            ("management_internal", "rg-sfha"),
+            ("kubernetes-internal", "rg-aks"),
+        ]
+    ]
+
+    mermaid = _build_ingress_diagram(rows)["mermaid"]
+
+    for name, rg in [
+        ("shared", "rg-sf"),
+        ("management", "rg-sf"),
+        ("management_internal", "rg-sf"),
+        ("management", "rg-sfha"),
+        ("management_internal", "rg-sfha"),
+        ("kubernetes-internal", "rg-aks"),
+    ]:
+        node_id = _sanitise_node_id(f"{rg}_{name}")
+        assert f"{node_id}[" in mermaid
+        assert name in mermaid
+
+    assert "Load_Balancer_ep_group" not in mermaid
     assert "blue-spoke-ukwest, green-spoke-ukwest" not in mermaid
+
+
+def test_aks_node_resource_group_load_balancer_routes_to_service():
+    cluster_name = "aks-external"
+    cluster_rg = "rg-aks-external"
+    lb_rg = "rg-aks-nodes-external"
+    rows = [
+        (
+            cluster_name,
+            "microsoft.containerservice/managedclusters",
+            cluster_rg,
+            "",
+            False,
+            "",
+            f"/subscriptions/000/resourceGroups/{cluster_rg}/providers/Microsoft.ContainerService/managedClusters/{cluster_name}",
+            False,
+            None,
+            False,
+            None,
+            None,
+            '{"properties":{}}',
+            None,
+            None,
+        ),
+        (
+            "kubernetes-internal",
+            "microsoft.network/loadbalancers",
+            lb_rg,
+            "",
+            False,
+            "",
+            f"/subscriptions/000/resourceGroups/{lb_rg}/providers/Microsoft.Network/loadBalancers/kubernetes-internal",
+            False,
+            None,
+            False,
+            None,
+            None,
+            '{"properties":{}}',
+            None,
+            None,
+        ),
+    ]
+    route_rows = [
+        (
+            cluster_name,
+            "prodyellow-ford",
+            "car-ingress",
+            "car.example.test",
+            "/*",
+            "private",
+            "car-ford-image-cb-prdgreen-service",
+            4000,
+            "car-ford-image",
+            None,
+            cluster_rg,
+            None,
+        )
+    ]
+
+    mermaid = _build_ingress_diagram(rows, aks_route_rows=route_rows)["mermaid"]
+    lb_node = _sanitise_node_id(f"{lb_rg}_kubernetes-internal")
+    service_node = _sanitise_node_id(
+        f"{cluster_rg}_aks_service_{cluster_name}_prodyellow-ford_car-ford-image-cb-prdgreen-service_4000"
+    )
+    assert any(
+        line.startswith(f"    {lb_node} --> ")
+        and "aks_ingress_" in line
+        for line in mermaid.splitlines()
+    ), mermaid
+    assert any(
+        line.endswith(f" --> {service_node}")
+        and "aks_ingress_" in line
+        for line in mermaid.splitlines()
+    ), mermaid
+
+
+def test_service_fabric_management_load_balancer_routes_to_each_sf_load_balancer():
+    rg = "rg-sf"
+    rows = [
+        (
+            "sf-cluster",
+            "microsoft.servicefabric/clusters",
+            rg,
+            "",
+            False,
+            "",
+            f"/subscriptions/000/resourceGroups/{rg}/providers/Microsoft.ServiceFabric/clusters/sf-cluster",
+            False,
+            None,
+            False,
+            None,
+            None,
+            '{"_extra":{"vnet_name":"sf-vnet","vnet_resource_group":"rg-sf","subnet_name":"service-fabric","subnet_id":"/subscriptions/000/resourceGroups/rg-sf/providers/Microsoft.Network/virtualNetworks/sf-vnet/subnets/service-fabric"},"properties":{}}',
+            None,
+            None,
+        )
+    ]
+    for name in ("management", "shared", "stock", "fpscpu"):
+        rows.append(
+            (
+                name,
+                "microsoft.network/loadbalancers",
+                rg,
+                "",
+                False,
+                "",
+                f"/subscriptions/000/resourceGroups/{rg}/providers/Microsoft.Network/loadBalancers/{name}",
+                False,
+                None,
+                False,
+                None,
+                None,
+                '{"properties":{}}',
+                None,
+                None,
+            )
+        )
+
+    mermaid = _build_ingress_diagram(rows)["mermaid"]
+    management_node = _sanitise_node_id(f"{rg}_management")
+    for name in ("shared", "stock", "fpscpu"):
+        target_node = _sanitise_node_id(f"{rg}_{name}")
+        assert f'{management_node} -->|"Load balancing"| {target_node}' in mermaid
+    subnet_start = mermaid.index('["Subnet: service-fabric"]')
+    subnet_end = mermaid.index("        end", subnet_start)
+    assert management_node in mermaid[subnet_start:subnet_end]
 
 
 def test_non_vnet_entry_points_do_not_create_unnamed_network_group():
@@ -271,10 +443,77 @@ def test_apim_routing_targets_render_explicit_backend_edge():
     assert f'{source_id} -->|"Routing"| {target_id}' in mermaid
 
 
+def test_apim_service_fabric_backend_routes_to_cluster_load_balancer():
+    rows = [
+        (
+            "core-prodyellow-api-uksouth",
+            "microsoft.apimanagement/service",
+            "rg-api",
+            "core-prodyellow-api-uksouth.azure-api.net",
+            True,
+            "",
+            "/subscriptions/000/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/core-prodyellow-api-uksouth",
+            False,
+            None,
+            False,
+            None,
+            None,
+            json.dumps({"properties": {}}),
+            None,
+            None,
+        ),
+        (
+            "stock",
+            "microsoft.network/loadbalancers",
+            "core-prodyellow-sfha-uksouth",
+            "",
+            False,
+            "",
+            "/subscriptions/000/resourceGroups/core-prodyellow-sfha-uksouth/providers/Microsoft.Network/loadBalancers/stock",
+            False,
+            None,
+            False,
+            None,
+            None,
+            json.dumps({"properties": {}}),
+            None,
+            None,
+        ),
+    ]
+
+    diagram = _build_ingress_diagram(
+        rows,
+        apim_route_map={
+            "core-prodyellow-api-uksouth": [
+                "https://core-prodyellow-sfha-uksouth.cbinnovation.uk:19080",
+            ],
+        },
+        apim_backend_rows=[
+            {
+                "apim_name": "core-prodyellow-api-uksouth",
+                "backend_id": "core-prodyellow-sfha",
+                "title": "core-prodyellow-sfha",
+                "description": "Service Fabric backend",
+                "url": "https://core-prodyellow-sfha-uksouth.cbinnovation.uk:19080",
+                "protocol": "http",
+            },
+        ],
+    )
+    mermaid = diagram["mermaid"]
+
+    backend_id = _sanitise_node_id(
+        "core-prodyellow-api-uksouth::core-prodyellow-sfha"
+    )
+    load_balancer_id = _sanitise_node_id(
+        "core-prodyellow-sfha-uksouth_stock"
+    )
+    assert f"{backend_id} --> {load_balancer_id}" in mermaid
+
+
 def test_appgw_routes_keep_edges_for_multiple_apim_backend_pools():
     rows = [
         (
-            "cbuk-main-production-appgatewaycop-uksouth",
+            "main-production-appgatewaycop-uksouth",
             "microsoft.network/applicationgateways",
             "rg-gateway",
             "",
@@ -291,13 +530,13 @@ def test_appgw_routes_keep_edges_for_multiple_apim_backend_pools():
             None,
         ),
         (
-            "cbuk-main-production-api-uksouth",
+            "main-production-api-uksouth",
             "microsoft.apimanagement/service",
             "rg-api",
-            "cbuk-main-production-api-uksouth.azure-api.net",
+            "main-production-api-uksouth.azure-api.net",
             False,
             "Developer",
-            "/subscriptions/000/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/cbuk-main-production-api-uksouth",
+            "/subscriptions/000/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/main-production-api-uksouth",
             False,
             None,
             False,
@@ -310,9 +549,9 @@ def test_appgw_routes_keep_edges_for_multiple_apim_backend_pools():
     ]
     appgw_routes = [
         (
-            "cbuk-main-production-appgatewaycop-uksouth",
+            "main-production-appgatewaycop-uksouth",
             "cop2new.clearbank.co.uk",
-            json.dumps(["cbuk-main-production-api-uksouth.azure-api.net"]),
+            json.dumps(["main-production-api-uksouth.azure-api.net"]),
             "cop-resource-server-apim",
             "resource-server-listener",
             "/*",
@@ -320,9 +559,9 @@ def test_appgw_routes_keep_edges_for_multiple_apim_backend_pools():
             None,
         ),
         (
-            "cbuk-main-production-appgatewaycop-uksouth",
+            "main-production-appgatewaycop-uksouth",
             "payuknew.clearbank.co.uk",
-            json.dumps(["cbuk-main-production-api-uksouth.azure-api.net"]),
+            json.dumps(["main-production-api-uksouth.azure-api.net"]),
             "cop-auth-server-apim",
             "auth-server-listener",
             "/*",
@@ -334,17 +573,17 @@ def test_appgw_routes_keep_edges_for_multiple_apim_backend_pools():
     diagram = _build_ingress_diagram(
         rows,
         appgw_routes=appgw_routes,
-        public_appgw_names={"cbuk-main-production-appgatewaycop-uksouth"},
+        public_appgw_names={"main-production-appgatewaycop-uksouth"},
     )
     mermaid = diagram["mermaid"]
 
     target_id = "grp_APIM_Private"
     assert (
-        f"{_sanitise_node_id('agpool_rg-gateway_cbuk-main-production-appgatewaycop-uksouth_cop-resource-server-apim')} "
+        f"{_sanitise_node_id('agpool_rg-gateway_main-production-appgatewaycop-uksouth_cop-resource-server-apim')} "
         f"--> {target_id}"
     ) in mermaid
     assert (
-        f"{_sanitise_node_id('agpool_rg-gateway_cbuk-main-production-appgatewaycop-uksouth_cop-auth-server-apim')} "
+        f"{_sanitise_node_id('agpool_rg-gateway_main-production-appgatewaycop-uksouth_cop-auth-server-apim')} "
         f"--> {target_id}"
     ) in mermaid
 

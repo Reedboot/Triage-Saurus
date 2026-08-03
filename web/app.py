@@ -15192,6 +15192,11 @@ def _build_subscription_architecture_payload(
             return "Routing"
         return "Routing"
 
+    asset_by_id = {
+        str(asset.get("id") or "").strip().lower(): asset
+        for asset in assets
+        if str(asset.get("id") or "").strip()
+    }
     for entry in routable_assets:
         resolved_targets: list[str] = []
         unresolved_targets: list[str] = []
@@ -15206,6 +15211,7 @@ def _build_subscription_architecture_payload(
                 node_by_name_normalized=node_by_name_normalized,
             )
             if target_node_id:
+                target_asset = asset_by_id.get(str(target_node_id).strip().lower())
                 if target_node_id not in resolved_targets:
                     resolved_targets.append(target_node_id)
             else:
@@ -16109,6 +16115,15 @@ def api_cloud_architecture():
         requested_view_mode = (request.args.get("view") or request.args.get("mode") or "").strip().lower()
         experiment_id = (request.args.get("experiment_id") or "").strip()
         repo_name = (request.args.get("repo_name") or "").strip() or None
+        if subscription_selector:
+            cache_signature, _ = _subscription_diagram_cache_signature(conn, subscription_selector)
+            cache_view_mode = "full" if requested_view_mode == "mermaid" else (requested_view_mode or "overview")
+            if cache_signature:
+                cached_payload = _load_cloud_architecture_cache(
+                    conn, subscription_selector, cache_signature, cache_view_mode
+                )
+                if cached_payload:
+                    return jsonify(cached_payload)
 
         payload = cloud_architecture_payload(
             conn=conn,
@@ -16120,6 +16135,14 @@ def api_cloud_architecture():
             latest_experiment_id=_cloud_latest_experiment_id,
             build_experiment_payload=_build_cloud_architecture_payload,
         )
+        if subscription_selector and cache_signature:
+            _store_cloud_architecture_cache(
+                conn,
+                subscription_selector,
+                cache_signature,
+                cache_view_mode,
+                payload,
+            )
         return jsonify(payload)
     finally:
         conn.close()
@@ -16672,11 +16695,18 @@ def api_cloud_resource_details():
 
         # APIM APIs are harvested into apim_api_routes and represented as
         # synthetic diagram nodes rather than provisioned_assets rows.
+        api_lookup_name = lookup_name
+        if resource_id.lower().startswith("apim-api::") and resource_id.count("::") == 2:
+            api_lookup_name = resource_id.split("::", 1)[1]
         if (
             _table_exists(conn, "apim_api_routes")
-            and ("apim api" in lookup_type_lc or lookup_name.count("::") == 1)
+            and ("apim api" in lookup_type_lc or api_lookup_name.count("::") == 1)
         ):
-            apim_name, api_name = (lookup_name.split("::", 1) if "::" in lookup_name else ("", lookup_name))
+            apim_name, api_name = (
+                api_lookup_name.split("::", 1)
+                if "::" in api_lookup_name
+                else ("", api_lookup_name)
+            )
             apim_name = apim_name.strip()
             api_name = api_name.strip()
             api_row = None
@@ -17092,6 +17122,9 @@ def api_cloud_resource_details():
                         "type_label": "Kubernetes Service",
                         "icon_path": _resource_icon_path("microsoft.kubernetes/services"),
                         "resource_group": cluster_rg or lookup_rg or "",
+                        "fqdn": route_hosts[0] if route_hosts else "",
+                        "fqdns": route_hosts,
+                        "dns_names": route_hosts,
                         "subscription": (sub_row["display_name"] if (sub_row := _cloud_resolve_subscription(conn, resolved_sub_id or lookup_sub or lookup_sub or "")) else lookup_sub or ""),
                         "environment": sub_row["environment"] if sub_row else "",
                         "is_virtual": True,
@@ -17313,6 +17346,116 @@ def api_cloud_resource_details():
                 "references": _extract_keyvault_refs(raw_json),
             },
         }
+        if "loadbalancer" in asset_type_lc and str(asset_row["name"] or "").strip().lower() == "kubernetes-internal" and _table_exists(conn, "aks_routes"):
+            lb_rg = str(asset_row["resource_group"] or "").strip()
+            cluster_rgs = {lb_rg}
+            if "-nodes-" in lb_rg.lower():
+                cluster_rgs.add(re.sub(r"-nodes-", "-", lb_rg, count=1, flags=re.IGNORECASE))
+            placeholders = ",".join("?" for _ in cluster_rgs)
+            route_rows = conn.execute(
+                f"""
+                SELECT cluster_name, resource_group, namespace, ingress_name, host,
+                       path, service_name, service_port, deployment_name
+                FROM aks_routes
+                WHERE subscription_id = ?
+                  AND LOWER(resource_group) IN ({placeholders})
+                ORDER BY namespace, service_name, ingress_name, host, path
+                """,
+                [str(asset_row["subscription_id"] or ""), *sorted(cluster_rgs)],
+            ).fetchall()
+            service_routes: list[dict] = []
+            seen_routes: set[tuple[str, str, str, str, str, str, str, str]] = set()
+            for route in route_rows:
+                service_name = str(route["service_name"] or route["deployment_name"] or "").strip()
+                if not service_name:
+                    continue
+                item = {
+                    "cluster_name": str(route["cluster_name"] or "").strip(),
+                    "namespace": str(route["namespace"] or "default").strip() or "default",
+                    "ingress_name": str(route["ingress_name"] or "").strip(),
+                    "host": str(route["host"] or "").strip(),
+                    "path": str(route["path"] or "").strip() or "/",
+                    "service_name": service_name,
+                    "service_port": str(route["service_port"] or "").strip(),
+                    "deployment_name": str(route["deployment_name"] or "").strip(),
+                }
+                marker = tuple(item.values())
+                if marker not in seen_routes:
+                    seen_routes.add(marker)
+                    service_routes.append(item)
+            if service_routes:
+                details["aks_service_routes"] = service_routes
+
+                route_host_keys = {
+                    key
+                    for item in service_routes
+                    if (key := _routing_lookup_key(item["host"]))
+                }
+                callers: list[dict] = []
+                seen_callers: set[tuple[str, str, str, str]] = set()
+
+                def _add_lb_caller(name: str, caller_type: str, via: str, path: str = "", protocol: str = "") -> None:
+                    marker = (caller_type.lower(), name.lower(), via.lower(), path.lower())
+                    if not name or marker in seen_callers:
+                        return
+                    seen_callers.add(marker)
+                    callers.append({
+                        "name": name,
+                        "type": caller_type,
+                        "via": via,
+                        "path": path,
+                        "protocol": protocol,
+                    })
+
+                if route_host_keys and _table_exists(conn, "appgw_routing_rules"):
+                    for caller in conn.execute(
+                        """
+                        SELECT gateway_name, listener_name, hostname, protocol, url_path,
+                               backend_pool_name, backend_fqdns
+                        FROM appgw_routing_rules
+                        WHERE subscription_id = ?
+                        ORDER BY gateway_name, listener_name, backend_pool_name
+                        """,
+                        (str(asset_row["subscription_id"] or ""),),
+                    ).fetchall():
+                        try:
+                            backend_fqdns = json.loads(caller["backend_fqdns"] or "[]")
+                        except (json.JSONDecodeError, TypeError):
+                            backend_fqdns = []
+                        if not any(_routing_lookup_key(value) in route_host_keys for value in backend_fqdns):
+                            continue
+                        _add_lb_caller(
+                            str(caller["backend_pool_name"] or caller["gateway_name"] or "").strip(),
+                            "App Gateway Backend Pool",
+                            " / ".join(value for value in (
+                                str(caller["gateway_name"] or "").strip(),
+                                str(caller["listener_name"] or "").strip(),
+                            ) if value),
+                            str(caller["url_path"] or "").strip(),
+                            str(caller["protocol"] or "").strip(),
+                        )
+
+                if route_host_keys and _table_exists(conn, "apim_backends"):
+                    for caller in conn.execute(
+                        """
+                        SELECT apim_name, backend_id, title, url, protocol
+                        FROM apim_backends
+                        WHERE subscription_id = ?
+                        ORDER BY apim_name, backend_id
+                        """,
+                        (str(asset_row["subscription_id"] or ""),),
+                    ).fetchall():
+                        if _routing_lookup_key(caller["url"]) not in route_host_keys:
+                            continue
+                        _add_lb_caller(
+                            str(caller["title"] or caller["backend_id"] or "").strip(),
+                            "APIM Backend Target",
+                            str(caller["apim_name"] or "").strip(),
+                            "",
+                            str(caller["protocol"] or "").strip(),
+                        )
+                if callers:
+                    details["invoked_by"] = callers
         if "managedclusters" in str(asset_row["type"] or "").lower() and _table_exists(conn, "aks_routes"):
             route_columns = _table_columns(conn, "aks_routes")
             required_columns = {
@@ -18578,6 +18721,13 @@ def _resolve_parent_resource(conn, asset_row: sqlite3.Row) -> dict | None:
     subscription_id = str(asset_row["subscription_id"] or "").strip()
 
     if not subscription_id or not asset_id or not asset_name:
+        return None
+
+    # Load balancers are top-level network resources. Their backend target names
+    # (for example, Kubernetes service names) can appear in other assets' raw
+    # JSON, but that is routing data rather than an ARM parent relationship.
+    # Do not turn those references into a misleading "Parent Resource".
+    if "loadbalancer" in asset_type:
         return None
 
     try:
@@ -21244,6 +21394,75 @@ def _store_subscription_diagram_cache(conn, sub_id: str, signature: str, payload
     conn.commit()
 
 
+def _load_cloud_architecture_cache(
+    conn: sqlite3.Connection,
+    sub_id: str,
+    signature: str,
+    view_mode: str,
+) -> dict | None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cloud_architecture_cache (
+            sub_id TEXT NOT NULL,
+            view_mode TEXT NOT NULL,
+            cache_signature TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (sub_id, view_mode)
+        )
+        """
+    )
+    row = conn.execute(
+        """
+        SELECT payload_json
+        FROM cloud_architecture_cache
+        WHERE sub_id = ? AND view_mode = ? AND cache_signature = ?
+        LIMIT 1
+        """,
+        (sub_id, view_mode, signature),
+    ).fetchone()
+    if not row:
+        return None
+    try:
+        return json.loads(row["payload_json"] or "{}")
+    except Exception:
+        return None
+
+
+def _store_cloud_architecture_cache(
+    conn: sqlite3.Connection,
+    sub_id: str,
+    signature: str,
+    view_mode: str,
+    payload: dict,
+) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cloud_architecture_cache (
+            sub_id TEXT NOT NULL,
+            view_mode TEXT NOT NULL,
+            cache_signature TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (sub_id, view_mode)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO cloud_architecture_cache
+            (sub_id, view_mode, cache_signature, payload_json, updated_at)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(sub_id, view_mode) DO UPDATE SET
+            cache_signature = excluded.cache_signature,
+            payload_json = excluded.payload_json,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (sub_id, view_mode, signature, json.dumps(payload)),
+    )
+    conn.commit()
+
+
 def _trace_cache_key(
     conn: sqlite3.Connection,
     sub_id: str,
@@ -21603,6 +21822,33 @@ def api_subscription_diagram(sub_id: str):
             pass  # Non-critical
 
         diagram_rows = [list(row) for row in rows]
+        # The overview query is intentionally compact and can exclude raw VMSS
+        # rows. Service Fabric node rendering needs those rows, so add VMSS
+        # resources from the harvested inventory when a cluster exists.
+        sf_cluster_rgs = {
+            str(row[2] or "").strip().lower()
+            for row in diagram_rows
+            if "servicefabric/clusters" in str(row[1] or "").lower()
+        }
+        if sf_cluster_rgs:
+            existing_ids = {str(row[6] or "").strip().lower() for row in diagram_rows}
+            vmss_rows = conn.execute(
+                """
+                SELECT name, type, resource_group, fqdn, is_public, sku, id,
+                       0, NULL, is_restricted, waf_mode, NULL, raw_json,
+                       auth_methods, ip_restrictions, endpoints
+                FROM provisioned_assets
+                WHERE subscription_id = ?
+                  AND LOWER(type) LIKE '%virtualmachinescalesets%'
+                """,
+                (sub_id,),
+            ).fetchall()
+            for vmss_row in vmss_rows:
+                vmss_rg = str(vmss_row[2] or "").strip().lower()
+                vmss_id = str(vmss_row[6] or "").strip().lower()
+                if vmss_rg in sf_cluster_rgs and vmss_id and vmss_id not in existing_ids:
+                    diagram_rows.append(list(vmss_row))
+                    existing_ids.add(vmss_id)
         apim_rg_by_name: dict[str, str] = {}
         apim_network_by_name: dict[str, dict[str, str]] = {}
         for row in diagram_rows:
@@ -23278,6 +23524,34 @@ def _build_ingress_diagram(
             backend_title = backend_name or backend_name_lc
             synthetic_backend_name = f"{apim_name}::{backend_title}"
             backend_network = apim_network_by_name.get(apim_name, {})
+            service_fabric_lb_targets = []
+            backend_id_lc = str(backend_id or "").strip().lower()
+            if backend_id_lc:
+                for candidate in rows:
+                    candidate_type = str(candidate[1] or "").strip().lower() if len(candidate) > 1 else ""
+                    candidate_rg = str(candidate[2] or "").strip().lower() if len(candidate) > 2 else ""
+                    candidate_name = str(candidate[0] or "").strip() if candidate else ""
+                    if "microsoft.network/loadbalancers" not in candidate_type or not candidate_name:
+                        continue
+                    # APIM Service Fabric backend IDs are the cluster names.
+                    # Service Fabric load balancers are harvested in the
+                    # cluster's regional resource group (for example,
+                    # <cluster>-uksouth), so this links the two without
+                    # guessing from the fabric:/fake/service placeholder URL.
+                    if (
+                        (candidate_rg == backend_id_lc or candidate_rg.startswith(f"{backend_id_lc}-"))
+                        and candidate_name.lower() in {"management", "management_internal"}
+                    ):
+                        service_fabric_lb_targets.append({
+                            "target": candidate_name,
+                            "name": candidate_name,
+                            "type": "Microsoft.Network/loadBalancers",
+                        })
+            sf_targets = service_fabric_lb_targets or [
+                {"target": target_url, "name": backend_name or target_url}
+                for target_url in sorted(target_urls)
+                if target_url
+            ]
             synthetic_row = [
                 synthetic_backend_name,
                 "APIM Backend Target",
@@ -23290,11 +23564,7 @@ def _build_ingress_diagram(
                 None,
                 0,
                 None,
-                [
-                    {"target": target_url, "name": backend_name or target_url}
-                    for target_url in sorted(target_urls)
-                    if target_url
-                ],
+                sf_targets,
                 json.dumps({
                     "backend_id": backend_id or backend_title,
                     "backend_url": backend_url,
@@ -23772,7 +24042,7 @@ def _build_ingress_diagram(
             _item["subnet_id"] = _plan_net["subnet_id"]
             _item["vnet_resource_group"] = _plan_net["vnet_resource_group"]
 
-    aks_ingress_entries: list[dict] = []          # public-facing → entry_points
+    aks_ingress_entries: list[dict] = []          # public-facing → entry_points; private → backend hops
     aks_service_entries: list[dict] = []
     if aks_route_rows:
         aks_clusters = [
@@ -23914,6 +24184,14 @@ def _build_ingress_diagram(
             public_aks_ingress_entries = [item for item in aks_ingress_entries if item.get("public")]
             if public_aks_ingress_entries:
                 entry_points.extend(public_aks_ingress_entries)
+            # Keep private ingress nodes in the overview when they have a
+            # harvested route. They are internal hops, not Internet entry
+            # points, but hiding them breaks the confirmed ingress → service
+            # relationship and prevents APIM backend hostnames resolving to
+            # the ingress node.
+            private_aks_ingress_entries = [item for item in aks_ingress_entries if not item.get("public")]
+            if private_aks_ingress_entries:
+                backends.extend(private_aks_ingress_entries)
         if aks_service_entries:
             backends.extend(aks_service_entries)
 
@@ -24242,7 +24520,11 @@ def _build_ingress_diagram(
             grouped[category].append(item)
 
         for category, items in sorted(grouped.items()):
-            if len(items) <= NAME_THRESHOLD:
+            # Load balancers are resource-specific entry points. Keep every
+            # instance visible so AKS and Service Fabric frontends cannot be
+            # collapsed into one generic "Load Balancer" node.
+            force_individual = category in {"Load Balancer", "Kubernetes Ingress"}
+            if force_individual or len(items) <= NAME_THRESHOLD:
                 for item in items:
                     label = (
                         f"Bastion ({item.get('rg') or 'rg'})<br/>{_short_name(item['name'])}"
@@ -24565,6 +24847,7 @@ def _build_ingress_diagram(
                 "Function App",
                 "APIM Backend Target",
                 "Kubernetes Service",
+                "Kubernetes Ingress",
                 "Service Fabric VM Scale Set",
             }
             if force_individual or len(items) <= NAME_THRESHOLD:
@@ -25020,6 +25303,7 @@ def _build_ingress_diagram(
     shown_entry = grouped_entry_points
     shown_api = grouped_api_layer
     shown_backend = grouped_backends
+
     shown_data = grouped_data_stores
 
     # Keep Service Fabric VMSS visible in the overview even when backend
@@ -25669,6 +25953,28 @@ def _build_ingress_diagram(
     standalone_backend_items: list[dict] = []
     standalone_data_items: list[dict] = []
 
+    sf_clusters_by_rg = {
+        str(item.get("rg") or "").strip().lower(): item
+        for item in shown_backend
+        if "servicefabric/clusters" in str(item.get("arm_type") or item.get("type") or "").lower()
+        and str(item.get("rg") or "").strip()
+    }
+    for entry in shown_entry:
+        entry_type = str(entry.get("arm_type") or entry.get("type") or "").lower()
+        cluster = sf_clusters_by_rg.get(str(entry.get("rg") or "").strip().lower())
+        if "loadbalancer" not in entry_type or not cluster:
+            continue
+        for field in ("vnet_name", "vnet_resource_group", "subnet_name", "subnet_id"):
+            if cluster.get(field):
+                entry[field] = cluster[field]
+        entry["network"] = {
+            **dict(entry.get("network") or {}),
+            "vnet": entry.get("vnet_name"),
+            "vnet_resource_group": entry.get("vnet_resource_group"),
+            "subnet": entry.get("subnet_name"),
+            "subnet_id": entry.get("subnet_id"),
+        }
+
     def _bucket_network_item(item: dict, standalone_bucket: list[dict]) -> None:
         type_key = str(item.get("type") or item.get("arm_type") or "").lower()
         if (
@@ -26282,10 +26588,49 @@ def _build_ingress_diagram(
                 color="orange",
             )
 
+    sf_load_balancers_by_rg: dict[str, list[dict]] = defaultdict(list)
+    for _entry in shown_entry:
+        _entry_type = str(_entry.get("arm_type") or _entry.get("type") or "").lower()
+        _entry_rg = str(_entry.get("rg") or "").strip().lower()
+        if "loadbalancer" in _entry_type and _entry_rg in sf_cluster_rgs:
+            sf_load_balancers_by_rg[_entry_rg].append(_entry)
+
     routed_entry_ids = set(entry_route_targets.keys())
+    visible_node_by_id = {
+        _get_node_id(item): item
+        for item in shown_entry + shown_api + shown_backend + shown_data
+        if _get_node_id(item)
+    }
     for entry in shown_entry:
         entry_nid = _get_node_id(entry)
         targets = entry_route_targets.get(entry_nid) or []
+        entry_type = str(entry.get("arm_type") or entry.get("type") or "").lower()
+        entry_name = str(entry.get("name") or "").strip().lower()
+        entry_rg = str(entry.get("rg") or "").strip().lower()
+        if "loadbalancer" in entry_type:
+            # Azure load balancers route to node/service infrastructure, never
+            # directly to an APIM resource. APIM's backend target owns the
+            # subsequent hop to the harvested Kubernetes Ingress.
+            targets = [
+                target_nid
+                for target_nid in targets
+                if not any(
+                    token in str(
+                        visible_node_by_id.get(target_nid, {}).get("arm_type")
+                        or visible_node_by_id.get(target_nid, {}).get("type")
+                        or ""
+                    ).lower()
+                    for token in ("apimanagement", "apim backend", "apimbackend")
+                )
+            ]
+        if "loadbalancer" in entry_type and entry_name == "management" and entry_rg in sf_load_balancers_by_rg:
+            # Service Fabric management load balancers resolve to the other
+            # Service Fabric frontends, not directly to their VMSS backends.
+            targets = [
+                _get_node_id(candidate)
+                for candidate in sf_load_balancers_by_rg[entry_rg]
+                if candidate is not entry
+            ]
         if not targets:
             continue
         src_vnet = _node_vnet.get(entry_nid, "")
@@ -26389,6 +26734,34 @@ def _build_ingress_diagram(
                 apim_parent_edges.add((single_api_nid, backend_nid))
 
     backend_route_targets: dict[str, list[str]] = {}
+    servicefabric_vmss_ids_by_cluster: dict[str, list[str]] = defaultdict(list)
+    for cluster in shown_backend:
+        if "servicefabric/clusters" not in str(cluster.get("arm_type") or cluster.get("type") or "").lower():
+            continue
+        cluster_nid = _get_node_id(cluster)
+        raw_cluster = {}
+        try:
+            raw_cluster = json.loads(cluster.get("raw_json") or "{}")
+        except Exception:
+            pass
+        props = raw_cluster.get("properties") if isinstance(raw_cluster, dict) else {}
+        node_types = list(raw_cluster.get("nodeTypes") or []) if isinstance(raw_cluster, dict) else []
+        if isinstance(props, dict):
+            node_types.extend(props.get("nodeTypes") or [])
+        names = {
+            str(
+                item.get("name") or item.get("nodeTypeName") or item.get("vmssName")
+                if isinstance(item, dict)
+                else item
+            ).strip().lower()
+            for item in node_types
+        }
+        for vmss in shown_backend:
+            if (
+                "virtualmachinescalesets" in str(vmss.get("arm_type") or vmss.get("type") or "").lower()
+                and str(vmss.get("name") or "").strip().lower() in names
+            ):
+                servicefabric_vmss_ids_by_cluster[cluster_nid].append(_get_node_id(vmss))
     for backend in shown_backend:
         backend_type_lc = str(backend.get("type") or backend.get("arm_type") or "").lower()
         if (
@@ -26402,8 +26775,12 @@ def _build_ingress_diagram(
         targets: list[str] = []
         for target in _parse_routing_targets(backend.get("routing_targets")):
             target_node_id = _resolve_routing_target(target)
-            if target_node_id and target_node_id not in targets:
-                targets.append(target_node_id)
+            if not target_node_id:
+                continue
+            logical_targets = servicefabric_vmss_ids_by_cluster.get(target_node_id)
+            for logical_target in logical_targets or [target_node_id]:
+                if logical_target not in targets:
+                    targets.append(logical_target)
         if targets:
             backend_route_targets[backend_nid] = targets
 
@@ -26939,9 +27316,7 @@ def _build_ingress_diagram(
         item for item in shown_backend
         if "virtualmachinescalesets" in (item.get("arm_type") or item.get("type") or "").lower()
     ]
-
     sf_edge_emitted = False
-    sf_node_ids: set[str] = set()
     if sf_cluster_assets and sf_vmss_assets:
         sf_edge_keys: set[tuple[str, str]] = set()
         for cluster in sf_cluster_assets:
@@ -27027,21 +27402,11 @@ def _build_ingress_diagram(
                 vmss_nid = _get_node_id(vmss)
                 if not vmss_nid:
                     continue
-                if node_type_names:
-                    for node_type_name in node_type_names:
-                        node_nid = _sanitise_node_id(f"{cluster_nid}_node_{node_type_name}")
-                        if node_nid not in sf_node_ids:
-                            lines.append(f'    {node_nid}["Node: {node_type_name}"]')
-                            lines.append(f"    class {node_nid} backend;")
-                            sf_node_ids.add(node_nid)
-                        _add_link(f'    {vmss_nid} --> {node_nid}', "white")
-                        _add_link(f'    {node_nid} -->|"runs on"| {cluster_nid}', "white")
-                else:
-                    edge_key = (cluster_nid, vmss_nid)
-                    if edge_key in sf_edge_keys:
-                        continue
-                    sf_edge_keys.add(edge_key)
-                    _add_link(f'    {vmss_nid} -->|"contains"| {cluster_nid}', "white")
+                edge_key = (cluster_nid, vmss_nid)
+                if edge_key in sf_edge_keys:
+                    continue
+                sf_edge_keys.add(edge_key)
+                _add_link(f"    {vmss_nid} --> {cluster_nid}", "white")
                 sf_edge_emitted = True
 
     if not sf_edge_emitted:
@@ -27123,7 +27488,7 @@ def _build_ingress_diagram(
                 if edge_key in sf_row_edge_keys:
                     continue
                 sf_row_edge_keys.add(edge_key)
-                _add_link(f'    {vmss_nid} -->|"contains"| {cluster_nid}', "white")
+                _add_link(f"    {vmss_nid} --> {cluster_nid}", "white")
                 sf_edge_emitted = True
 
     aks_cluster_assets = [
@@ -27141,6 +27506,22 @@ def _build_ingress_diagram(
         if (item.get("node_variant") or "") == "aks_service"
         or str(item.get("type") or "").strip().lower() == "kubernetes service"
     ]
+    # AKS-managed load balancers live in the cluster's node resource group and
+    # expose Kubernetes Services through node infrastructure targets.
+    def _aks_node_resource_group_names(cluster: dict) -> set[str]:
+        cluster_rg = str(cluster.get("rg") or cluster.get("resource_group") or "").strip().lower()
+        candidates = {cluster_rg} if cluster_rg else set()
+        if "-aks-" in cluster_rg:
+            candidates.add(cluster_rg.replace("-aks-", "-aks-nodes-", 1))
+        if cluster_rg.endswith("-aks"):
+            candidates.add(f"{cluster_rg}-nodes")
+        return candidates
+
+    aks_cluster_by_node_rg: dict[str, dict] = {}
+    for cluster in aks_cluster_assets:
+        for node_rg in _aks_node_resource_group_names(cluster):
+            aks_cluster_by_node_rg.setdefault(node_rg, cluster)
+
     aks_service_cluster_edges: set[tuple[str, str]] = set()
     if aks_cluster_assets and (aks_ingress_assets or aks_service_assets):
         def _cluster_key(item: dict) -> tuple[str, str]:
@@ -27173,11 +27554,21 @@ def _build_ingress_diagram(
 
         cluster_by_key = {_cluster_key(item): item for item in aks_cluster_assets}
         ingress_by_cluster: dict[tuple[str, str], list[dict]] = _dd(list)
+        ingress_by_route: dict[tuple[str, str, str, str, str], list[dict]] = _dd(list)
         service_by_cluster: dict[tuple[str, str], list[dict]] = _dd(list)
         service_by_route: dict[tuple[str, str, str, str, str], dict] = {}
         for item in aks_ingress_assets:
                 for cluster_key in _route_cluster_keys(item):
                     ingress_by_cluster[cluster_key].append(item)
+                route_key = (
+                    str(item.get("source_cluster_rg") or item.get("rg") or "").strip().lower(),
+                    str(item.get("source_cluster_name") or "").strip().lower(),
+                    str(item.get("source_namespace") or "").strip().lower(),
+                    str(item.get("source_service") or item.get("source_deployment") or "").strip().lower(),
+                    str(item.get("source_service_port") or "").strip().lower(),
+                )
+                if route_key[1] and route_key[3]:
+                    ingress_by_route[route_key].append(item)
         for item in aks_service_assets:
                 for cluster_key in _route_cluster_keys(item):
                     service_by_cluster[cluster_key].append(item)
@@ -27193,6 +27584,34 @@ def _build_ingress_diagram(
                     str(item.get("source_service_port") or "").strip().lower(),
                 )
                 service_by_route[route_key] = item
+
+        aks_lb_service_edges: set[tuple[str, str]] = set()
+        for load_balancer in shown_entry:
+            lb_type = str(load_balancer.get("arm_type") or load_balancer.get("type") or "").lower()
+            if "loadbalancer" not in lb_type:
+                continue
+            cluster = aks_cluster_by_node_rg.get(str(load_balancer.get("rg") or "").strip().lower())
+            if not cluster:
+                continue
+            cluster_key = _cluster_key(cluster)
+            for service in aks_service_assets:
+                if cluster_key not in _route_cluster_keys(service):
+                    continue
+                lb_nid = _get_node_id(load_balancer)
+                service_route_key = (
+                    str(service.get("source_cluster_rg") or service.get("rg") or "").strip().lower(),
+                    str(service.get("source_cluster_name") or "").strip().lower(),
+                    str(service.get("source_namespace") or "").strip().lower(),
+                    str(service.get("source_service") or service.get("source_deployment") or "").strip().lower(),
+                    str(service.get("source_service_port") or "").strip().lower(),
+                )
+                route_targets = ingress_by_route.get(service_route_key) or [service]
+                for route_target in route_targets:
+                    target_nid = _get_node_id(route_target)
+                    edge_key = (lb_nid, target_nid)
+                    if lb_nid and target_nid and lb_nid != target_nid and edge_key not in aks_lb_service_edges:
+                        aks_lb_service_edges.add(edge_key)
+                        _add_link(f"    {lb_nid} --> {target_nid}", "orange")
 
         for cluster_key, services in service_by_cluster.items():
             cluster = cluster_by_key.get(cluster_key)
@@ -28198,6 +28617,8 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list, node: 
 
     def _lookup_parent_resource(resource: dict | None, expected_arm_type: str | None = None) -> dict | None:
         if not isinstance(resource, dict):
+            return None
+        if "loadbalancer" in str(expected_arm_type or "").lower():
             return None
         parent_name = str(resource.get("name") or "").strip()
         if not parent_name:
