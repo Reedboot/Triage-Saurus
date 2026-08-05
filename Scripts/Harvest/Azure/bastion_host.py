@@ -73,6 +73,9 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "scale_units": props.get("scaleUnits"),
             "sku_tier": safe_str((detailed.get("sku") or {}).get("tier")),
             "public_ip_resource_ids": public_ip_ids,
+            "exposure_class": "public_edge" if public_ip_ids else "private",
+            "direction": "inbound" if public_ip_ids else "internal",
+            "purpose": "Bastion management ingress" if public_ip_ids else "private Bastion",
         }
 
         results.append(

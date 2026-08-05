@@ -260,7 +260,15 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "auth_methods": json.dumps([]),
             "fqdn": None,
             "pipeline_tag": None,
-            "raw_json": json.dumps({**firewall, "_extra": {"exposure_level": exposure_level}}),
+            "raw_json": json.dumps({
+                **firewall,
+                "_extra": {
+                    "exposure_level": exposure_level,
+                    "exposure_class": "public_edge" if exposure_level == "Public" else "private",
+                    "direction": "inbound" if exposure_level == "Public" else "internal",
+                    "purpose": "firewall ingress/egress boundary",
+                },
+            }),
         })
     return results
 

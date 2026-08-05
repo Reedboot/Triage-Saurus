@@ -39,6 +39,24 @@ def _os_type(resource: dict[str, Any]) -> str | None:
     return safe_str(os_type) or None
 
 
+def _public_ip_refs(resource: dict[str, Any]) -> list[str]:
+    props = resource.get("properties") or {}
+    vm_profile = props.get("virtualMachineProfile") or {}
+    net_profile = vm_profile.get("networkProfile") or {}
+    refs: list[str] = []
+    for nic_cfg in net_profile.get("networkInterfaceConfigurations") or []:
+        nic_props = nic_cfg.get("properties") or {}
+        for ip_cfg in nic_props.get("ipConfigurations") or nic_cfg.get("ipConfigurations") or []:
+            ip_props = ip_cfg.get("properties") or {}
+            public_ip = ip_props.get("publicIPAddress") or ip_cfg.get("publicIPAddress")
+            if isinstance(public_ip, dict):
+                public_ip = public_ip.get("id")
+            value = safe_str(public_ip)
+            if value and value.lower() not in {item.lower() for item in refs}:
+                refs.append(value)
+    return refs
+
+
 def _vnet_name_from_subnet_id(subnet_id: str) -> str | None:
     if not subnet_id or "/virtualNetworks/" not in subnet_id:
         return None
@@ -74,7 +92,25 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             subnet_ids = _subnet_refs(details)
             subnet_id = subnet_ids[0] if subnet_ids else None
             os_type = _os_type(details)
-            extra = dict(details.get("_extra") or {})
+            try:
+                base_raw = json.loads(row.get("raw_json") or "{}")
+            except (TypeError, json.JSONDecodeError):
+                base_raw = {}
+            extra = dict(base_raw.get("_extra") or {})
+            extra.update(details.get("_extra") or {})
+            detail_props = details.get("properties") or {}
+            public_ip_ids = _public_ip_refs(details)
+            instance_count = (details.get("sku") or {}).get("capacity") or row.get("sku")
+            try:
+                instance_count = int(instance_count) if instance_count is not None else None
+            except (TypeError, ValueError):
+                pass
+            extra.setdefault("instance_count", instance_count)
+            extra.setdefault("orchestration_mode", detail_props.get("orchestrationMode"))
+            extra.setdefault(
+                "upgrade_policy_mode",
+                (detail_props.get("upgradePolicy") or {}).get("mode"),
+            )
             if subnet_id:
                 extra.update(
                     {
@@ -87,7 +123,14 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
                 )
             if os_type:
                 extra["os_type"] = os_type
-            row["raw_json"] = json.dumps({**details, "_extra": extra})
+            extra.update({
+                "public_ip_resource_ids": public_ip_ids,
+                "exposure_class": "requires_nsg_review" if public_ip_ids else "private",
+                "inbound_exposure_requires_nsg_review": bool(public_ip_ids),
+                "direction": "inbound" if public_ip_ids else "internal",
+                "purpose": "public IP association requires NSG review" if public_ip_ids else "private VMSS",
+            })
+            row["raw_json"] = json.dumps({**base_raw, **details, "_extra": extra})
             # Keep the original row shape but store the richer VMSS payload so the
             # architecture view can infer the VNet boundary from nested NIC config.
         results.append(row)

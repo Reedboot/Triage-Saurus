@@ -35,6 +35,38 @@ _MSAL_LOCK_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Azure's ARM namespace is case-insensitive, but the casing emitted by
+# ``az`` varies between resource providers and API versions.  Keep the
+# namespace canonical while preserving the resource/child type suffix exactly
+# as supplied (child resource IDs are case-sensitive in a few downstream
+# lookups).
+_CANONICAL_AZURE_NAMESPACES = {
+    "microsoft.appconfiguration": "Microsoft.AppConfiguration",
+    "microsoft.cache": "Microsoft.Cache",
+    "microsoft.cdn": "Microsoft.Cdn",
+    "microsoft.cognitiveservices": "Microsoft.CognitiveServices",
+    "microsoft.compute": "Microsoft.Compute",
+    "microsoft.containerservice": "Microsoft.ContainerService",
+    "microsoft.datafactory": "Microsoft.DataFactory",
+    "microsoft.databricks": "Microsoft.Databricks",
+    "microsoft.documentdb": "Microsoft.DocumentDB",
+    "microsoft.eventgrid": "Microsoft.EventGrid",
+    "microsoft.eventhub": "Microsoft.EventHub",
+    "microsoft.fabric": "Microsoft.Fabric",
+    "microsoft.insights": "Microsoft.Insights",
+    "microsoft.kusto": "Microsoft.Kusto",
+    "microsoft.keyvault": "Microsoft.KeyVault",
+    "microsoft.machinelearningservices": "Microsoft.MachineLearningServices",
+    "microsoft.managedidentity": "Microsoft.ManagedIdentity",
+    "microsoft.network": "Microsoft.Network",
+    "microsoft.purview": "Microsoft.Purview",
+    "microsoft.search": "Microsoft.Search",
+    "microsoft.servicebus": "Microsoft.ServiceBus",
+    "microsoft.sql": "Microsoft.Sql",
+    "microsoft.storage": "Microsoft.Storage",
+    "microsoft.web": "Microsoft.Web",
+}
+
 
 def _is_msal_lock_error(stderr: str) -> bool:
     """Return True when az CLI failed due to MSAL token-cache lock contention."""
@@ -87,6 +119,17 @@ def az(args: list[str], subscription_id: str) -> list[dict[str, Any]]:
     return []
 
 
+def az_resource_show(
+    resource_id: str,
+    subscription_id: str,
+    *,
+    runner: Any | None = None,
+) -> dict[str, Any] | None:
+    """Fetch the full ARM resource, including properties omitted by list commands."""
+    resource = (runner or az)(["resource", "show", "--ids", resource_id], subscription_id)
+    return resource if isinstance(resource, dict) else None
+
+
 def _az_rest(url: str, resource: str | None = None) -> dict:
     """Call az rest GET and return parsed JSON. Raises RuntimeError on failure.
 
@@ -137,6 +180,95 @@ def safe_str(value: Any) -> str | None:
         return None
     s = str(value).strip()
     return s if s else None
+
+
+def canonical_azure_resource_type(resource_type: Any) -> str | None:
+    """Canonicalize an Azure ARM type's provider namespace casing.
+
+    Resource IDs are deliberately not modified.  Unknown namespaces retain
+    their original spelling so this helper cannot make a new provider type
+    unresolvable.
+    """
+    value = safe_str(resource_type)
+    if not value or "/" not in value:
+        return value
+    namespace, suffix = value.split("/", 1)
+    canonical_namespace = _CANONICAL_AZURE_NAMESPACES.get(namespace.lower(), namespace)
+    return f"{canonical_namespace}/{suffix}"
+
+
+def enrich_resource_if_missing(
+    resource: dict[str, Any],
+    subscription_id: str,
+    required_properties: tuple[str, ...] = (),
+    *,
+    runner: Any | None = None,
+) -> dict[str, Any]:
+    """Fetch the ARM resource when a list payload omits important properties."""
+    resource_id = safe_str(resource.get("id"))
+    props = resource.get("properties")
+    missing = not isinstance(props, dict) or any(key not in props for key in required_properties)
+    if not resource_id or not missing:
+        return resource
+    detailed = az_resource_show(resource_id, subscription_id, runner=runner)
+    if not detailed:
+        return resource
+    return {**resource, **detailed}
+
+
+def classify_network_access(
+    props: dict[str, Any],
+    *,
+    endpoint_present: bool = True,
+    network_acls: dict[str, Any] | None = None,
+    private_endpoint_connections: list[Any] | None = None,
+    ip_rules: list[Any] | None = None,
+    vnet_rules: list[Any] | None = None,
+) -> tuple[int, int, list[str], str]:
+    """Classify public network exposure without treating missing data as public.
+
+    The fourth value is the rendered exposure class.  ``unknown`` is retained
+    in raw metadata for incomplete ARM responses; callers can continue writing
+    the legacy ``is_public``/``is_restricted`` columns.
+    """
+    public_access = safe_str(
+        props.get("publicNetworkAccess") or props.get("public_network_access")
+    )
+    if public_access and public_access.lower() == "disabled":
+        return 0, 0, [], "private"
+
+    acls = network_acls if isinstance(network_acls, dict) else (
+        props.get("networkAcls") or props.get("network_acls") or {}
+    )
+    effective_ip_rules = ip_rules if ip_rules is not None else (
+        acls.get("ipRules") or acls.get("ip_rules") or props.get("ipRules") or []
+    )
+    effective_vnet_rules = vnet_rules if vnet_rules is not None else (
+        acls.get("virtualNetworkRules")
+        or acls.get("virtual_network_rules")
+        or props.get("virtualNetworkRules")
+        or []
+    )
+    default_action = safe_str(acls.get("defaultAction") or acls.get("default_action"))
+    if default_action and default_action.lower() == "deny":
+        return 0, 1, extract_ip_restrictions(
+            network_acls=acls,
+            ip_rules=effective_ip_rules,
+            vnet_rules=effective_vnet_rules,
+        ), "ip_restricted"
+    if effective_ip_rules or effective_vnet_rules:
+        return 0, 1, extract_ip_restrictions(
+            network_acls=acls,
+            ip_rules=effective_ip_rules,
+            vnet_rules=effective_vnet_rules,
+        ), "ip_restricted"
+
+    if public_access and public_access.lower() in {"enabled", "allow", "allowed"}:
+        return (1 if endpoint_present else 1), 0, [], "direct_public"
+
+    # A private endpoint does not prove public access is disabled; with no
+    # publicNetworkAccess field we must not infer either public or private.
+    return 0, 0, [], "unknown"
 
 
 def infer_fqdn(resource: dict[str, Any]) -> str | None:

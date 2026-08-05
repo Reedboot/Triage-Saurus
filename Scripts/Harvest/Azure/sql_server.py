@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ._helpers import az, build_endpoints, extract_ip_restrictions, infer_sku, safe_str
+from ._helpers import az, az_resource_show, build_endpoints, classify_network_access, infer_sku, safe_str
 
 RESOURCE_TYPE = "Microsoft.Sql/servers"
 
@@ -14,15 +14,27 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     results = []
 
     for server in raw:
+        list_props = server.get("properties") or {}
+        needs_detail = not isinstance(list_props, dict) or any(
+            key not in list_props for key in ("publicNetworkAccess", "fullyQualifiedDomainName")
+        )
+        detailed = (
+            az_resource_show(server.get("id", ""), subscription_id, runner=az)
+            if server.get("id") and needs_detail
+            else None
+        )
+        if detailed:
+            server = {**server, **detailed}
         props = server.get("properties") or {}
         fqdn = safe_str(props.get("fullyQualifiedDomainName"))
-        is_public, is_restricted, ip_restrictions, firewall_rules = _classify_exposure(server, subscription_id)
+        is_public, is_restricted, ip_restrictions, firewall_rules, exposure_class = _classify_exposure(server, subscription_id)
         auth_methods = json.dumps(_get_auth_methods(server, subscription_id))
 
         endpoints = build_endpoints([(fqdn, 1433, "tds/tcp")] if fqdn else [])
 
         extra = {
-            "public_network_access": props.get("publicNetworkAccess", "Enabled"),
+            "public_network_access": props.get("publicNetworkAccess"),
+            "exposure_class": exposure_class,
             "minimal_tls_version": props.get("minimalTlsVersion"),
             "admin_login": props.get("administratorLogin"),
             "firewall_rule_count": len(firewall_rules),
@@ -54,27 +66,24 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
 
 def _classify_exposure(
     server: dict[str, Any], subscription_id: str
-) -> tuple[int, int, list[str], list[dict]]:
+) -> tuple[int, int, list[str], list[dict], str]:
     props = server.get("properties") or server
-
-    if props.get("publicNetworkAccess", "Enabled") == "Disabled":
-        return 0, 0, [], []
 
     server_name = server.get("name")
     resource_group = server.get("resourceGroup")
     firewall_rules: list[dict] = []
     if server_name and resource_group:
-        try:
-            firewall_rules = az(
-                ["sql", "server", "firewall-rule", "list",
-                 "-s", server_name, "-g", resource_group],
-                subscription_id,
-            )
-        except Exception:
-            pass
+        firewall_rules = az(
+            ["sql", "server", "firewall-rule", "list",
+             "-s", server_name, "-g", resource_group],
+            subscription_id,
+        )
 
     if not firewall_rules:
-        return 1, 0, [], []
+        is_public, is_restricted, cidrs, exposure_class = classify_network_access(
+            props, endpoint_present=bool(props.get("fullyQualifiedDomainName"))
+        )
+        return is_public, is_restricted, cidrs, [], exposure_class
 
     cidrs: list[str] = []
     for rule in firewall_rules:
@@ -84,7 +93,7 @@ def _classify_exposure(
             cidrs.append("0.0.0.0/32 (Allow Azure services)")
         elif start and end:
             cidrs.append(f"{start}-{end}")
-    return 0, 1, cidrs, firewall_rules
+    return 0, 1, cidrs, firewall_rules, "ip_restricted"
 
 
 def _get_auth_methods(server: dict[str, Any], subscription_id: str) -> list[str]:

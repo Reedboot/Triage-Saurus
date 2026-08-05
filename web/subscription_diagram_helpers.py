@@ -4,6 +4,18 @@ import json
 from typing import Callable
 
 
+def _parse_json(value: object) -> dict | list | None:
+    if isinstance(value, (dict, list)):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, (dict, list)) else None
+
+
 SUBSCRIPTION_DRILLABLE_ARM_TYPES = {
     "microsoft.network/virtualnetworks",
     "microsoft.network/virtualnetworks/subnets",
@@ -34,6 +46,8 @@ SUBSCRIPTION_DRILLABLE_ARM_TYPES = {
     "microsoft.kusto/clusters",
     "microsoft.databricks/workspaces",
     "microsoft.network/firewallpolicies",
+    "microsoft.cdn/profiles",
+    "microsoft.cdn/profiles/endpoints",
 }
 
 SUBSCRIPTION_FQDN_SUFFIXES = {
@@ -435,8 +449,6 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
     public_ip_assets_by_name_rg: dict[tuple[str, str], list[dict]] = {}
     for row in rows:
         name, rtype, rg, fqdn, is_public, sku = row[:6]
-        if "/sites/slots" in str(rtype or "").lower():
-            continue
         asset_id = row[6] if len(row) > 6 else None
         has_waf = bool(row[7]) if len(row) > 7 else False
         listeners = row[8] if len(row) > 8 else None
@@ -461,12 +473,15 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
         else:
             auth_methods = []
 
+        exposure_class = _render_exposure_class(rtype, is_public, is_restricted, raw_json)
         asset = {
             "name": name,
             "arm_type": rtype,
             "rg": rg or "default",
             "fqdn": fqdn or "",
-            "public": bool(is_public),
+            "public": exposure_class == "direct_public",
+            "harvest_public": bool(is_public),
+            "exposure_class": exposure_class,
             "sku": sku,
             "id": asset_id,
             "has_waf": has_waf,
@@ -1135,12 +1150,17 @@ def subscription_apply_plan_hierarchy(
             continue
         hosted_by_parent[plan_key].append(site_asset)
 
+    hosted_site_keys = {
+        _key(child)
+        for children in hosted_by_parent.values()
+        for child in children
+    }
     visible_assets: list[dict] = []
     for asset in assets:
         asset_copy = dict(asset)
         key = _key(asset_copy)
         children = hosted_by_parent.get(key)
-        if children and _is_site_type(asset_copy) and hide_hosted_sites:
+        if key in hosted_site_keys and _is_site_type(asset_copy) and hide_hosted_sites:
             continue
         if children and any(token in _type(asset_copy) for token in ("serverfarms", "hostingenvironment")):
             is_ase = "hostingenvironment" in _type(asset_copy)
@@ -1230,6 +1250,43 @@ def _aks_ingress_is_public(exposure_level: object, fqdn: object, harvest_is_publ
         return False
 
     return str(exposure_level or "").strip().lower() == "public"
+
+
+def _render_exposure_class(
+    resource_type: object,
+    harvested_public: object,
+    restricted: object,
+    raw_json: object,
+) -> str:
+    """Classify whether a harvested resource represents direct Internet ingress."""
+    type_key = str(resource_type or "").strip().lower()
+    raw = _parse_json(raw_json)
+    extra = raw.get("_extra") if isinstance(raw, dict) else {}
+    extra = extra if isinstance(extra, dict) else {}
+
+    if "publicipaddresses" in type_key:
+        return "public_ip_association"
+    if extra.get("exposure_class") in {"public_edge", "direct_public"}:
+        return "direct_public"
+    if extra.get("exposure_class") in {"egress_only", "unknown"}:
+        return "private" if extra.get("exposure_class") == "egress_only" else "unknown"
+    if "virtualmachines" in type_key and (
+        extra.get("inbound_exposure_requires_nsg_review")
+        or extra.get("exposure_class") == "requires_nsg_review"
+    ):
+        return "requires_nsg_review"
+    network_mode = str(
+        extra.get("network_access_mode")
+        or extra.get("network_access_class")
+        or ""
+    ).strip().lower()
+    if bool(restricted) or network_mode in {"ip_restricted", "private", "restricted"}:
+        return "ip_restricted"
+    if bool(harvested_public):
+        return "direct_public"
+    if network_mode in {"unknown", "incomplete"} or extra.get("exposure_class") == "unknown":
+        return "unknown"
+    return "private"
 
 
 def subscription_is_secret_store(arm_type: str) -> bool:
@@ -1778,7 +1835,7 @@ def build_subscription_diagrams_by_rg(
         rg_assets = subscription_apply_plan_hierarchy(
             rg_assets,
             plan_links,
-            hide_hosted_sites=False,
+            hide_hosted_sites=True,
         )
         diagram_assets = [
             asset for asset in rg_assets
@@ -2042,6 +2099,13 @@ def build_subscription_diagrams_by_rg(
                     )
 
         def _entry_edge_style(asset: dict) -> tuple[str, str]:
+            if asset.get("exposure_class") in {
+                "public_ip_association",
+                "requires_nsg_review",
+                "unknown",
+                "private",
+            }:
+                return "", "#94a3b8"
             protected = bool(asset.get("has_waf") or asset.get("waf_mode"))
             restricted = bool(asset.get("is_restricted"))
             waf_mode = (asset.get("waf_mode") or "").strip().lower()
@@ -2088,28 +2152,6 @@ def build_subscription_diagrams_by_rg(
                 for asset in visible_rg_assets
                 if "hostingenvironment" in (asset.get("arm_type") or "").lower()
             }
-            for site_rg, site_name, plan_rg, plan_name in plan_links:
-                site = next(
-                    (
-                        asset
-                        for asset in visible_rg_assets
-                        if (asset.get("rg") or "").strip().lower() == str(site_rg or "").strip().lower()
-                        and (asset.get("name") or "").strip().lower() == str(site_name or "").strip().lower()
-                    ),
-                    None,
-                )
-                plan = plan_by_key.get(
-                    (str(plan_rg or "").strip().lower(), str(plan_name or "").strip().lower())
-                )
-                if not site or not plan:
-                    continue
-                add_edge(
-                    subscription_node_id(site, sanitise_node_id),
-                    subscription_node_id(plan, sanitise_node_id),
-                    "hosted on",
-                    "#ffffff",
-                )
-
             for plan in plan_by_key.values():
                 ase_name = str(plan.get("hosting_ase_name") or "").strip().lower()
                 if not ase_name:
@@ -2418,6 +2460,8 @@ def build_subscription_diagrams_by_rg(
                 add_edge(service_nid, cluster_nid, "", "#f97316", dasharray="6,3")
 
         for asset in public_assets:
+            if asset.get("exposure_class") != "direct_public":
+                continue
             if asset.get("tier") == "entry":
                 label, color = _entry_edge_style(asset)
             else:

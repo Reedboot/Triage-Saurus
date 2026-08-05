@@ -6530,6 +6530,10 @@ class TestCloudPosture:
         node_labels = [str(node.get("data", {}).get("label", "")) for node in payload.get("nodes", [])]
         assert any(e["source"] == gw_id and e["target"] == apim_id for e in edges), edges
         assert any("example-api-uksouth.azure-api.net" in label for label in node_labels), node_labels
+        coverage = payload["summary"]["public_asset_coverage"]
+        assert coverage["total"] == 2, coverage
+        assert coverage["represented"] == 2, coverage
+        assert coverage["missing"] == 0, coverage
 
     def test_subscription_architecture_payload_joins_appgw_backend_pool_to_ase_sites(self):
         import json
@@ -9775,6 +9779,7 @@ class TestCloudPosture:
         )
 
         subnet_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-a/subnets/subnet-a"
+        fn_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/fn-one"
         conn.executemany(
             """
             INSERT INTO provisioned_assets (
@@ -9907,52 +9912,6 @@ class TestCloudPosture:
                     "2026-06-01T00:00:00Z",
                 ),
             ],
-        )
-        conn.execute(
-            """
-            INSERT INTO function_app_http_triggers (
-                id, subscription_id, function_app_id, function_app_name, resource_group,
-                function_name, route, auth_level, methods, fqdn, full_url, is_public, last_synced
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                fn_id + "::HttpPing",
-                "sub-1",
-                fn_id,
-                "fn-one",
-                "rg-app",
-                "HttpPing",
-                "ping",
-                "function",
-                json.dumps(["GET"]),
-                "fn-one.azurewebsites.net",
-                "https://fn-one.azurewebsites.net/api/ping",
-                1,
-                "2026-06-01T00:00:00Z",
-            ),
-        )
-        conn.execute(
-            """
-            INSERT INTO function_app_servicebus_triggers (
-                id, subscription_id, function_app_id, function_app_name, resource_group,
-                function_name, trigger_type, entity_type, entity_name, subscription_name,
-                connection, last_synced
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                fn_id + "::DirectCredit",
-                "sub-1",
-                fn_id,
-                "fn-one",
-                "rg-app",
-                "DirectCredit",
-                "servicebustrigger",
-                "topic",
-                "mydomain.service.events.payments.servicedirectcreditrecalledevent",
-                "sb-subscription",
-                "servicebus-connection",
-                "2026-06-01T00:00:00Z",
-            ),
         )
         conn.commit()
 

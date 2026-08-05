@@ -17,6 +17,7 @@ ENDPOINTS = {
     "api_harvest_routing",
     "api_harvest_routing_status",
     "api_subscription_diagram",
+    "api_subscription_resource_group_diagram",
     "api_subscription_drilldown",
 }
 create_blueprint = build_blueprint_creator("cloud_routes", __name__, ENDPOINTS)

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ._helpers import az, build_endpoints, safe_str
+from ._helpers import az, az_resource_show, build_endpoints, classify_network_access, safe_str
 
 RESOURCE_TYPE = "Microsoft.Cache/Redis"
 
@@ -14,9 +14,18 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     results = []
 
     for r in raw:
+        list_props = r.get("properties") or {}
+        needs_detail = not isinstance(list_props, dict) or "publicNetworkAccess" not in list_props
+        detailed = (
+            az_resource_show(r.get("id", ""), subscription_id, runner=az)
+            if r.get("id") and needs_detail
+            else None
+        )
+        if detailed:
+            r = {**r, **detailed}
         props = r.get("properties") or {}
         host = safe_str(props.get("hostName"))
-        is_public, is_restricted, ip_restrictions = _classify_exposure(r, subscription_id)
+        is_public, is_restricted, ip_restrictions, exposure_class = _classify_exposure(r, subscription_id)
 
         endpoint_entries = _get_endpoint_entries(props, host)
         endpoints = build_endpoints(endpoint_entries)
@@ -29,7 +38,8 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "ssl_port": props.get("sslPort"),
             "non_ssl_port_enabled": props.get("enableNonSslPort", False),
             "minimum_tls_version": props.get("minimumTlsVersion"),
-            "public_network_access": props.get("publicNetworkAccess", "Enabled"),
+            "public_network_access": props.get("publicNetworkAccess"),
+            "exposure_class": exposure_class,
             "replication_mode": props.get("replicationMode"),
         }
 
@@ -55,24 +65,18 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     return results
 
 
-def _classify_exposure(cache: dict[str, Any], subscription_id: str) -> tuple[int, int, list[str]]:
+def _classify_exposure(cache: dict[str, Any], subscription_id: str) -> tuple[int, int, list[str], str]:
     props = cache.get("properties") or cache
-
-    if props.get("publicNetworkAccess", "Enabled") == "Disabled":
-        return 0, 0, []
 
     cache_name = cache.get("name")
     resource_group = cache.get("resourceGroup")
     firewall_rules: list[dict] = []
     if cache_name and resource_group:
-        try:
-            firewall_rules = az(
-                ["redis", "firewall-rules", "list",
-                 "--name", cache_name, "--resource-group", resource_group],
-                subscription_id,
-            )
-        except Exception:
-            pass
+        firewall_rules = az(
+            ["redis", "firewall-rules", "list",
+             "--name", cache_name, "--resource-group", resource_group],
+            subscription_id,
+        )
 
     if firewall_rules:
         cidrs = [
@@ -80,9 +84,11 @@ def _classify_exposure(cache: dict[str, Any], subscription_id: str) -> tuple[int
             for r in firewall_rules
             if r.get("startIP")
         ]
-        return 0, 1, cidrs
+        return 0, 1, cidrs, "ip_restricted"
 
-    return 1, 0, []
+    return classify_network_access(props, endpoint_present=bool(
+        props.get("hostName")
+    ))
 
 
 def _get_endpoint_entries(props: dict[str, Any], host: str | None) -> list[tuple[str | None, int, str]]:

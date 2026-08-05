@@ -5,7 +5,7 @@ import json
 from typing import Any
 from urllib.parse import urlparse
 
-from ._helpers import az, build_endpoints, safe_str
+from ._helpers import az, az_resource_show, build_endpoints, classify_network_access, safe_str
 
 RESOURCE_TYPE = "Microsoft.Purview/accounts"
 
@@ -14,6 +14,18 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     raw = az(["resource", "list", "--resource-type", RESOURCE_TYPE], subscription_id)
     results: list[dict[str, Any]] = []
     for account in raw:
+        list_props = account.get("properties") or {}
+        needs_detail = not isinstance(list_props, dict) or any(
+            key not in list_props
+            for key in ("publicNetworkAccess", "privateEndpointConnections", "endpoints")
+        )
+        detailed = (
+            az_resource_show(account.get("id", ""), subscription_id, runner=az)
+            if account.get("id") and needs_detail
+            else None
+        )
+        if detailed:
+            account = {**account, **detailed}
         props = account.get("properties") or {}
         endpoints = props.get("endpoints") or {}
         fqdns = [
@@ -22,8 +34,13 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             if isinstance(value, str) and value
         ]
         fqdn = fqdns[0] if fqdns else safe_str(props.get("endpoint"))
-        public_access = safe_str(props.get("publicNetworkAccess") or "Enabled")
+        public_access = safe_str(props.get("publicNetworkAccess"))
         private_connections = props.get("privateEndpointConnections") or []
+        is_public, is_restricted, ip_restrictions, exposure_class = classify_network_access(
+            props,
+            endpoint_present=bool(fqdns),
+            private_endpoint_connections=private_connections,
+        )
         results.append({
             "id": account["id"],
             "subscription_id": subscription_id,
@@ -33,9 +50,9 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "location": account.get("location"),
             "sku": (account.get("sku") or {}).get("name"),
             "tags": json.dumps(account.get("tags") or {}),
-            "is_public": 1 if fqdn and public_access != "Disabled" else 0,
-            "is_restricted": 1 if private_connections or public_access == "Disabled" else 0,
-            "ip_restrictions": json.dumps([]),
+            "is_public": is_public,
+            "is_restricted": is_restricted,
+            "ip_restrictions": json.dumps(ip_restrictions),
             "endpoints": build_endpoints([(value, 443, "https") for value in fqdns]),
             "auth_methods": json.dumps(["azure_ad"]),
             "fqdn": fqdn,
@@ -46,6 +63,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
                     "endpoints": fqdns,
                     "public_network_access": public_access,
                     "private_endpoint_connections": len(private_connections),
+                    "exposure_class": exposure_class,
                 },
             }),
         })

@@ -73,6 +73,8 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
                 "network_security_group_name": (subnet_props.get("networkSecurityGroup") or {}).get("name"),
                 "route_table_id": (subnet_props.get("routeTable") or {}).get("id"),
                 "route_table_name": (subnet_props.get("routeTable") or {}).get("name"),
+                "nat_gateway_id": (subnet_props.get("natGateway") or {}).get("id"),
+                "nat_gateway_name": (subnet_props.get("natGateway") or {}).get("name"),
                 "delegations": [
                     (d.get("properties") or {}).get("serviceName")
                     for d in subnet_props.get("delegations") or []

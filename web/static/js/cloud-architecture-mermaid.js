@@ -26,11 +26,13 @@ const FIREFOX_VIEWBOX_PADDING_BOTTOM = 18;
 let mermaidNodeDataById = new Map();
 let mermaidOriginalIdByNodeId = new Map();
 let currentMermaidSubscriptionId = "";
+let currentMermaidSubscriptionPayload = null;
 
 const mermaidViewEl = document.getElementById("cloud-arch-mermaid-view");
 const mermaidRootEl = document.getElementById("cloud-arch-mermaid-root");
 const summaryLineEl = document.getElementById("cloud-arch-summary-line");
 const legendEl = document.getElementById("cloud-arch-provider-legend");
+const resourceGroupSelectEl = document.getElementById("cloud-arch-resource-group");
 const formEl = document.getElementById("cloud-arch-form");
 const subscriptionInput = document.getElementById("subscription-input");
 const viewButtons = Array.from(document.querySelectorAll("[data-cloud-arch-view]"));
@@ -295,6 +297,13 @@ function buildFallbackModalData(resourceId, nodeData, lookup = {}) {
   dns_names: resolvedDnsNames,
   public_ip: firstNonEmpty(nodeData?.public_ip, primary?.public_ip),
   public_ips: fallbackIps,
+  public_ip_direction: firstNonEmpty(nodeData?.public_ip_direction, nodeData?.publicIpDirection, primary?.public_ip_direction),
+  public_ip_purpose: firstNonEmpty(nodeData?.public_ip_purpose, nodeData?.publicIpPurpose, primary?.public_ip_purpose),
+  public_ip_constraint_status: firstNonEmpty(
+    nodeData?.public_ip_constraint_status,
+    nodeData?.publicIpConstraintStatus,
+    primary?.public_ip_constraint_status
+  ),
   icon_path: firstNonEmpty(nodeData?.icon_path, nodeData?.iconPath),
   routing_targets: Array.isArray(nodeData?.routing_targets)
     ? nodeData.routing_targets
@@ -304,12 +313,15 @@ function buildFallbackModalData(resourceId, nodeData, lookup = {}) {
   network: {
     vnet: firstNonEmpty(nodeData?.network?.vnet, nodeData?.vnet, nodeData?.vnetName, nodeData?.vnet_name) || null,
     subnet: firstNonEmpty(nodeData?.network?.subnet, nodeData?.subnet, nodeData?.subnetName, nodeData?.subnet_name) || null,
+    subnet_id: firstNonEmpty(nodeData?.network?.subnet_id, nodeData?.subnet_id) || null,
+    vnet_resource_group: firstNonEmpty(nodeData?.network?.vnet_resource_group, nodeData?.vnet_resource_group) || null,
     routing_targets: Array.isArray(nodeData?.network?.routing_targets)
       ? nodeData.network.routing_targets
       : Array.isArray(nodeData?.routing_targets)
         ? nodeData.routing_targets
         : [],
   },
+  public_asset_coverage: nodeData?.public_asset_coverage || nodeData?.publicAssetCoverage || null,
   security: {
     is_public: Boolean(nodeData?.security?.is_public ?? nodeData?.public ?? nodeData?.is_public ?? nodeData?.isPublic),
     waf_mode: firstNonEmpty(nodeData?.security?.waf_mode, nodeData?.waf_mode, ""),
@@ -451,6 +463,7 @@ function applyMermaidCss(cssText) {
 function normalizeMermaidNodeId(rawId) {
   return String(rawId || "")
     .replace(/^.*?flowchart-/, "")
+    .replace(/^cloud_mermaid_\d+_[a-z0-9]+-/i, "")
     .replace(/^mermaid-\d+-/, "")
     .replace(/-\d+$/, "");
 }
@@ -1140,7 +1153,8 @@ async function renderMermaidGraph(payload, subscriptionName) {
       const data = node?.data || null;
       if (!originalId || !data) continue;
       mermaidNodeDataById.set(originalId, data);
-      mermaidNodeDataById.set(sanitizeMermaidId(originalId, originalId), data);
+      const sanitizedId = sanitizeMermaidId(originalId, originalId);
+      mermaidNodeDataById.set(sanitizedId, data);
     }
   }
   mermaidOriginalIdByNodeId = new Map(
@@ -1149,11 +1163,13 @@ async function renderMermaidGraph(payload, subscriptionName) {
       .filter(([compactId, originalId]) => compactId && originalId)
   );
   if (!mermaidOriginalIdByNodeId.size) {
-    mermaidOriginalIdByNodeId = new Map(
-      (Array.isArray(payload?.nodes) ? payload.nodes : [])
-        .map((node) => [String(node?.id || ""), String(node?.id || "")])
-        .filter(([id, originalId]) => id && originalId)
-    );
+    mermaidOriginalIdByNodeId = new Map();
+    for (const node of Array.isArray(payload?.nodes) ? payload.nodes : []) {
+      const originalId = String(node?.id || "").trim();
+      if (!originalId) continue;
+      mermaidOriginalIdByNodeId.set(originalId, originalId);
+      mermaidOriginalIdByNodeId.set(sanitizeMermaidId(originalId, originalId), originalId);
+    }
   }
   applyMermaidCss(payload?.css_code || "");
   try {
@@ -1515,6 +1531,15 @@ function resetModalRequestState() {
   activeModalRequest = null;
 }
 
+function renderModalError(message) {
+  if (modalTitle) modalTitle.textContent = "Unable to load details";
+  if (modalSubtitle) modalSubtitle.textContent = "";
+  if (modalBody) {
+    modalBody.innerHTML = `<div class="cloud-arch-modal-empty">${escapeHtml(message || "Unknown error")}</div>`;
+  }
+  if (modalIcon) modalIcon.textContent = "⚠";
+}
+
 function startModalRequest() {
   if (activeModalRequest) {
     activeModalRequest.abort();
@@ -1545,6 +1570,7 @@ function openNodePopup(resourceId, nodeData) {
     armType.includes("serverfarms") ||
     armType.includes("hostingenvironments") ||
     armType.includes("servicefabric/clusters");
+  const isSyntheticIngress = armType.includes("kubernetes") && armType.includes("ingress");
   if (resources.length > 1 || (isGroupedNode && resources.length > 0)) {
     if (currentMermaidSubscriptionId) {
       openDrilldownModal(nodeData, currentMermaidSubscriptionId);
@@ -1555,6 +1581,18 @@ function openNodePopup(resourceId, nodeData) {
   }
   if (resources.length === 1) {
     const resource = resources[0] || {};
+    if (isSyntheticIngress) {
+      openModal(originalResourceId, nodeData, {
+        nodeId: resourceId,
+        id: originalResourceId,
+        skipFetch: true,
+        type: nodeData?.arm_type || nodeData?.type || nodeData?.resourceType || "",
+        name: resource.name || nodeData?.label || "",
+        resourceGroup: resource.rg || nodeData?.resourceGroup || "",
+        subscription: currentMermaidSubscriptionId,
+      });
+      return;
+    }
     if (prefersChildDrilldown && currentMermaidSubscriptionId) {
       openDrilldownModal(nodeData, currentMermaidSubscriptionId, () => {
         openModal(originalResourceId, nodeData, {
@@ -1578,7 +1616,15 @@ function openNodePopup(resourceId, nodeData) {
     });
     return;
   }
-  openModal(originalResourceId, nodeData, { nodeId: resourceId, id: originalResourceId });
+  openModal(originalResourceId, nodeData, {
+    nodeId: resourceId,
+    id: originalResourceId,
+    skipFetch: isSyntheticIngress,
+    type: nodeData?.arm_type || nodeData?.type || nodeData?.resourceType || "",
+    name: nodeData?.label || "",
+    resourceGroup: nodeData?.resourceGroup || "",
+    subscription: currentMermaidSubscriptionId,
+  });
 }
 
 function openDrilldownModal(nodeData, subId, fallback = null) {
@@ -1660,7 +1706,7 @@ function openDrilldownModal(nodeData, subId, fallback = null) {
     })
     .catch((err) => {
       if (err?.name === "AbortError") return;
-      renderGroupedResourcesModal(nodeData);
+      renderModalError(err.message || "Unable to load grouped resource details");
       activeModalRequest = null;
     });
 }
@@ -1750,13 +1796,27 @@ function openModal(resourceId, nodeData, lookup = {}) {
   modalTitle.textContent = "Loading details…";
   if (modalSubtitle) modalSubtitle.textContent = "";
   modalBody.innerHTML = '<div class="cloud-arch-modal-loading">Loading resource details…</div>';
+  if (lookup.skipFetch) {
+    renderModalContent(withNodeContext(buildFallbackModalData(resourceId, nodeData, lookup)));
+    activeModalRequest = null;
+    return;
+  }
 
   const url = new URL("/api/cloud/resource-details", window.location.origin);
-  const resolvedResourceId = String(lookup.id || lookup.resourceId || resourceId || "").trim();
+  const network = nodeData?.network && typeof nodeData.network === "object" ? nodeData.network : {};
+  const derivedSubnetId =
+    String(network.subnet_id || "").trim() ||
+    (network.vnet && network.subnet && network.vnet_resource_group && currentMermaidSubscriptionId
+      ? `/subscriptions/${currentMermaidSubscriptionId}/resourceGroups/${network.vnet_resource_group}/providers/Microsoft.Network/virtualNetworks/${network.vnet}/subnets/${network.subnet}`
+      : "");
+  const resolvedResourceId = String(
+    derivedSubnetId || lookup.id || lookup.resourceId || resourceId || ""
+  ).trim();
   if (resolvedResourceId) url.searchParams.set("id", resolvedResourceId);
-  const name = String(lookup.name || lookup.resourceName || lookup.label || nodeData?.label || "").trim();
+  const rawName = String(lookup.name || lookup.resourceName || lookup.label || nodeData?.label || "").trim();
   const resourceGroup = String(lookup.resourceGroup || lookup.rg || nodeData?.resourceGroup || "").trim();
   const type = String(lookup.type || lookup.armType || lookup.resourceType || nodeData?.arm_type || nodeData?.type || "").trim();
+  const name = rawName.replace(/^Subnet:\s*/i, "");
   const subscription = String(lookup.subscription || lookup.sub || currentMermaidSubscriptionId || "").trim();
   if (name) url.searchParams.set("name", name);
   if (resourceGroup) url.searchParams.set("resource_group", resourceGroup);
@@ -1796,10 +1856,7 @@ function openModal(resourceId, nodeData, lookup = {}) {
       if (hasFallback) {
         renderModalContent(withNodeContext(fallbackData));
       } else {
-        modalTitle.textContent = "Unable to load details";
-        if (modalSubtitle) modalSubtitle.textContent = "";
-        modalBody.innerHTML = `<div class="cloud-arch-modal-empty">${escapeHtml(err.message || "Unknown error")}</div>`;
-        if (modalIcon) modalIcon.textContent = "⚠";
+        renderModalError(err.message || "Unable to load resource details");
       }
 
       activeModalRequest = null;
@@ -2846,6 +2903,12 @@ function renderModalContent(data) {
   const resourceType = firstNonEmpty(data.type, data.resourceType, data.arm_type);
   const fqdns = collectFqdns(data);
   const publicIps = collectPublicIps(data);
+  const publicIpDirection = firstNonEmpty(data?.public_ip_direction, data?.publicIpDirection);
+  const publicIpPurpose = firstNonEmpty(data?.public_ip_purpose, data?.publicIpPurpose);
+  const publicIpConstraintStatus = firstNonEmpty(
+    data?.public_ip_constraint_status,
+    data?.publicIpConstraintStatus
+  );
   const routingTargets = collectRoutingTargets(data);
   const routingTargetDetails = collectRoutingTargetDetails(data);
   const vnet = collectVnet(data);
@@ -2854,6 +2917,7 @@ function renderModalContent(data) {
   const publicNetworkAccess = collectPublicNetworkAccess(data);
   const ipRestrictions = collectIpRestrictions(data);
   const childNodes = Array.isArray(data.__node_children) ? data.__node_children : [];
+  const publicAssetCoverage = data?.public_asset_coverage || data?.publicAssetCoverage;
   const parentResource = !isClusterDetails(data) &&
     data.parent_resource &&
     typeof data.parent_resource === "object"
@@ -2938,6 +3002,11 @@ function renderModalContent(data) {
       value: publicIps.map((ip) => `<code>${escapeHtml(normalizeModalText(ip))}</code>`).join("<br/>"),
       isHtml: true,
     });
+  }
+  if (publicIpDirection) networkFields.push({ label: "Public IP Direction", value: escapeHtml(publicIpDirection) });
+  if (publicIpPurpose) networkFields.push({ label: "Public IP Purpose", value: escapeHtml(publicIpPurpose) });
+  if (publicIpConstraintStatus) {
+    networkFields.push({ label: "IP Constraint Status", value: escapeHtml(publicIpConstraintStatus) });
   }
   if (virtualNetworkType) networkFields.push({ label: "Virtual Network Type", value: escapeHtml(virtualNetworkType) });
   if (publicNetworkAccess) networkFields.push({ label: "Public Network Access", value: escapeHtml(publicNetworkAccess) });
@@ -3042,6 +3111,53 @@ function renderModalContent(data) {
     });
   }
 
+  if (publicAssetCoverage && resourceType.toLowerCase() === "external_endpoint") {
+    const assets = Array.isArray(publicAssetCoverage.assets) ? publicAssetCoverage.assets : [];
+    const missing = Number(publicAssetCoverage.missing || 0);
+    const represented = Number(publicAssetCoverage.represented || 0);
+    const statusLabel = missing
+      ? `<span class="cloud-arch-modal-badge cloud-arch-modal-badge--danger">${missing} missing</span>`
+      : `<span class="cloud-arch-modal-badge cloud-arch-modal-badge--success">Complete</span>`;
+    const typeCounts = Object.entries(publicAssetCoverage.by_type || {})
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([type, count]) => `<li class="cloud-arch-modal-list-item"><strong>${escapeHtml(type)}</strong> <span style="color:var(--text-muted);">(${Number(count)})</span></li>`)
+      .join("");
+    const assetRows = assets
+      .sort((a, b) => `${a.type} ${a.name}`.localeCompare(`${b.type} ${b.name}`))
+      .map((asset) => `
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:6px 8px;vertical-align:top;"><strong>${escapeHtml(normalizeModalText(asset.name || asset.id))}</strong></td>
+          <td style="padding:6px 8px;vertical-align:top;">${escapeHtml(normalizeModalText(asset.type || "—"))}</td>
+          <td style="padding:6px 8px;vertical-align:top;">${escapeHtml(normalizeModalText(asset.resource_group || "—"))}</td>
+          <td style="padding:6px 8px;vertical-align:top;">${asset.status === "missing" ? '<span class="cloud-arch-modal-badge cloud-arch-modal-badge--danger">Missing</span>' : escapeHtml(asset.status || "represented")}</td>
+        </tr>
+      `)
+      .join("");
+    sections.push({
+      title: "Public Asset Coverage",
+      icon: "🌐",
+      fields: [
+        {
+          label: "Coverage",
+          value: `${represented} of ${Number(publicAssetCoverage.total || 0)} represented ${statusLabel}`,
+          isHtml: true,
+        },
+        {
+          label: "Assets by Type",
+          value: `<ul class="cloud-arch-modal-list">${typeCounts || "<li>No public assets found.</li>"}</ul>`,
+          isHtml: true,
+          fullWidth: true,
+        },
+        {
+          label: "Asset Reconciliation",
+          value: `<div style="max-height:360px;overflow:auto;border:1px solid var(--border);border-radius:8px;"><table style="width:100%;border-collapse:collapse;font-size:0.78rem;"><thead><tr>${["Asset", "Type", "Resource Group", "Status"].map((label) => `<th style="padding:6px 8px;text-align:left;background:var(--bg-base);border-bottom:1px solid var(--border);">${label}</th>`).join("")}</tr></thead><tbody>${assetRows}</tbody></table></div>`,
+          isHtml: true,
+          fullWidth: true,
+        },
+      ],
+    });
+  }
+
   if (!sections.length && !parentResourceSection) {
     modalBody.innerHTML = '<div class="cloud-arch-modal-empty">No core resource details found for this node.</div>';
     return;
@@ -3113,6 +3229,93 @@ function renderSummary(payload, subscriptionName, viewMode) {
   if (connectionLegendEl && connectionCount > 0) {
     connectionLegendEl.style.display = "block";
   }
+}
+
+function populateResourceGroupSelector(payload, selectedValue = "") {
+  if (!resourceGroupSelectEl) return;
+  const diagrams = Array.isArray(payload?.resource_group_diagrams)
+    ? payload.resource_group_diagrams
+    : (Array.isArray(payload?.resource_groups)
+      ? payload.resource_groups.map((rg) => ({ rg }))
+      : []);
+  resourceGroupSelectEl.innerHTML = '<option value="">Subscription overview</option>';
+  diagrams
+    .map((diagram) => String(diagram?.rg || "").trim())
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b))
+    .forEach((rg) => {
+      const option = document.createElement("option");
+      option.value = rg;
+      option.textContent = rg;
+      resourceGroupSelectEl.appendChild(option);
+    });
+  resourceGroupSelectEl.value = selectedValue && diagrams.some(
+    (diagram) => String(diagram?.rg || "").trim() === selectedValue
+  ) ? selectedValue : "";
+  resourceGroupSelectEl.disabled = diagrams.length === 0;
+}
+
+function selectedResourceGroupPayload(payload, rg) {
+  const selected = String(rg || "").trim();
+  if (!selected) {
+    return {
+      render: payload?.renderPayload || payload?.ingress_diagram || {},
+      summary: payload?.summaryPayload || payload,
+      name: payload?.subscription_name || currentMermaidSubscriptionId,
+    };
+  }
+  const diagram = (Array.isArray(payload?.resource_group_diagrams)
+    ? payload.resource_group_diagrams
+    : []
+  ).find((item) => String(item?.rg || "").trim() === selected);
+  if (!diagram) return null;
+  return {
+    render: diagram,
+    summary: {
+      summary: {
+        resource_count: diagram.asset_count || 0,
+        displayed_resource_count: diagram.asset_count || 0,
+        omitted_resource_count: 0,
+        connection_count: diagram.relationship_count || 0,
+        provider_counts: [{ key: "azure", label: "Azure", count: diagram.asset_count || 0 }],
+        layout_mode: "mermaid",
+      },
+      subscription_name: `${payload?.subscription_name || currentMermaidSubscriptionId} / ${selected}`,
+    },
+    name: `${payload?.subscription_name || currentMermaidSubscriptionId} / ${selected}`,
+  };
+}
+
+async function renderSelectedResourceGroup(rg = "") {
+  if (rg && currentMermaidSubscriptionPayload) {
+    const response = await fetch(
+      `/api/subscriptions/${encodeURIComponent(currentMermaidSubscriptionId)}/resource-group-diagram?rg=${encodeURIComponent(rg)}`,
+      { headers: { Accept: "application/json" }, cache: "no-store" }
+    );
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const diagram = await readJsonResponse(response);
+    currentMermaidSubscriptionPayload = {
+      ...currentMermaidSubscriptionPayload,
+      resource_group_diagrams: [
+        ...(currentMermaidSubscriptionPayload.resource_group_diagrams || []).filter(
+          (item) => String(item?.rg || "") !== rg
+        ),
+        diagram,
+      ],
+    };
+  }
+  const selected = selectedResourceGroupPayload(currentMermaidSubscriptionPayload, rg);
+  if (!selected) return;
+  const isEmpty = !String(selected.render?.mermaid || "").trim();
+  if (!isEmpty) {
+    await renderMermaidGraph(selected.render, selected.name);
+    populateComponentTraceOptions();
+  } else if (mermaidRootEl) {
+    mermaidRootEl.innerHTML = "";
+  }
+  renderSummary(selected.summary, selected.name, activeViewMode);
 }
 
 async function loadMermaidView(subscriptionName) {
@@ -3216,6 +3419,13 @@ async function loadMermaidView(subscriptionName) {
       return false;
     }
 
+    currentMermaidSubscriptionPayload = {
+      ...payload,
+      renderPayload,
+      summaryPayload,
+    };
+    populateResourceGroupSelector(payload);
+
     const isEmpty =
       !String(renderPayload?.mermaid || "").trim() &&
       (!renderPayload?.nodes || renderPayload.nodes.length === 0);
@@ -3249,6 +3459,17 @@ if (formEl) {
     }
   });
 }
+
+resourceGroupSelectEl?.addEventListener("change", () => {
+  if (activeViewMode === "mermaid") {
+    renderSelectedResourceGroup(resourceGroupSelectEl.value).catch((err) => {
+      console.error("[cloud-architecture] Resource-group load failed:", err);
+      if (mermaidRootEl) {
+        mermaidRootEl.innerHTML = `<pre style="color: var(--red); white-space: pre-wrap;">${escapeHtml(err.message || String(err))}</pre>`;
+      }
+    });
+  }
+});
 
 if (traceFormEl) {
   traceFormEl.addEventListener("submit", (event) => {

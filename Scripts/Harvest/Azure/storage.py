@@ -5,7 +5,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
 
-from ._helpers import az, build_endpoints, extract_ip_restrictions, infer_sku, safe_str
+from ._helpers import az, az_resource_show, build_endpoints, extract_ip_restrictions, infer_sku, safe_str
 from ._staged import BackfillJob, StagedRows
 
 RESOURCE_TYPE = "Microsoft.Storage/storageAccounts"
@@ -142,6 +142,13 @@ def _build_storage_account_core(
             "auth_methods": json.dumps(["azure_ad"]),
         }
 
+    list_props = acct.get("properties") or {}
+    needs_detail = "properties" not in acct or (bool(list_props) and (
+        "networkAcls" not in list_props or "publicNetworkAccess" not in list_props
+    ))
+    detailed = az_resource_show(account_id, subscription_id, runner=az) if needs_detail else None
+    if detailed:
+        acct = {**acct, **detailed}
     props = acct.get("properties") or acct
     fqdn = _get_primary_endpoint(props)
     is_public, is_restricted, ip_restrictions = _classify_exposure(props)

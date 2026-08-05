@@ -165,6 +165,31 @@
       z-index: 20;
     }
 
+    .cloud-arch-rg-control {
+      position: absolute;
+      top: 12px;
+      right: 16px;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg-base);
+      color: var(--text-muted);
+      font-size: 0.82rem;
+    }
+
+    .cloud-arch-rg-control select {
+      max-width: min(360px, 45vw);
+      background: var(--bg-base);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 4px 7px;
+    }
+
     .cloud-arch-mermaid-btn {
       font-size: 14px;
       font-weight: 700;
@@ -1128,6 +1153,12 @@
 
       <div class="cloud-arch-views">
         <div class="cloud-arch-view cloud-arch-mermaid-view" id="cloud-arch-mermaid-view" hidden>
+          <div class="cloud-arch-rg-control">
+            <label for="cloud-arch-resource-group">Resource group</label>
+            <select id="cloud-arch-resource-group" aria-label="Resource group diagram">
+              <option value="">Subscription overview</option>
+            </select>
+          </div>
           <div class="cloud-arch-mermaid-controls react-flow__panel react-flow__controls bottom left">
             <button type="button" class="cloud-arch-mermaid-btn react-flow__controls-button" data-diagram-zoom-in="cloud-arch-mermaid-root" title="Zoom in">+</button>
             <button type="button" class="cloud-arch-mermaid-btn react-flow__controls-button" data-diagram-zoom-out="cloud-arch-mermaid-root" title="Zoom out">−</button>
@@ -1316,7 +1347,7 @@
     // window.__triageCloudArchLoadMermaid is defined before ReactFlow mounts
     // and calls loadGraph.
     if (needsMermaid) {
-      await import('/static/js/cloud-architecture-mermaid.js?v=27');
+      await import('/static/js/cloud-architecture-mermaid.js?v=29');
       if (typeof window.__triageCloudArchLoadMermaid === 'function') {
         await window.__triageCloudArchLoadMermaid(config.initialSubscription || '');
         window.__triageCloudArchMermaidInitialLoaded = true;

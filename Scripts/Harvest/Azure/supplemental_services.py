@@ -38,12 +38,53 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
                 )
                 if not has_public_ip and not has_lb_backend:
                     continue
+                nic_extra = {
+                    "public_ip_resource_ids": [
+                        (item.get("properties") or {}).get("publicIPAddress", {}).get("id")
+                        for item in ip_configs
+                        if isinstance((item.get("properties") or {}).get("publicIPAddress"), dict)
+                        and (item.get("properties") or {}).get("publicIPAddress", {}).get("id")
+                    ],
+                    "load_balancer_backend_pool_ids": [
+                        pool.get("id")
+                        for item in ip_configs
+                        for pool in ((item.get("properties") or {}).get("loadBalancerBackendAddressPools") or [])
+                        if isinstance(pool, dict) and pool.get("id")
+                    ],
+                    "subnet_ids": [
+                        (item.get("properties") or {}).get("subnet", {}).get("id")
+                        for item in ip_configs
+                        if isinstance((item.get("properties") or {}).get("subnet"), dict)
+                        and (item.get("properties") or {}).get("subnet", {}).get("id")
+                    ],
+                    "network_security_group_id": (
+                        (props.get("networkSecurityGroup") or {}).get("id")
+                        if isinstance(props.get("networkSecurityGroup"), dict)
+                        else None
+                    ),
+                    "exposure_class": "requires_nsg_review" if has_public_ip else "private",
+                    "direction": "inbound" if has_public_ip else "internal",
+                    "purpose": "public IP association requires NSG review" if has_public_ip else "private NIC",
+                }
+            elif resource_type == "Microsoft.Network/natGateways":
+                nic_extra = {
+                    "exposure_class": "egress_only",
+                    "direction": "egress",
+                    "purpose": "NAT Gateway egress-only public IP translation",
+                }
+            else:
+                nic_extra = {}
+            public_ip_resource_ids = [
+                item.get("id")
+                for item in (props.get("publicIpAddresses") or [])
+                if isinstance(item, dict) and item.get("id")
+            ]
             endpoints = [
                 safe_str(value)
                 for key, value in props.items()
                 if isinstance(value, str) and ("endpoint" in key.lower() or "url" in key.lower())
             ]
-            public_access = safe_str(props.get("publicNetworkAccess") or "Enabled")
+            public_access = safe_str(props.get("publicNetworkAccess"))
             results.append({
                 "id": resource["id"],
                 "subscription_id": subscription_id,
@@ -53,8 +94,8 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
                 "location": resource.get("location"),
                 "sku": infer_sku(resource),
                 "tags": json.dumps(resource.get("tags") or {}),
-                "is_public": 1 if endpoints and public_access != "Disabled" else 0,
-                "is_restricted": 1 if public_access == "Disabled" else 0,
+                "is_public": 1 if endpoints and public_access == "Enabled" else 0,
+                "is_restricted": 0,
                 "ip_restrictions": json.dumps([]),
                 "endpoints": build_endpoints([(value, 443, "https") for value in endpoints]),
                 "auth_methods": json.dumps(["azure_ad"]),
@@ -77,6 +118,8 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
                             if resource_type == "Microsoft.Network/privateDnsZones/virtualNetworkLinks"
                             else None
                         ),
+                        **nic_extra,
+                        "public_ip_resource_ids": public_ip_resource_ids,
                     },
                 }),
             })

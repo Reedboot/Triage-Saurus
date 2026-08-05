@@ -18,7 +18,7 @@ import select
 import tempfile
 import time
 import threading
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -37,6 +37,7 @@ try:
         build_subscription_overlay_views as _shared_build_subscription_overlay_views,
         subscription_asset_tier as _shared_subscription_asset_tier,
         _aks_ingress_is_public as _aks_ingress_is_public,
+        _render_exposure_class as _shared_render_exposure_class,
         subscription_apply_plan_hierarchy as _shared_subscription_apply_plan_hierarchy,
         subscription_primary_fqdn as _shared_subscription_primary_fqdn,
     )
@@ -46,6 +47,7 @@ except ImportError:
         build_subscription_overlay_views as _shared_build_subscription_overlay_views,
         subscription_asset_tier as _shared_subscription_asset_tier,
         _aks_ingress_is_public as _aks_ingress_is_public,
+        _render_exposure_class as _shared_render_exposure_class,
         subscription_apply_plan_hierarchy as _shared_subscription_apply_plan_hierarchy,
         subscription_primary_fqdn as _shared_subscription_primary_fqdn,
     )
@@ -13088,6 +13090,9 @@ def _build_subscription_architecture_payload(
                 parsed = json.loads(raw_json) if isinstance(raw_json, str) else (raw_json or {})
             except Exception:
                 parsed = {}
+            asset_extra = parsed.get("_extra") if isinstance(parsed, dict) else {}
+            if not isinstance(asset_extra, dict):
+                asset_extra = {}
             public_ip_asset = {
                 "id": row["id"],
                 "name": row["name"],
@@ -13097,7 +13102,9 @@ def _build_subscription_architecture_payload(
                 "resource_group": row["resource_group"] or "",
                 "public_ips": _extract_public_ips(parsed) if isinstance(parsed, dict) else [],
                 "dns_names": _extract_dns_names(parsed, row["fqdn"]),
-                "is_public": bool(row["is_public"]),
+                "is_public": False,
+                "harvest_is_public": bool(row["is_public"]),
+                "exposure_class": "public_ip_association",
                 "is_restricted": bool(row["is_restricted"]),
                 "tier": "entry",
                 "location": row["location"],
@@ -13140,6 +13147,15 @@ def _build_subscription_architecture_payload(
             parsed = json.loads(raw_json) if isinstance(raw_json, str) else (raw_json or {})
         except Exception:
             parsed = {}
+        asset_extra = parsed.get("_extra") if isinstance(parsed, dict) else {}
+        if not isinstance(asset_extra, dict):
+            asset_extra = {}
+        exposure_class = _shared_render_exposure_class(
+            row["type"],
+            row["is_public"],
+            row["is_restricted"],
+            parsed,
+        )
         routing_targets = _extract_routing_targets(parsed) if isinstance(parsed, dict) else []
         # Use the shared helper so all extraction paths stay consistent
         extracted_ips = _extract_public_ips(parsed) if isinstance(parsed, dict) else []
@@ -13154,7 +13170,9 @@ def _build_subscription_architecture_payload(
             "location": row["location"],
             "sku": row["sku"],
             "fqdn": _resolved_asset_fqdn(row["name"], row["type"], row["fqdn"]),
-            "is_public": bool(row["is_public"]),
+            "is_public": exposure_class == "direct_public",
+            "harvest_is_public": bool(row["is_public"]),
+            "exposure_class": exposure_class,
             "status": row["status"] or "active",
             "pipeline_tag": row["pipeline_tag"],
             "first_detected": row["first_detected"],
@@ -13178,12 +13196,23 @@ def _build_subscription_architecture_payload(
             "provider_label": "Azure",
             "tier": _shared_subscription_asset_tier(row["type"], row["name"]),
             "routing_targets": routing_targets,
+            "public_ip_resource_ids": list(asset_extra.get("public_ip_resource_ids") or []),
+            "subnet_ids": list(asset_extra.get("subnet_ids") or []),
+            "load_balancer_backend_pool_ids": list(asset_extra.get("load_balancer_backend_pool_ids") or []),
+            "nat_gateway_id": asset_extra.get("nat_gateway_id"),
+            "network_security_group_id": asset_extra.get("network_security_group_id"),
+            "route_table_id": asset_extra.get("route_table_id"),
+            "inbound_nat_rules": list(asset_extra.get("inbound_nat_rules") or []),
+            "public_ip_direction": asset_extra.get("public_ip_direction"),
+            "public_ip_purpose": asset_extra.get("public_ip_purpose"),
+            "public_ip_constraint_status": asset_extra.get("exposure_class"),
         }
 
         is_apim = _is_api_management_resource_type(row["type"])
         apim_public = _is_apim_publicly_accessible(parsed) if is_apim and isinstance(parsed, dict) else True
 
         linked_public_ip_ids = _extract_public_ip_resource_ids(parsed) if isinstance(parsed, dict) else set()
+        asset["public_ip_resource_ids"] = sorted(linked_public_ip_ids)
         linked_public_ip_assets: list[dict] = []
         for pip_id in linked_public_ip_ids:
             candidate = public_ip_assets_by_id.get(str(pip_id).lower())
@@ -13214,17 +13243,17 @@ def _build_subscription_architecture_payload(
                 asset["associated_public_ips"] = linked_ips
                 if not public_ip:
                     public_ip = linked_ips[0]
-                if apim_public:
+                if apim_public and exposure_class == "direct_public":
                     asset["is_public"] = True
             if linked_dns:
                 asset["associated_fqdns"] = linked_dns
                 if not asset.get("fqdn"):
                     asset["fqdn"] = linked_dns[0]
-                    if apim_public:
+                    if apim_public and exposure_class == "direct_public":
                         asset["is_public"] = True
 
         if is_apim:
-            asset["is_public"] = apim_public
+            asset["is_public"] = apim_public and exposure_class != "ip_restricted"
 
         vnet_name, vnet_resource_group, subnet_name, subnet_id = _extract_asset_network_context(
             parsed if isinstance(parsed, dict) else {},
@@ -13240,6 +13269,9 @@ def _build_subscription_architecture_payload(
             "subnet": subnet_name,
             "vnet_resource_group": vnet_resource_group,
             "subnet_id": subnet_id,
+            "nat_gateway_id": asset.get("nat_gateway_id"),
+            "network_security_group_id": asset.get("network_security_group_id"),
+            "route_table_id": asset.get("route_table_id"),
         }
 
         if "serverfarms" in str(row["type"] or "").lower() and not asset.get("subnet_id"):
@@ -13324,6 +13356,23 @@ def _build_subscription_architecture_payload(
 
         if public_ip:
             asset["public_ip"] = public_ip
+        if not asset.get("public_ip_direction") and public_ip:
+            asset_type_lower = str(row["type"] or "").lower()
+            asset_context = " ".join(
+                [
+                    str(row["name"] or ""),
+                    str(row["resource_group"] or ""),
+                    json.dumps((parsed or {}).get("tags") if isinstance(parsed, dict) else {}),
+                ]
+            ).lower()
+            if "virtualmachines" in asset_type_lower and (
+                "databricks" in asset_context or "dbr-" in asset_context
+            ):
+                asset["public_ip_direction"] = "egress"
+                asset["public_ip_purpose"] = "Databricks worker public egress/management address"
+                asset["public_ip_constraint_status"] = (
+                    asset.get("public_ip_constraint_status") or "requires_nsg_review"
+                )
         assets.append(asset)
 
     # Add App Gateway listeners as virtual assets so the graph exposes public ingress.
@@ -14056,6 +14105,84 @@ def _build_subscription_architecture_payload(
     if synthetic_apim_backend_assets:
         assets.extend(synthetic_apim_backend_assets)
 
+    # Listener and synthetic-resource harvesters can contribute the same
+    # logical asset. Keep the first record so graph IDs remain unique.
+    unique_assets: list[dict] = []
+    seen_asset_ids: set[str] = set()
+    for asset in assets:
+        asset_id = str(asset.get("id") or "").strip()
+        asset_key = asset_id.lower()
+        if asset_key and asset_key in seen_asset_ids:
+            continue
+        if asset_key:
+            seen_asset_ids.add(asset_key)
+        unique_assets.append(asset)
+    assets = unique_assets
+
+    asset_id_lookup = {
+        str(asset.get("id") or "").strip().lower(): str(asset.get("id") or "").strip()
+        for asset in assets
+        if str(asset.get("id") or "").strip()
+    }
+    asset_name_lookup = {
+        str(asset.get("name") or "").strip().lower(): str(asset.get("id") or "").strip()
+        for asset in assets
+        if str(asset.get("name") or "").strip() and str(asset.get("id") or "").strip()
+    }
+    association_edge_keys: set[tuple[str, str, str]] = set()
+    edges: list[dict] = []
+
+    def _resolve_association_target(value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        return asset_id_lookup.get(text.lower()) or asset_name_lookup.get(text.lower()) or ""
+
+    def _add_association_edge(source_id: str, target_ref: Any, label: str, connection_type: str) -> None:
+        source = _resolve_association_target(source_id)
+        target = _resolve_association_target(target_ref)
+        if not source or not target or source == target:
+            return
+        key = (source.lower(), target.lower(), connection_type)
+        if key in association_edge_keys:
+            return
+        association_edge_keys.add(key)
+        edges.append(
+            {
+                "id": f"edge-association-{len(association_edge_keys)}",
+                "source": source,
+                "target": target,
+                "label": label,
+                "data": {
+                    "connection_type": connection_type,
+                    "protocol": None,
+                    "port": None,
+                    "auth_method": None,
+                    "is_encrypted": False,
+                    "is_cross_repo": False,
+                },
+                "style": {"stroke": "#38bdf8", "strokeWidth": 2, "strokeDasharray": "5,4"},
+            }
+        )
+
+    for asset in assets:
+        asset_id = str(asset.get("id") or "").strip()
+        for public_ip_id in asset.get("public_ip_resource_ids") or []:
+            _add_association_edge(asset_id, public_ip_id, "Public IP association", "public_ip_association")
+        for subnet_id in asset.get("subnet_ids") or []:
+            _add_association_edge(asset_id, subnet_id, "Attached subnet", "subnet_association")
+        _add_association_edge(asset_id, asset.get("nat_gateway_id"), "NAT egress", "nat_gateway_association")
+        _add_association_edge(asset_id, asset.get("network_security_group_id"), "NSG", "nsg_association")
+        _add_association_edge(asset_id, asset.get("route_table_id"), "Route table", "route_table_association")
+        for rule in asset.get("inbound_nat_rules") or []:
+            if isinstance(rule, dict):
+                _add_association_edge(
+                    asset_id,
+                    rule.get("backend_ip_configuration_id"),
+                    "Inbound NAT",
+                    "inbound_nat",
+                )
+
     by_id = {str(asset["id"]).lower(): asset for asset in assets if asset.get("id") is not None}
     by_key: dict[tuple[str, str, str, str], dict] = {}
     for asset in assets:
@@ -14728,7 +14855,9 @@ def _build_subscription_architecture_payload(
         }
 
     node_icon_cache: dict[str, str | None] = {}
-    def _asset_icon_path(asset_type: str | None) -> str | None:
+    def _asset_icon_path(asset_type: str | None, kind: str | None = None) -> str | None:
+        if "microsoft.cognitiveservices/accounts" in (asset_type or "").lower() and (kind or "").lower() == "openai":
+            return "/static/assets/icons/azure/ai_machine_learning/openai.svg"
         key = (asset_type or "").lower()
         if key not in node_icon_cache:
             node_icon_cache[key] = _get_icon_path(asset_type or "")
@@ -14747,7 +14876,6 @@ def _build_subscription_architecture_payload(
         col = tier_columns.get(tier, 4)
         for idx, asset in enumerate(bucket):
             depth = int(asset.get("depth") or 0)
-            icon_path = _asset_icon_path(asset.get("type") or "")
             # Parse raw JSON to extract managed identity and logging status
             raw_json_text = raw_json_by_id.get(str(asset["id"]).lower(), "{}")
             try:
@@ -14756,6 +14884,10 @@ def _build_subscription_architecture_payload(
                 parsed_json = {}
             if not isinstance(parsed_json, dict):
                 parsed_json = {}
+            icon_path = _asset_icon_path(
+                asset.get("type") or "",
+                parsed_json.get("kind"),
+            )
             
             # Check for managed identity
             has_managed_identity = False
@@ -14811,6 +14943,14 @@ def _build_subscription_architecture_payload(
                         "hasManagedIdentity": has_managed_identity,
                         "loggingEnabled": has_logging,
                         "network": asset.get("network") or {},
+                        "publicIpResourceIds": asset.get("public_ip_resource_ids") or [],
+                        "natGatewayId": asset.get("nat_gateway_id"),
+                        "networkSecurityGroupId": asset.get("network_security_group_id"),
+                        "routeTableId": asset.get("route_table_id"),
+                        "inboundNatRules": asset.get("inbound_nat_rules") or [],
+                        "publicIpDirection": asset.get("public_ip_direction"),
+                        "publicIpPurpose": asset.get("public_ip_purpose"),
+                        "publicIpConstraintStatus": asset.get("public_ip_constraint_status"),
                         "vnetName": asset.get("vnet_name"),
                         "vnet_name": asset.get("vnet_name"),
                         "vnetResourceGroup": asset.get("vnet_resource_group"),
@@ -14822,6 +14962,11 @@ def _build_subscription_architecture_payload(
                         "isGroupNode": is_group_node,
                         "groupType": asset.get("_group_type") if is_group_node else None,
                         "groupAccess": asset.get("_group_access") if is_group_node else None,
+                        "groupedResourceIds": (
+                            [str(resource_id) for resource_id in asset.get("_grouped_resource_ids", []) if resource_id]
+                            if is_group_node
+                            else []
+                        ),
                         "childrenCount": asset.get("children_count") if is_group_node else None,
                         "isChildNode": is_child_node,
                         "parentNodeId": str(asset.get("parent_id")) if asset.get("parent_id") else None,
@@ -14902,8 +15047,6 @@ def _build_subscription_architecture_payload(
                     "x": round(apim_x + apim_child_gap_x),
                     "y": round(start_y + (idx * apim_step_y)),
                 }
-
-    edges: list[dict] = []
 
     def _service_fabric_node_type_names(cluster_asset: dict) -> list[str]:
         raw_json_text = None
@@ -15388,21 +15531,25 @@ def _build_subscription_architecture_payload(
                 edge_color = "#ef4444"  # Red - Public unprotected
                 label = ""
             
+            is_egress_only = asset.get("public_ip_direction") == "egress"
             edges.append(
                 {
                     "id": f"edge-public-{asset['id']}",
-                    "source": "Internet",
-                    "target": str(asset["id"]),
-                    "label": label,
+                    "source": str(asset["id"]) if is_egress_only else "Internet",
+                    "target": "Internet" if is_egress_only else str(asset["id"]),
+                    "label": "Public egress" if is_egress_only else label,
                     "data": {
-                        "connection_type": "public",
+                        "connection_type": "egress" if is_egress_only else "public",
                         "protocol": protocol,
                         "port": port,
                         "auth_method": None,
                         "is_encrypted": protocol in {"HTTPS", "TDS"},
                         "is_cross_repo": False,
+                        "public_ip_direction": asset.get("public_ip_direction"),
+                        "public_ip_purpose": asset.get("public_ip_purpose"),
+                        "constraint_status": asset.get("public_ip_constraint_status"),
                     },
-                    "style": {"stroke": edge_color, "strokeWidth": 3},  # 3px for direct internet exposure
+                    "style": {"stroke": "#38bdf8" if is_egress_only else edge_color, "strokeWidth": 3},
                 }
             )
 
@@ -15703,12 +15850,178 @@ def _build_subscription_architecture_payload(
                 str(service_port or "").strip().lower(),
             ])
             ingress_node_id = f"aks-ingress::{route_key}"
+    node_ids = {
+        str(node.get("id") or "").strip().lower()
+        for node in nodes
+        if str(node.get("id") or "").strip()
+    }
+    grouped_asset_node_ids: dict[str, str] = {}
+    for node in nodes:
+        node_data = node.get("data") if isinstance(node.get("data"), dict) else {}
+        group_id = str(node.get("id") or "").strip()
+        for resource_id in node_data.get("groupedResourceIds") or []:
+            normalized_id = str(resource_id or "").strip().lower()
+            if normalized_id and group_id:
+                grouped_asset_node_ids[normalized_id] = group_id
+
+    public_asset_coverage: list[dict] = []
+    for row in asset_rows:
+        if not bool(row["is_public"]):
+            continue
+        asset_id = str(row["id"] or "").strip()
+        normalized_id = asset_id.lower()
+        if normalized_id in node_ids:
+            status = "visible"
+            node_id = asset_id
+            reason = "Rendered as an individual diagram node."
+        elif normalized_id in grouped_asset_node_ids:
+            status = "grouped"
+            node_id = grouped_asset_node_ids[normalized_id]
+            reason = "Represented by an explicit resource group with drilldown."
+        else:
+            status = "missing"
+            node_id = ""
+            reason = "No rendered node or drilldown mapping was found."
+        public_asset_coverage.append(
+            {
+                "id": asset_id,
+                "name": row["name"] or asset_id,
+                "type": row["type"] or "",
+                "resource_group": row["resource_group"] or "",
+                "status": status,
+                "node_id": node_id,
+                "reason": reason,
+            }
+        )
+
+    coverage_counts = Counter(item["status"] for item in public_asset_coverage)
+    public_asset_coverage_summary = {
+        "total": len(public_asset_coverage),
+        "represented": coverage_counts.get("visible", 0) + coverage_counts.get("grouped", 0),
+        "missing": coverage_counts.get("missing", 0),
+        "by_status": dict(sorted(coverage_counts.items())),
+        "by_type": dict(
+            sorted(
+                Counter(item["type"] for item in public_asset_coverage).items()
+            )
+        ),
+        "assets": public_asset_coverage,
+    }
+    for node in nodes:
+        if str(node.get("id") or "") == "Internet":
+            node_data = node.setdefault("data", {})
+            node_data["public_asset_coverage"] = public_asset_coverage_summary
+            break
+
+    rendered_edge_pairs = {
+        (
+            str(edge.get("source") or "").strip().lower(),
+            str(edge.get("target") or "").strip().lower(),
+        )
+        for edge in edges
+        if isinstance(edge, dict)
+    }
+    source_node_reconciliation: list[dict] = []
+    source_node_mapping: dict[str, str] = {}
+    source_asset_ids = {str(row["id"] or "").strip().lower() for row in asset_rows}
+    for row in asset_rows:
+        source_id = str(row["id"] or "").strip()
+        normalized_id = source_id.lower()
+        if normalized_id in node_ids:
+            status = "visible"
+            node_id = source_id
+            reason = "Rendered as an individual diagram node."
+        elif normalized_id in grouped_asset_node_ids:
+            status = "grouped"
+            node_id = grouped_asset_node_ids[normalized_id]
+            reason = "Represented by an explicit resource group with drilldown."
+        else:
+            status = "missing"
+            node_id = ""
+            reason = "No rendered node or drilldown mapping was found."
+        if node_id:
+            source_node_mapping[normalized_id] = node_id
+        source_node_reconciliation.append(
+            {
+                "id": source_id,
+                "name": row["name"] or source_id,
+                "type": row["type"] or "",
+                "resource_group": row["resource_group"] or "",
+                "status": status,
+                "node_id": node_id,
+                "reason": reason,
+            }
+        )
+
+    source_edge_reconciliation: list[dict] = []
+
+    def _record_source_edge(source_id: str, target_id: str, relationship: str, label: str) -> None:
+        source_node = source_node_mapping.get(str(source_id or "").strip().lower(), str(source_id or "").strip())
+        target_node = source_node_mapping.get(str(target_id or "").strip().lower(), str(target_id or "").strip())
+        status = "rendered" if source_node and target_node and (
+            source_node.lower(), target_node.lower()
+        ) in rendered_edge_pairs else "missing"
+        source_edge_reconciliation.append(
+            {
+                "source_id": str(source_id or "").strip(),
+                "target_id": str(target_id or "").strip(),
+                "source_node_id": source_node,
+                "target_node_id": target_node,
+                "relationship": relationship,
+                "label": label,
+                "status": status,
+            }
+        )
+
+    for asset in assets:
+        parent_id = str(asset.get("parent_id") or "").strip()
+        asset_id = str(asset.get("id") or "").strip()
+        if parent_id and asset_id and asset_id.lower() in source_asset_ids:
+            _record_source_edge(parent_id, asset_id, "contains", "contains")
+        for target_id in entry_route_targets.get(asset_id, []):
+            _record_source_edge(asset_id, target_id, "routing", _route_label(asset))
+        if asset.get("is_public") and asset_id.lower() in source_asset_ids:
+            _record_source_edge("Internet", asset_id, "public", "public")
+
+    for issue in routing_issues:
+        for target in issue.get("unresolved_targets") or []:
+            source_edge_reconciliation.append(
+                {
+                    "source_id": str(issue.get("asset_id") or "").strip(),
+                    "target_id": str(target).strip(),
+                    "source_node_id": source_node_mapping.get(
+                        str(issue.get("asset_id") or "").strip().lower(), ""
+                    ),
+                    "target_node_id": "",
+                    "relationship": "routing",
+                    "label": "Routing",
+                    "status": "missing",
+                    "reason": "Harvested routing target has no rendered node mapping.",
+                }
+            )
+
     summary = {
         "resource_count": total_resource_count,
         "displayed_resource_count": overview_stats["displayed_resource_count"],
         "omitted_resource_count": overview_stats["omitted_resource_count"],
         "missing_assets": overview_stats.get("missing_assets", []),
         "missing_asset_count": overview_stats["omitted_resource_count"],
+        "public_asset_coverage": {
+            key: value
+            for key, value in public_asset_coverage_summary.items()
+            if key != "assets"
+        },
+        "source_node_reconciliation": {
+            "total": len(source_node_reconciliation),
+            "visible": sum(item["status"] == "visible" for item in source_node_reconciliation),
+            "grouped": sum(item["status"] == "grouped" for item in source_node_reconciliation),
+            "missing": sum(item["status"] == "missing" for item in source_node_reconciliation),
+        },
+        "source_edge_reconciliation": {
+            "total": len(source_edge_reconciliation),
+            "rendered": sum(item["status"] == "rendered" for item in source_edge_reconciliation),
+            "missing": sum(item["status"] == "missing" for item in source_edge_reconciliation),
+        },
         "connection_count": len(edges),
         "routing_issue_count": len(routing_issues),
         "provider_counts": [
@@ -15724,6 +16037,8 @@ def _build_subscription_architecture_payload(
         "summary": summary,
         "nodes": nodes,
         "edges": edges,
+        "source_node_reconciliation": source_node_reconciliation,
+        "source_edge_reconciliation": source_edge_reconciliation,
         "routing_issues": routing_issues if requested_mode != "overview" else [],
     }
 
@@ -19412,6 +19727,9 @@ def _trace_subscription_endpoint(
             "aks_deployment": "backend",
             "aks_cluster": "backend",
             "workload": "backend",
+            "external_destination": "externalDestination",
+            "private_destination": "privateDestination",
+            "unknown_destination": "unknownDestination",
         }
         class_defs = [
             "    classDef internet stroke:#d32f2f,stroke-width:2px,fill:#3b0a0a;",
@@ -19420,6 +19738,9 @@ def _trace_subscription_endpoint(
             "    classDef apimBackendPool stroke:#0e7490,stroke-width:2px,fill:#083344,stroke-dasharray:4 2;",
             "    classDef apiGateway stroke:#0ea5e9,stroke-width:2px,fill:#082f49;",
             "    classDef backend stroke:#22c55e,stroke-width:2px,fill:#052e16;",
+            "    classDef externalDestination stroke:#a855f7,stroke-width:2px,fill:#3b1764;",
+            "    classDef privateDestination stroke:#f59e0b,stroke-width:2px,fill:#3d2a0d;",
+            "    classDef unknownDestination stroke:#94a3b8,stroke-width:2px,fill:#1e293b,stroke-dasharray:4 2;",
         ]
         class_lines: list[str] = []
         link_lines: list[str] = []
@@ -19466,6 +19787,46 @@ def _trace_subscription_endpoint(
             text = f"https://{text}"
         parsed = _urlsplit(text)
         return str(parsed.hostname or "").strip().lower().rstrip(".")
+
+    def _destination_node(target_url: str | None, target_host: str | None) -> dict:
+        """Represent a backend that is not mapped to a harvested workload."""
+        url_value = str(target_url or "").strip()
+        host_value = str(target_host or "").strip().lower().rstrip(".")
+        if not host_value:
+            destination_kind = "unknown_destination"
+            destination_class = "unknown"
+            label = "Unknown destination"
+        else:
+            is_private_ip = False
+            try:
+                is_private_ip = ipaddress.ip_address(host_value).is_private
+            except ValueError:
+                pass
+            private_suffixes = (
+                ".internal",
+                ".internal.cbinnovation.uk",
+                ".appserviceenvironment.net",
+                ".azure-api.net",
+                ".azurewebsites.net",
+            )
+            if is_private_ip or host_value.endswith(private_suffixes):
+                destination_kind = "private_destination"
+                destination_class = "private_unharvested"
+                label = f"Private/unharvested: {host_value}"
+            else:
+                destination_kind = "external_destination"
+                destination_class = "external"
+                label = f"External: {host_value}"
+        identity = re.sub(r"[^A-Za-z0-9_:-]+", "_", host_value or url_value or "unknown")
+        return _node(
+            destination_kind,
+            f"{destination_kind}::{identity}",
+            label,
+            backend_url=url_value or None,
+            destination_class=destination_class,
+            destination_host=host_value or None,
+            resolution="unharvested",
+        )
 
     def _resolve_aks_downstream(subscription: str, backend_host: str) -> list[dict]:
         rows: list[sqlite3.Row] = []
@@ -19694,8 +20055,11 @@ def _trace_subscription_endpoint(
                         if aks_chain:
                             apim_chain.extend(aks_chain)
                             return apim_chain
+                    apim_chain.append(_destination_node(backend_url_value, backend_host))
+                    return apim_chain
 
             # If we can identify the APIM service but not the API/backend, keep the APIM service hop.
+            apim_chain.append(_destination_node(None, None))
             return apim_chain
 
         # Non-APIM workload fallback: direct asset match.
@@ -19734,7 +20098,7 @@ def _trace_subscription_endpoint(
         if aks_chain:
             return chain_prefix + aks_chain
 
-        return chain_prefix
+        return chain_prefix + [_destination_node(backend_host_l, backend_host_l)]
 
     def _trace_appgw_route(subscription: str, route_row: sqlite3.Row) -> dict:
         gateway_name = str(route_row["gateway_name"] or "").strip()
@@ -20590,7 +20954,9 @@ def api_cloud_route_trace(sub_id: str | None = None):
         else:
             resolved_sub_id = ""
 
-        request_payload = {"endpoint": endpoint}
+        # Include the trace shape version so cached pre-terminal-node results
+        # are not reused after adding external/private/unknown destinations.
+        request_payload = {"endpoint": endpoint, "trace_version": 2}
         if resolved_sub_id:
             request_payload["subscription_id"] = resolved_sub_id
             trace_payload = _load_trace_cache(conn, resolved_sub_id, "route", request_payload)
@@ -22191,18 +22557,93 @@ def api_subscription_diagram(sub_id: str):
             subscription_name=sub_name,
             environment=environment,
         )
+
+        resource_groups = [
+            str(row[0] or "").strip()
+            for row in conn.execute(
+                "SELECT DISTINCT resource_group FROM provisioned_assets "
+                "WHERE subscription_id=? AND resource_group IS NOT NULL "
+                "ORDER BY resource_group",
+                (sub_id,),
+            ).fetchall()
+            if str(row[0] or "").strip()
+        ]
         
         payload = {
             "subscription_name": sub_name,
             "environment": environment,
             "total_assets": len(rows),
             "ingress_diagram": ingress_diagram,
+            "resource_groups": resource_groups,
         }
         payload = _compact_subscription_diagram_payload(payload)
         if cache_signature:
             _SUBSCRIPTION_DIAGRAM_CACHE[sub_id] = (_time.monotonic(), cache_signature, payload)
             _store_subscription_diagram_cache(conn, sub_id, cache_signature, payload)
         return jsonify(payload)
+    finally:
+        conn.close()
+
+
+@app.route("/api/subscriptions/<sub_id>/resource-group-diagram")
+def api_subscription_resource_group_diagram(sub_id: str):
+    """Return one resource-group Mermaid diagram on demand."""
+    conn = _get_db_with_schema()
+    if conn is None:
+        return jsonify({"error": "DB unavailable"}), 503
+    try:
+        requested_rg = str(request.args.get("rg") or "").strip()
+        resolved = _cloud_resolve_subscription(conn, sub_id)
+        sub_row = (resolved["display_name"], resolved["environment"]) if resolved else None
+        if not sub_row:
+            return jsonify({"error": "Subscription not found"}), 404
+        if not requested_rg:
+            return jsonify({"error": "rg is required"}), 400
+
+        rows = [
+            list(row)
+            for row in conn.execute(
+                """
+                SELECT name, type, resource_group, fqdn, is_public, sku, id,
+                       0, NULL, is_restricted, waf_mode, NULL, raw_json,
+                       NULL, NULL, NULL
+                FROM provisioned_assets
+                WHERE subscription_id=? AND resource_group=?
+                ORDER BY type, name
+                """,
+                (sub_id, requested_rg),
+            ).fetchall()
+        ]
+        if not rows:
+            return jsonify({"error": "Resource group not found"}), 404
+
+        aks_route_rows = []
+        if _table_exists(conn, "aks_routes"):
+            aks_route_rows = conn.execute(
+                """
+                SELECT cluster_name, namespace, ingress_name, host, path,
+                       exposure_level, service_name, service_port,
+                       deployment_name, git_repository, resource_group,
+                       pod_template_labels
+                FROM aks_routes
+                WHERE subscription_id=? AND resource_group=?
+                """,
+                (sub_id, requested_rg),
+            ).fetchall()
+        plan_links = _build_site_hosting_plan_links(conn, sub_id)
+        plan_links.extend(_build_site_hosting_ase_links(conn, sub_id))
+        diagrams = _build_subscription_diagrams_by_rg(
+            str(sub_row[0] or sub_id),
+            str(sub_row[1] or ""),
+            rows,
+            plan_links=plan_links,
+            aks_route_rows=aks_route_rows,
+        )
+        diagram = next(
+            (item for item in diagrams if str(item.get("rg") or "") == requested_rg),
+            None,
+        )
+        return jsonify(diagram or {"error": "Resource group diagram unavailable"}), 404 if diagram is None else 200
     finally:
         conn.close()
 
@@ -22391,6 +22832,8 @@ def _cloud_asset_display_type(arm_type: str, kind: str | None = None) -> str:
         return "Blob Container"
     if "microsoft.sql/servers/databases" in arm_type_lc:
         return "SQL Database"
+    if "microsoft.cognitiveservices/accounts" in arm_type_lc and kind_lc == "openai":
+        return "AI Foundry"
 
     return _friendly_type(arm_type)
 
@@ -23674,6 +24117,9 @@ def _build_ingress_diagram(
             parsed_raw = json.loads(raw_json) if isinstance(raw_json, str) and raw_json.strip() else raw_json
         except Exception:
             parsed_raw = None
+        exposure_class = _shared_render_exposure_class(
+            rtype, is_public, is_restricted, parsed_raw
+        )
         try:
             auth_methods = json.loads(auth_methods_raw) if isinstance(auth_methods_raw, str) else (auth_methods_raw or [])
             if not isinstance(auth_methods, list):
@@ -23690,8 +24136,9 @@ def _build_ingress_diagram(
             "name": name,
             "type": rtype,
             "fqdn": fqdn,
-            "public": is_public,
+            "public": exposure_class == "direct_public",
             "harvest_is_public": bool(is_public),  # immutable harvest verdict; DNS check must not override
+            "exposure_class": exposure_class,
             "rg": rg,
             "has_waf": has_waf,
             "listeners": listeners,
@@ -24400,7 +24847,8 @@ def _build_ingress_diagram(
             _apim_parsed = (json.loads(_apim_raw) if isinstance(_apim_raw, str) else _apim_raw) or {}
             if not _is_apim_publicly_accessible(_apim_parsed):
                 continue  # Internal APIM — linked PIP is management-only, leave public flag as-is
-        item["public"] = True
+        if item.get("exposure_class") == "direct_public":
+            item["public"] = True
 
     # Build simplified Mermaid diagram focusing on entry flow
     lines = [
@@ -25118,11 +25566,16 @@ def _build_ingress_diagram(
             "type": row[1],
             "arm_type": row[1],
             "fqdn": row[3],
-            "public": bool(row[4]),
+            "public": _shared_render_exposure_class(
+                row[1], row[4], row[9] if len(row) > 9 else 0, row[12] if len(row) > 12 else None
+            ) == "direct_public",
             "harvest_is_public": bool(row[4]),
             "rg": row[2] or "",
             "id": row[6],
             "raw_json": row[12] if len(row) > 12 else None,
+            "exposure_class": _shared_render_exposure_class(
+                row[1], row[4], row[9] if len(row) > 9 else 0, row[12] if len(row) > 12 else None
+            ),
             "is_restricted": bool(row[9]) if len(row) > 9 else False,
             "routing_targets": [],
             "tier": "backend",
@@ -25146,7 +25599,12 @@ def _build_ingress_diagram(
             "type": row[1],
             "arm_type": row[1],
             "fqdn": row[3],
-            "public": bool(row[4]),
+            "public": _shared_render_exposure_class(
+                row[1], row[4], row[9] if len(row) > 9 else 0, row[12] if len(row) > 12 else None
+            ) == "direct_public",
+            "exposure_class": _shared_render_exposure_class(
+                row[1], row[4], row[9] if len(row) > 9 else 0, row[12] if len(row) > 12 else None
+            ),
             "rg": row[2] or "",
             "raw_json": row[12] if len(row) > 12 else None,
             "id": row[6] if len(row) > 6 else None,

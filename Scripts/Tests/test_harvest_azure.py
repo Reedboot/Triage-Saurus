@@ -27,6 +27,7 @@ import correlate_assets
 import db_helpers
 from Azure import app_service_environment
 from Azure._helpers import (
+    canonical_azure_resource_type,
     safe_str,
     infer_fqdn,
     build_endpoints,
@@ -35,8 +36,9 @@ from Azure._helpers import (
     normalize_route_path,
     route_path_matches,
 )
+from web.subscription_diagram_helpers import _render_exposure_class
 from Azure._staged import BackfillJob, StagedRows
-from Azure import app_configuration, storage, aks, key_vault, sql_server, service_bus, event_hub, virtual_network
+from Azure import app_configuration, storage, aks, key_vault, sql_server, service_bus, event_hub, virtual_network, cdn, cosmos_db
 from Azure import load_balancer
 from Azure import virtual_machine
 from Azure import machine_learning
@@ -200,6 +202,143 @@ class TestLoadBalancerHarvest:
         assert raw["properties"]["frontendIPConfigurations"][0]["properties"]["publicIPAddress"]["id"] == pip_id
         assert raw["_extra"]["public_ip_resource_ids"] == [pip_id]
         assert raw["_extra"]["routing_targets"][0]["target"] == "power_bi_gateway"
+
+
+class TestCdnHarvest:
+    def test_harvests_profile_endpoint_origins_and_routes(self, monkeypatch):
+        profile_id = "/subscriptions/sub-1/resourceGroups/rg-edge/providers/Microsoft.Cdn/profiles/edge"
+        endpoint_id = f"{profile_id}/afdEndpoints/site"
+        route_id = f"{endpoint_id}/routes/default"
+        origin_id = f"{endpoint_id}/originGroups/default/origins/api"
+
+        profile = {
+            "id": profile_id,
+            "name": "edge",
+            "resourceGroup": "rg-edge",
+            "type": "Microsoft.Cdn/profiles",
+            "sku": {"name": "Premium_AzureFrontDoor"},
+            "properties": {"provisioningState": "Succeeded"},
+        }
+        endpoint = {
+            "id": endpoint_id,
+            "name": "site",
+            "type": "Microsoft.Cdn/profiles/afdEndpoints",
+            "properties": {
+                "hostName": "site.z01.azurefd.net",
+                "enabledState": "Enabled",
+            },
+        }
+        route = {
+            "id": route_id,
+            "name": "default",
+            "properties": {
+                "patternsToMatch": ["/*"],
+                "originGroup": {"id": f"{endpoint_id}/originGroups/default"},
+            },
+        }
+        origin = {
+            "id": origin_id,
+            "name": "api",
+            "properties": {"hostName": "api.internal.example"},
+        }
+
+        def fake_az(args, subscription_id):
+            assert subscription_id == "sub-1"
+            if args[:3] == ["resource", "list", "--resource-type"]:
+                resource_type = args[3]
+                if resource_type == cdn.PROFILE_TYPE:
+                    return [profile]
+                if resource_type in {cdn.ENDPOINT_TYPE, cdn.ENDPOINT_TYPE_AFD}:
+                    return [endpoint] if resource_type == cdn.ENDPOINT_TYPE_AFD else []
+                if resource_type.endswith("/routes"):
+                    return [route]
+                if resource_type.endswith("/origins"):
+                    return [origin]
+                return []
+            if args[:3] == ["resource", "show", "--ids"]:
+                return {}
+            return []
+
+        monkeypatch.setattr(cdn, "az", fake_az)
+        monkeypatch.setattr(cdn, "build_endpoints", lambda entries: json.dumps([
+            {"address": address, "port": port, "protocol": protocol}
+            for address, port, protocol in entries if address
+        ]))
+
+        rows = cdn.harvest("sub-1")
+        assert [row["type"] for row in rows] == [
+            "Microsoft.Cdn/profiles",
+            "Microsoft.Cdn/profiles/endpoints",
+        ]
+        profile_raw = json.loads(rows[0]["raw_json"])
+        endpoint_raw = json.loads(rows[1]["raw_json"])
+        assert profile_raw["_extra"]["exposure_class"] == "public_edge"
+        assert profile_raw["_extra"]["endpoint_hostnames"] == ["site.z01.azurefd.net"]
+        assert endpoint_raw["_extra"]["origin_hostnames"] == ["api.internal.example"]
+        assert endpoint_raw["_extra"]["routing"][0]["patterns"] == ["/*"]
+
+
+class TestExposureAndCanonicalization:
+    def test_cosmos_detail_enrichment_preserves_unknown_until_show_returns_acl(self, monkeypatch):
+        account_id = "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.DocumentDb/databaseAccounts/db"
+        listed = {
+            "id": account_id,
+            "name": "db",
+            "resourceGroup": "rg",
+            "type": "Microsoft.DocumentDb/databaseAccounts",
+            "properties": {"documentEndpoint": "https://db.documents.azure.com:443/"},
+        }
+        detailed = {
+            **listed,
+            "properties": {
+                **listed["properties"],
+                "publicNetworkAccess": "Enabled",
+                "ipRules": [{"ipAddressOrRange": "10.0.0.0/8"}],
+            },
+        }
+
+        def fake_az(args, subscription_id):
+            if args[:3] == ["cosmosdb", "list"]:
+                return [listed]
+            if args[:3] == ["resource", "show", "--ids"]:
+                return detailed
+            return []
+
+        monkeypatch.setattr(cosmos_db, "az", fake_az)
+        monkeypatch.setattr(cosmos_db, "build_endpoints", lambda entries: "[]")
+        row = cosmos_db.harvest("sub-1")[0]
+        assert row["is_public"] == 0
+        assert row["is_restricted"] == 1
+        assert json.loads(row["ip_restrictions"]) == ["10.0.0.0/8"]
+        assert json.loads(row["raw_json"])["_extra"]["exposure_class"] == "ip_restricted"
+
+    def test_canonicalizes_provider_namespace_without_changing_resource_id(self):
+        resource_id = "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.DocumentDb/databaseAccounts/db"
+        assert canonical_azure_resource_type("Microsoft.DocumentDb/databaseAccounts") == "Microsoft.DocumentDB/databaseAccounts"
+        assert canonical_azure_resource_type("microsoft.insights/components") == "Microsoft.Insights/components"
+        assert resource_id.endswith("/Microsoft.DocumentDb/databaseAccounts/db")
+        normalized = harvest_azure_assets._normalize_rows([{
+            "id": resource_id,
+            "type": "microsoft.documentdb/databaseAccounts",
+        }])
+        assert normalized[0]["type"] == "Microsoft.DocumentDB/databaseAccounts"
+
+    def test_render_exposure_classes_do_not_promote_associations_to_internet(self):
+        assert _render_exposure_class(
+            "Microsoft.Network/publicIPAddresses", 0, 0, {"_extra": {}}
+        ) == "public_ip_association"
+        assert _render_exposure_class(
+            "Microsoft.Compute/virtualMachines", 0, 0,
+            {"_extra": {"exposure_class": "requires_nsg_review"}}
+        ) == "requires_nsg_review"
+        assert _render_exposure_class(
+            "Microsoft.Network/natGateways", 0, 0,
+            {"_extra": {"exposure_class": "egress_only"}}
+        ) == "private"
+        assert _render_exposure_class(
+            "Microsoft.Cdn/profiles", 1, 0,
+            {"_extra": {"exposure_class": "public_edge"}}
+        ) == "direct_public"
 
 
 class TestMachineLearningHarvest:
@@ -680,9 +819,12 @@ class TestVirtualMachineHarvest:
         assert len(rows) == 1
         row = rows[0]
         assert row["id"] == vm_id
-        assert row["is_public"] == 1
+        assert row["is_public"] == 0
+        assert row["is_restricted"] == 0
         extra = json.loads(row["raw_json"])["_extra"]
         assert extra["public_ips"] == "20.30.40.50"
+        assert extra["exposure_class"] == "requires_nsg_review"
+        assert extra["inbound_exposure_requires_nsg_review"] is True
         assert extra["private_ips"] == "10.1.0.4"
         assert extra["os_type"] == "Linux"
 

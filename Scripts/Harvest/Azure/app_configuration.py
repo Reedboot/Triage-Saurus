@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ._helpers import az, build_endpoints, extract_ip_restrictions, safe_str
+from ._helpers import az, az_resource_show, build_endpoints, extract_ip_restrictions, safe_str
 
 RESOURCE_TYPE = "Microsoft.AppConfiguration/configurationStores"
 
@@ -14,6 +14,18 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
 
     total = len(raw)
     for idx, store in enumerate(raw, start=1):
+        list_props = store.get("properties") or {}
+        needs_detail = "properties" not in store or (
+            bool(list_props)
+            and ("networkAcls" not in list_props or "publicNetworkAccess" not in list_props)
+        )
+        detailed = (
+            az_resource_show(store.get("id", ""), subscription_id, runner=az)
+            if store.get("id") and needs_detail
+            else None
+        )
+        if detailed:
+            store = {**store, **detailed}
         props = store.get("properties") or store
         resource_id = store.get("id", "")
         endpoint = safe_str(props.get("endpoint", "").replace("https://", "").rstrip("/")) or None

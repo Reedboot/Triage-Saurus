@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ._helpers import az, build_endpoints, extract_ip_restrictions, safe_str
+from ._helpers import az, az_resource_show, build_endpoints, classify_network_access, extract_ip_restrictions, safe_str
 
 RESOURCE_TYPE = "Microsoft.EventHub/namespaces"
 
@@ -15,22 +15,30 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
 
     # Pre-fetch network rule sets for all namespaces
     network_rules_map: dict[str, dict[str, Any]] = {}
-    try:
-        for ns in raw:
-            ns_name = ns.get("name")
-            rg_name = ns.get("resourceGroup")
-            if ns_name and rg_name:
-                rules = az([
-                    "eventhubs", "namespace", "network-rule-set", "show",
-                    "--namespace-name", ns_name,
-                    "--resource-group", rg_name
-                ], subscription_id)
-                if rules:
-                    network_rules_map[ns_name] = rules[0] if isinstance(rules, list) else rules
-    except Exception:
-        pass
+    for ns in raw:
+        ns_name = ns.get("name")
+        rg_name = ns.get("resourceGroup")
+        if ns_name and rg_name:
+            rules = az([
+                "eventhubs", "namespace", "network-rule-set", "show",
+                "--namespace-name", ns_name,
+                "--resource-group", rg_name
+            ], subscription_id)
+            if rules:
+                network_rules_map[ns_name] = rules[0] if isinstance(rules, list) else rules
 
     for ns in raw:
+        list_props = ns.get("properties") or {}
+        needs_detail = not isinstance(list_props, dict) or any(
+            key not in list_props for key in ("publicNetworkAccess", "serviceBusEndpoint")
+        )
+        detailed = (
+            az_resource_show(ns.get("id", ""), subscription_id, runner=az)
+            if ns.get("id") and needs_detail
+            else None
+        )
+        if detailed:
+            ns = {**ns, **detailed}
         props = ns.get("properties") or ns
         endpoint_raw = props.get("serviceBusEndpoint", "")
         fqdn = safe_str(
@@ -39,7 +47,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
 
         sku = (ns.get("sku") or {}).get("name")
         ns_name = ns.get("name")
-        is_public, is_restricted, ip_restrictions = _classify_exposure(
+        is_public, is_restricted, ip_restrictions, exposure_class = _classify_exposure(
             props,
             network_rules_map.get(ns_name) if ns_name else None
         )
@@ -58,7 +66,8 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "maximum_throughput_units": props.get("maximumThroughputUnits", 0),
             "kafka_enabled": props.get("kafkaEnabled", False),
             "zone_redundant": props.get("zoneRedundant", False),
-            "public_network_access": props.get("publicNetworkAccess", "Enabled"),
+            "public_network_access": props.get("publicNetworkAccess"),
+            "exposure_class": exposure_class,
             "minimum_tls_version": props.get("minimumTlsVersion"),
             "local_auth_disabled": props.get("disableLocalAuth", False),
         }
@@ -85,9 +94,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     return results
 
 
-def _classify_exposure(props: dict[str, Any], network_rules: dict[str, Any] | None = None) -> tuple[int, int, list[str]]:
-    if props.get("publicNetworkAccess", "Enabled") == "Disabled":
-        return 0, 0, []
+def _classify_exposure(props: dict[str, Any], network_rules: dict[str, Any] | None = None) -> tuple[int, int, list[str], str]:
 
     # Check network rules from separate network-rule-set query first
     if network_rules:
@@ -101,9 +108,13 @@ def _classify_exposure(props: dict[str, Any], network_rules: dict[str, Any] | No
 
     if vnet_rules or ip_rules:
         cidrs = extract_ip_restrictions(ip_rules=ip_rules, vnet_rules=vnet_rules)
-        return 0, 1, cidrs
+        return 0, 1, cidrs, "ip_restricted"
 
-    return 1, 0, []
+    return classify_network_access(
+        props,
+        endpoint_present=bool(props.get("serviceBusEndpoint")),
+        network_acls={"ipRules": ip_rules, "virtualNetworkRules": vnet_rules},
+    )
 
 
 def _get_auth_methods(props: dict[str, Any]) -> list[str]:

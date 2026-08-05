@@ -4,7 +4,14 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ._helpers import az, build_endpoints, infer_sku, safe_str
+from ._helpers import (
+    az,
+    az_resource_show,
+    build_endpoints,
+    classify_network_access,
+    infer_sku,
+    safe_str,
+)
 
 RESOURCE_TYPE = "Microsoft.Kusto/clusters"
 
@@ -14,10 +21,22 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
 
     for cluster in raw:
+        list_props = cluster.get("properties") or {}
+        needs_detail = not isinstance(list_props, dict) or any(
+            key not in list_props
+            for key in ("publicNetworkAccess", "publicIPType", "uri", "dataIngestionUri")
+        )
+        detailed = (
+            az_resource_show(cluster.get("id", ""), subscription_id, runner=az)
+            if cluster.get("id") and needs_detail
+            else None
+        )
+        if detailed:
+            cluster = {**cluster, **detailed}
         props = cluster.get("properties") or {}
         fqdn = safe_str(props.get("uri"))
         ingest_uri = safe_str(props.get("dataIngestionUri"))
-        public_network_access = safe_str(props.get("publicNetworkAccess") or "Enabled")
+        public_network_access = safe_str(props.get("publicNetworkAccess"))
         public_ip_type = safe_str(props.get("publicIPType"))
 
         endpoint_entries: list[tuple[str | None, int, str]] = []
@@ -26,6 +45,10 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
         if ingest_uri:
             endpoint_entries.append((ingest_uri, 443, "https"))
         endpoints = build_endpoints(endpoint_entries)
+        is_public, is_restricted, ip_restrictions, exposure_class = classify_network_access(
+            props,
+            endpoint_present=bool(fqdn),
+        )
         results.append({
             "id": cluster["id"],
             "subscription_id": subscription_id,
@@ -35,9 +58,9 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "location": cluster.get("location"),
             "sku": infer_sku(cluster),
             "tags": json.dumps(cluster.get("tags") or {}),
-            "is_public": 1 if fqdn and public_network_access != "Disabled" else 0,
-            "is_restricted": 0,
-            "ip_restrictions": json.dumps([]),
+            "is_public": is_public,
+            "is_restricted": is_restricted,
+            "ip_restrictions": json.dumps(ip_restrictions),
             "endpoints": endpoints,
             "auth_methods": json.dumps(["aad"]),
             "fqdn": fqdn,
@@ -48,6 +71,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
                     "public_network_access": public_network_access,
                     "public_ip_type": public_ip_type,
                     "data_ingestion_uri": ingest_uri,
+                    "exposure_class": exposure_class,
                 },
             }),
         })

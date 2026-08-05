@@ -57,13 +57,13 @@ from Azure import redis_cache, event_hub, app_configuration, service_fabric, cog
 from Azure import data_factory, app_service_environment, app_insights, private_endpoint, traffic_manager
 from Azure import databricks, event_grid, kusto, logic_apps, search_service
 from Azure import machine_learning, private_link_service, purview, supplemental_services
-from Azure import front_door, firewall
+from Azure import cdn, front_door, firewall
 from Azure import network_security_group, route_table, public_ip, load_balancer, bastion_host
 from Azure import user_assigned_identity, virtual_machine, virtual_machine_scale_set, image
 from Azure import log_analytics_workspace, monitor_action_group, activity_log_alert
 from Azure import app_service_certificate, app_service_certificate_order
 from Azure._staged import BackfillJob, StagedRows
-from Azure._helpers import set_probe_enabled
+from Azure._helpers import canonical_azure_resource_type, set_probe_enabled
 import appgw_routing_map
 import apim_routing_map
 import private_dns_map
@@ -77,6 +77,7 @@ PROVIDERS = [
     ("App Gateways",            app_gateway.harvest),
     ("APIM",                    apim.harvest),
     ("Traffic Manager",         traffic_manager.harvest),
+    ("CDN Profiles",             cdn.harvest),
     ("Front Door",              front_door.harvest),
     # ── Compute ─────────────────────────────────────────────────────────
     ("App Service Environments",app_service_environment.harvest),
@@ -391,10 +392,18 @@ def _normalize_rows(result: Any) -> list[dict[str, Any]]:
     if isinstance(result, StagedRows):
         return result.core_rows
     if isinstance(result, dict):
-        return [result]
-    if isinstance(result, list):
-        return [row for row in result if row is not None]
-    raise TypeError(f"unexpected harvest result type: {type(result)!r}")
+        rows = [result]
+    elif isinstance(result, list):
+        rows = [row for row in result if row is not None]
+    else:
+        raise TypeError(f"unexpected harvest result type: {type(result)!r}")
+    normalized: list[dict[str, Any]] = []
+    for row in rows:
+        normalized.append({
+            **row,
+            "type": canonical_azure_resource_type(row.get("type")),
+        })
+    return normalized
 
 
 def _persist_rows(
@@ -607,6 +616,7 @@ def upsert_subscription(conn: sqlite3.Connection, sub: dict[str, Any]) -> None:
 
 def upsert_asset(conn: sqlite3.Connection, asset: dict[str, Any]) -> None:
     now = datetime.now(timezone.utc).isoformat()
+    asset = {**asset, "type": canonical_azure_resource_type(asset.get("type"))}
     conn.execute(
         """
         INSERT INTO provisioned_assets

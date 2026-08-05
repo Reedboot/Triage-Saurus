@@ -4,7 +4,13 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ._helpers import az, build_endpoints, extract_ip_restrictions, safe_str
+from ._helpers import (
+    az,
+    az_resource_show,
+    build_endpoints,
+    classify_network_access,
+    safe_str,
+)
 
 RESOURCE_TYPE = "Microsoft.CognitiveServices/accounts"
 
@@ -14,13 +20,25 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     results = []
 
     for acct in raw:
+        list_props = acct.get("properties") or {}
+        needs_detail = not isinstance(list_props, dict) or any(
+            key not in list_props
+            for key in ("publicNetworkAccess", "networkAcls", "privateEndpointConnections")
+        )
+        detailed = (
+            az_resource_show(acct.get("id", ""), subscription_id, runner=az)
+            if acct.get("id") and needs_detail
+            else None
+        )
+        if detailed:
+            acct = {**acct, **detailed}
         props = acct.get("properties") or {}
         endpoint = safe_str(
             props.get("endpoint", "").replace("https://", "").rstrip("/")
         ) or None
 
         kind = acct.get("kind", "")
-        is_public, is_restricted, ip_restrictions = _classify_exposure(props)
+        is_public, is_restricted, ip_restrictions, exposure_class = _classify_exposure(props)
 
         endpoints = build_endpoints([(endpoint, 443, "https")] if endpoint else [])
         auth_methods = json.dumps(_get_auth_methods(props))
@@ -28,8 +46,9 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
         extra = {
             "kind": kind,
             "sku": (acct.get("sku") or {}).get("name"),
-            "public_network_access": props.get("publicNetworkAccess", "Enabled"),
-            "network_default_action": (props.get("networkAcls") or {}).get("defaultAction", "Allow"),
+            "public_network_access": props.get("publicNetworkAccess"),
+            "network_default_action": (props.get("networkAcls") or {}).get("defaultAction"),
+            "exposure_class": exposure_class,
             "disable_local_auth": props.get("disableLocalAuth", False),
             "custom_subdomain": props.get("customSubDomainName"),
             "restore": props.get("restore", False),
@@ -85,24 +104,13 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     return results
 
 
-def _classify_exposure(props: dict[str, Any]) -> tuple[int, int, list[str]]:
-    if props.get("publicNetworkAccess", "Enabled") != "Enabled":
-        return 0, 0, []
-
-    network_acls = props.get("networkAcls") or {}
-    default_action = network_acls.get("defaultAction", "Allow")
-
-    if default_action == "Deny":
-        cidrs = extract_ip_restrictions(network_acls=network_acls)
-        return 0, 1, cidrs
-
-    ip_rules = network_acls.get("ipRules") or []
-    vnet_rules = network_acls.get("virtualNetworkRules") or []
-    if ip_rules or vnet_rules:
-        cidrs = extract_ip_restrictions(network_acls=network_acls)
-        return 0, 1, cidrs
-
-    return 1, 0, []
+def _classify_exposure(props: dict[str, Any]) -> tuple[int, int, list[str], str]:
+    endpoint = safe_str(props.get("endpoint"))
+    return classify_network_access(
+        props,
+        endpoint_present=bool(endpoint),
+        private_endpoint_connections=props.get("privateEndpointConnections") or [],
+    )
 
 
 def _get_auth_methods(props: dict[str, Any]) -> list[str]:

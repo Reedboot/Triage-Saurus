@@ -355,7 +355,7 @@
   }
 
   async function loadPreview(subId) {
-    const resp = await fetch(`/${encodeURIComponent(subId)}/diagram`, {
+    const resp = await fetch(`/api/subscriptions/${encodeURIComponent(subId)}/diagram`, {
       headers: { Accept: 'application/json' },
     });
     const payload = await resp.json();

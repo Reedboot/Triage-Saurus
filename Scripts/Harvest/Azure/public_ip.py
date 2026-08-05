@@ -20,10 +20,15 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
         subscription_id,
         RESOURCE_TYPE,
         fqdn_fn=_fqdn,
-        is_public_fn=lambda resource: True,
+        # A public IP is an address resource, not an internet-facing service.
+        # Its exposure is determined by the resource that consumes it.
+        is_public_fn=lambda resource: False,
         extra_fn=lambda resource: {
             "ip_address": (resource.get("properties") or {}).get("ipAddress"),
             "allocation_method": ((resource.get("properties") or {}).get("publicIPAllocationMethod")),
             "idle_timeout_minutes": (resource.get("properties") or {}).get("idleTimeoutInMinutes"),
+            "exposure_class": "public_ip_association",
+            "direction": "association",
+            "purpose": "public address association; exposure determined by consumer",
         },
     )

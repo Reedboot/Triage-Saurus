@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ._helpers import az, build_endpoints, extract_ip_restrictions, safe_str
+from ._helpers import az, az_resource_show, build_endpoints, extract_ip_restrictions, safe_str
 
 RESOURCE_TYPE = "Microsoft.KeyVault/vaults"
 
@@ -14,6 +14,17 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     results = []
 
     for kv in raw:
+        list_props = kv.get("properties") or {}
+        needs_detail = "properties" not in kv or (bool(list_props) and (
+            "networkAcls" not in list_props or "publicNetworkAccess" not in list_props
+        ))
+        detailed = (
+            az_resource_show(kv.get("id", ""), subscription_id, runner=az)
+            if kv.get("id") and needs_detail
+            else None
+        )
+        if detailed:
+            kv = {**kv, **detailed}
         props = kv.get("properties") or kv
         network_acls = _get_network_acls(props)
         vault_uri = props.get("vaultUri")

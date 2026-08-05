@@ -446,13 +446,13 @@ def test_apim_routing_targets_render_explicit_backend_edge():
 def test_apim_service_fabric_backend_routes_to_cluster_load_balancer():
     rows = [
         (
-            "core-prodyellow-api-uksouth",
+            "main-yellow-api-uksouth",
             "microsoft.apimanagement/service",
             "rg-api",
-            "core-prodyellow-api-uksouth.azure-api.net",
+            "main-yellow-api-uksouth.azure-api.net",
             True,
             "",
-            "/subscriptions/000/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/core-prodyellow-api-uksouth",
+            "/subscriptions/000/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/main-yellow-api-uksouth",
             False,
             None,
             False,
@@ -465,11 +465,11 @@ def test_apim_service_fabric_backend_routes_to_cluster_load_balancer():
         (
             "stock",
             "microsoft.network/loadbalancers",
-            "core-prodyellow-sfha-uksouth",
+            "main-yellow-sfha-uksouth",
             "",
             False,
             "",
-            "/subscriptions/000/resourceGroups/core-prodyellow-sfha-uksouth/providers/Microsoft.Network/loadBalancers/stock",
+            "/subscriptions/000/resourceGroups/main-yellow-sfha-uksouth/providers/Microsoft.Network/loadBalancers/stock",
             False,
             None,
             False,
@@ -484,17 +484,17 @@ def test_apim_service_fabric_backend_routes_to_cluster_load_balancer():
     diagram = _build_ingress_diagram(
         rows,
         apim_route_map={
-            "core-prodyellow-api-uksouth": [
-                "https://core-prodyellow-sfha-uksouth.cbinnovation.uk:19080",
+            "main-yellow-api-uksouth": [
+                "https://main-yellow-sfha-uksouth.cbinnovation.uk:19080",
             ],
         },
         apim_backend_rows=[
             {
-                "apim_name": "core-prodyellow-api-uksouth",
-                "backend_id": "core-prodyellow-sfha",
-                "title": "core-prodyellow-sfha",
+                "apim_name": "main-yellow-api-uksouth",
+                "backend_id": "main-yellow-sfha",
+                "title": "main-yellow-sfha",
                 "description": "Service Fabric backend",
-                "url": "https://core-prodyellow-sfha-uksouth.cbinnovation.uk:19080",
+                "url": "https://main-yellow-sfha-uksouth.cbinnovation.uk:19080",
                 "protocol": "http",
             },
         ],
@@ -502,10 +502,10 @@ def test_apim_service_fabric_backend_routes_to_cluster_load_balancer():
     mermaid = diagram["mermaid"]
 
     backend_id = _sanitise_node_id(
-        "core-prodyellow-api-uksouth::core-prodyellow-sfha"
+        "main-yellow-api-uksouth::main-yellow-sfha"
     )
     load_balancer_id = _sanitise_node_id(
-        "core-prodyellow-sfha-uksouth_stock"
+        "main-yellow-sfha-uksouth_stock"
     )
     assert f"{backend_id} --> {load_balancer_id}" in mermaid
 

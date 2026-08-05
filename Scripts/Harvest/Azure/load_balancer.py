@@ -42,6 +42,36 @@ def _extract_frontend_subnet_ids(resource: dict[str, Any]) -> list[str]:
     return found
 
 
+def _extract_inbound_nat_rules(resource: dict[str, Any]) -> list[dict[str, Any]]:
+    props = resource.get("properties") or {}
+    rules: list[dict[str, Any]] = []
+    for rule in props.get("inboundNatRules") or []:
+        rule_props = rule.get("properties") if isinstance(rule, dict) else {}
+        if not isinstance(rule_props, dict):
+            rule_props = {}
+        frontend = rule_props.get("frontendIPConfiguration") or {}
+        backend = rule_props.get("backendIPConfiguration") or {}
+        rules.append(
+            {
+                "id": safe_str(rule.get("id") if isinstance(rule, dict) else ""),
+                "name": safe_str(rule.get("name") if isinstance(rule, dict) else ""),
+                "frontend_public_ip_id": safe_str(
+                    (frontend.get("properties") or {}).get("publicIPAddress", {}).get("id")
+                    if isinstance(frontend, dict)
+                    else ""
+                ),
+                "frontend_port": rule_props.get("frontendPort"),
+                "backend_port": rule_props.get("backendPort"),
+                "backend_ip_configuration_id": safe_str(
+                    backend.get("id") if isinstance(backend, dict) else backend
+                ),
+                "protocol": safe_str(rule_props.get("protocol")),
+                "enable_floating_ip": bool(rule_props.get("enableFloatingIP")),
+            }
+        )
+    return rules
+
+
 def _service_fabric_node_types(
     routing_targets: list[dict[str, str]], resource_group: str | None
 ) -> list[str]:
@@ -162,6 +192,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
         frontend_subnet_ids = _extract_frontend_subnet_ids(detailed)
         props = detailed.get("properties") or {}
         routing_targets = _extract_routing_targets(detailed)
+        inbound_nat_rules = _extract_inbound_nat_rules(detailed)
         node_types = _service_fabric_node_types(routing_targets, resource_group)
         extra = {
             "frontend_ip_configuration_count": len(props.get("frontendIPConfigurations") or []),
@@ -179,6 +210,10 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
                 else None
             ),
             "service_fabric_node_types": node_types,
+            "inbound_nat_rules": inbound_nat_rules,
+            "exposure_class": "public_edge" if public_ip_ids else "private",
+            "direction": "inbound" if public_ip_ids else "internal",
+            "purpose": "load balancer frontend" if public_ip_ids else "internal load balancing",
         }
 
         results.append(
