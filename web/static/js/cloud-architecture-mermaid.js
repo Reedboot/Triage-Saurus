@@ -1931,6 +1931,50 @@ function isClusterDetails(data) {
   );
 }
 
+function buildAksIngressServicesSection(data) {
+  if (!isAksClusterDetails(data)) return "";
+  const services = Array.isArray(data?.ingress_services) ? data.ingress_services : [];
+  if (!services.length) {
+    return `
+      <div class="cloud-arch-modal-section">
+        <div class="cloud-arch-modal-section-title">
+          <span class="cloud-arch-modal-section-icon">☸️</span>
+          AKS Ingress Services
+        </div>
+        <div class="cloud-arch-modal-empty">No ingress-backed services were found for this cluster.</div>
+      </div>
+    `;
+  }
+  const rows = services.map((service) => `
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:6px 8px;vertical-align:top;"><strong>${escapeHtml(normalizeModalText(service.name || "—"))}</strong></td>
+      <td style="padding:6px 8px;vertical-align:top;"><code>${escapeHtml(normalizeModalText(service.namespace || "default"))}</code></td>
+      <td style="padding:6px 8px;vertical-align:top;">${escapeHtml(normalizeModalText(service.ingress_name || "—"))}</td>
+      <td style="padding:6px 8px;vertical-align:top;">${escapeHtml(normalizeModalText(service.host || "—"))}</td>
+      <td style="padding:6px 8px;vertical-align:top;">${escapeHtml(normalizeModalText(service.path || "/"))}</td>
+      <td style="padding:6px 8px;vertical-align:top;">${escapeHtml(normalizeModalText(service.port || "—"))}</td>
+    </tr>
+  `).join("");
+  return `
+    <div class="cloud-arch-modal-section">
+      <div class="cloud-arch-modal-section-title">
+        <span class="cloud-arch-modal-section-icon">☸️</span>
+        AKS Ingress Services
+      </div>
+      <div style="overflow:auto;border:1px solid var(--border);border-radius:8px;">
+        <table style="width:100%;border-collapse:collapse;font-size:0.78rem;">
+          <thead>
+            <tr>
+              ${["Service", "Namespace", "Ingress", "Host", "Path", "Port"].map((label) => `<th style="padding:6px 8px;text-align:left;background:var(--bg-base);border-bottom:1px solid var(--border);">${label}</th>`).join("")}
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
 function collectPublicIps(data) {
   const candidates = [
     data?.public_ip,
@@ -2099,7 +2143,9 @@ function buildAppGatewayListenerTable(data) {
     const urlPath = firstNonEmpty(item.url_path, item.path, "/*");
     const backendPool = firstNonEmpty(item.backend_pool_name, item.backend_pool, "—");
     const wafPolicy = firstNonEmpty(item.waf_policy_name, item.waf_policy, "—");
-    const key = [listenerName, protocol, urlPath, backendPool, wafPolicy].join("::").toLowerCase();
+    const rawExposure = firstNonEmpty(item.exposure_level, item.exposure, item.public ? "direct_public" : "private");
+    const exposure = /public/i.test(String(rawExposure)) ? "Public" : "Private";
+    const key = [listenerName, protocol, urlPath, backendPool, wafPolicy, exposure].join("::").toLowerCase();
     if (!grouped.has(key)) {
       grouped.set(key, {
         listenerName,
@@ -2107,6 +2153,7 @@ function buildAppGatewayListenerTable(data) {
         urlPath,
         backendPool,
         wafPolicy,
+        exposure,
         targets: [],
         targetKeys: new Set(),
       });
@@ -2151,7 +2198,7 @@ function buildAppGatewayListenerTable(data) {
         <table style="width:100%;border-collapse:collapse;font-size:0.84rem;">
           <thead>
             <tr>
-              ${["Listener", "Protocol", "URL Path", "Backend Pool", "Backend Targets", "WAF Policy"].map(
+              ${["Listener", "Protocol", "Exposure", "URL Path", "Backend Pool", "Backend Targets", "WAF Policy"].map(
                 (col) => `<th style="padding:8px 10px;text-align:left;background:var(--bg-base);border-bottom:1px solid var(--border);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.03em;color:var(--text-muted);">${escapeHtml(col)}</th>`
               ).join("")}
             </tr>
@@ -2161,6 +2208,7 @@ function buildAppGatewayListenerTable(data) {
               <tr style="border-bottom:1px solid var(--border);">
                 <td style="padding:8px 10px;vertical-align:top;"><strong>${escapeHtml(row.listenerName)}</strong></td>
                 <td style="padding:8px 10px;vertical-align:top;">${escapeHtml(row.protocol)}</td>
+                <td style="padding:8px 10px;vertical-align:top;"><span class="cloud-arch-modal-badge ${row.exposure === "Public" ? "cloud-arch-modal-badge--danger" : "cloud-arch-modal-badge--success"}">${row.exposure}</span></td>
                 <td style="padding:8px 10px;vertical-align:top;"><code>${escapeHtml(row.urlPath)}</code></td>
                 <td style="padding:8px 10px;vertical-align:top;"><code>${escapeHtml(row.backendPool)}</code></td>
                 <td style="padding:8px 10px;vertical-align:top;">${renderTargetList(row.targets)}</td>
@@ -3064,6 +3112,16 @@ function renderModalContent(data) {
     });
   }
 
+  const aksIngressServicesSection = buildAksIngressServicesSection(data);
+  if (aksIngressServicesSection) {
+    sections.push({
+      title: "",
+      icon: "",
+      fields: [],
+      __rawHtml: aksIngressServicesSection,
+    });
+  }
+
   const listenerTable = isAppGatewayDetails(data) ? buildAppGatewayListenerTable(data) : "";
   if (listenerTable) {
     sections.push({
@@ -3462,6 +3520,14 @@ if (formEl) {
 
 resourceGroupSelectEl?.addEventListener("change", () => {
   if (activeViewMode === "mermaid") {
+    const selectedResourceGroup = resourceGroupSelectEl.value.trim();
+    if (!selectedResourceGroup) {
+      const subscription = currentMermaidSubscriptionId || subscriptionInput?.value?.trim() || "";
+      if (subscription) {
+        loadMermaidView(subscription);
+      }
+      return;
+    }
     renderSelectedResourceGroup(resourceGroupSelectEl.value).catch((err) => {
       console.error("[cloud-architecture] Resource-group load failed:", err);
       if (mermaidRootEl) {

@@ -2654,7 +2654,7 @@ class TestAppGatewayRewriteHarvest:
         }
         backend = {
             "name": "account-identification-api-backend-aks",
-            "url": "https://production-account-identification.internal.cbinnovation.uk",
+            "url": "https://production-account-identification.internal.car.uk",
         }
 
         monkeypatch.setattr(
@@ -2675,13 +2675,13 @@ class TestAppGatewayRewriteHarvest:
         assert operations == []
         assert route is not None
         assert route["backend_id"] == "account-identification-api-backend-aks"
-        assert route["backend_url"] == "https://production-account-identification.internal.cbinnovation.uk"
+        assert route["backend_url"] == "https://production-account-identification.internal.car.uk"
         assert route["service_url"] is None
 
     def test_apim_operation_policy_resolves_non_sf_backend_id_to_url(self, monkeypatch):
         backend = {
             "name": "account-identification-api-backend-aks",
-            "url": "https://production-account-identification.internal.cbinnovation.uk",
+            "url": "https://production-account-identification.internal.car.uk",
         }
 
         monkeypatch.setattr(
@@ -2720,7 +2720,7 @@ class TestAppGatewayRewriteHarvest:
 
         assert row is not None
         assert row["backend_id"] == "account-identification-api-backend-aks"
-        assert row["backend_url"] == "https://production-account-identification.internal.cbinnovation.uk"
+        assert row["backend_url"] == "https://production-account-identification.internal.car.uk"
 
     def test_apim_route_bundle_extracts_service_fabric_policy_attrs(self, monkeypatch):
         service = {

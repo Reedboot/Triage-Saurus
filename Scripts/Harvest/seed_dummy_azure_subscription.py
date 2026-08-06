@@ -1013,6 +1013,242 @@ def _build_assets(brand: str, subscription_id: str | None = None) -> list[AssetS
             tags={"brand": brand, "tier": "network"},
             raw_json={"properties": {"privateLinkServiceConnections": [{"name": "storage", "properties": {"privateLinkServiceId": f"st{brand}orders"}}]}},
         ),
+        AssetSpec(
+            key="container_apps_env",
+            name=f"cae-{brand}-apps",
+            resource_group=rg["app"],
+            arm_type="Microsoft.App/managedEnvironments",
+            location="uksouth",
+            is_public=0,
+            is_restricted=1,
+            tags={"brand": brand, "tier": "application"},
+            raw_json={
+                "properties": {
+                    "publicNetworkAccess": "Disabled",
+                    "vnetConfiguration": {
+                        "infrastructureSubnetId": f"/subscriptions/{subscription_id}/resourceGroups/{rg['network']}/providers/Microsoft.Network/virtualNetworks/vnet-{brand}-core/subnets/snet-{brand}-app"
+                    },
+                    "_extra": {
+                        "platform_managed": True,
+                        "compute_scope": "managed",
+                        "managed_service": "Container Apps",
+                    },
+                }
+            },
+        ),
+        AssetSpec(
+            key="container_app",
+            name=f"ca-{brand}-catalog",
+            resource_group=rg["app"],
+            arm_type="Microsoft.App/containerApps",
+            location="uksouth",
+            fqdn=f"ca-{brand}-catalog.{brand}-retail.internal",
+            is_public=1,
+            tags={"brand": brand, "tier": "application"},
+            raw_json={
+                "properties": {
+                    "managedEnvironmentId": _arm_id(subscription_id, rg["app"], "Microsoft.App/managedEnvironments", f"cae-{brand}-apps"),
+                    "configuration": {
+                        "ingress": {
+                            "external": True,
+                            "targetPort": 8080,
+                            "fqdn": f"ca-{brand}-catalog.{brand}-retail.internal",
+                        }
+                    },
+                    "_extra": {
+                        "platform_managed": True,
+                        "compute_scope": "managed",
+                        "managed_service": "Container Apps",
+                    },
+                }
+            },
+        ),
+        AssetSpec(
+            key="container_group",
+            name=f"aci-{brand}-jobs",
+            resource_group=rg["app"],
+            arm_type="Microsoft.ContainerInstance/containerGroups",
+            location="uksouth",
+            is_public=0,
+            is_restricted=1,
+            tags={"brand": brand, "tier": "application"},
+            raw_json={
+                "properties": {
+                    "ipAddress": {"type": "Private", "ip": "10.40.4.25"},
+                    "_extra": {
+                        "platform_managed": True,
+                        "compute_scope": "managed",
+                        "managed_service": "Container Instances",
+                    },
+                }
+            },
+        ),
+        AssetSpec(
+            key="synapse",
+            name=f"syn-{brand}-analytics",
+            resource_group=rg["data"],
+            arm_type="Microsoft.Synapse/workspaces",
+            location="uksouth",
+            fqdn=f"syn-{brand}-analytics.dev.azuresynapse.net",
+            is_public=0,
+            is_restricted=1,
+            tags={"brand": brand, "tier": "data"},
+            raw_json={
+                "properties": {
+                    "publicNetworkAccess": "Disabled",
+                    "connectivityEndpoints": {
+                        "web": f"https://web.azuresynapse.net/?workspace=%2Fsubscriptions%2F{subscription_id}%2FresourceGroups%2F{rg['data']}%2Fproviders%2FMicrosoft.Synapse%2Fworkspaces%2Fsyn-{brand}-analytics"
+                    },
+                    "_extra": {
+                        "platform_managed": True,
+                        "compute_scope": "managed",
+                        "managed_service": "Synapse",
+                    },
+                }
+            },
+        ),
+        AssetSpec(
+            key="synapse_spark",
+            name=f"spark-{brand}-etl",
+            resource_group=rg["data"],
+            arm_type="Microsoft.Synapse/workspaces/bigDataPools",
+            location="uksouth",
+            is_public=0,
+            tags={"brand": brand, "tier": "data"},
+            raw_json={
+                "properties": {
+                    "workspaceName": f"syn-{brand}-analytics",
+                    "nodeSizeFamily": "MemoryOptimized",
+                    "_extra": {
+                        "platform_managed": True,
+                        "compute_scope": "ephemeral",
+                        "managed_service": "Synapse",
+                    },
+                }
+            },
+        ),
+        AssetSpec(
+            key="batch",
+            name=f"batch-{brand}-jobs",
+            resource_group=rg["app"],
+            arm_type="Microsoft.Batch/batchAccounts",
+            location="uksouth",
+            fqdn=f"batch.{brand}-retail.internal",
+            is_public=0,
+            is_restricted=1,
+            tags={"brand": brand, "tier": "application"},
+            raw_json={
+                "properties": {
+                    "publicNetworkAccess": "Disabled",
+                    "_extra": {
+                        "platform_managed": True,
+                        "compute_scope": "managed",
+                        "managed_service": "Azure Batch",
+                    },
+                }
+            },
+        ),
+        AssetSpec(
+            key="batch_pool",
+            name=f"pool-{brand}-workers",
+            resource_group=rg["app"],
+            arm_type="Microsoft.Batch/batchAccounts/pools",
+            location="uksouth",
+            is_public=0,
+            tags={"brand": brand, "tier": "application"},
+            raw_json={
+                "properties": {
+                    "vmSize": "Standard_D4s_v5",
+                    "targetDedicatedNodes": 3,
+                    "_extra": {
+                        "platform_managed": True,
+                        "compute_scope": "ephemeral",
+                        "managed_service": "Azure Batch",
+                    },
+                }
+            },
+        ),
+        AssetSpec(
+            key="hdinsight",
+            name=f"hd-{brand}-analytics",
+            resource_group=rg["data"],
+            arm_type="Microsoft.HDInsight/clusters",
+            location="uksouth",
+            is_public=0,
+            is_restricted=1,
+            tags={"brand": brand, "tier": "data"},
+            raw_json={
+                "properties": {
+                    "clusterType": "Spark",
+                    "connectivityEndpoints": [{"location": f"https://{brand}-hdinsight.azurehdinsight.net"}],
+                    "_extra": {
+                        "platform_managed": True,
+                        "compute_scope": "managed",
+                        "managed_service": "HDInsight",
+                    },
+                }
+            },
+        ),
+        AssetSpec(
+            key="spring",
+            name=f"spring-{brand}-apps",
+            resource_group=rg["app"],
+            arm_type="Microsoft.AppPlatform/Spring",
+            location="uksouth",
+            fqdn=f"{brand}-spring.azuremicroservices.io",
+            is_public=1,
+            tags={"brand": brand, "tier": "application"},
+            raw_json={
+                "properties": {
+                    "publicNetworkAccess": "Enabled",
+                    "_extra": {
+                        "platform_managed": True,
+                        "compute_scope": "managed",
+                        "managed_service": "Azure Spring Apps",
+                    },
+                }
+            },
+        ),
+        AssetSpec(
+            key="avs",
+            name=f"avs-{brand}-privatecloud",
+            resource_group=rg["app"],
+            arm_type="Microsoft.AVS/privateClouds",
+            location="uksouth",
+            is_public=0,
+            is_restricted=1,
+            tags={"brand": brand, "tier": "application"},
+            raw_json={
+                "properties": {
+                    "internet": {"mode": "Disabled"},
+                    "_extra": {
+                        "platform_managed": True,
+                        "compute_scope": "dedicated_private_cloud",
+                        "managed_service": "Azure VMware Solution",
+                    },
+                }
+            },
+        ),
+        AssetSpec(
+            key="sf_managed",
+            name=f"sfmc-{brand}-platform",
+            resource_group=rg["app"],
+            arm_type="Microsoft.ServiceFabric/managedClusters",
+            location="uksouth",
+            is_public=0,
+            is_restricted=1,
+            tags={"brand": brand, "tier": "application"},
+            raw_json={
+                "properties": {
+                    "publicNetworkAccess": "Disabled",
+                    "_extra": {
+                        "platform_managed": True,
+                        "compute_scope": "managed",
+                        "managed_service": "Service Fabric Managed Clusters",
+                    },
+                }
+            },
+        ),
     ]
 
 
@@ -1028,6 +1264,9 @@ def _build_rows(subscription_id: str, assets: list[AssetSpec], tenant_id: str, d
     asset_rows: list[dict[str, Any]] = []
     for spec in assets:
         raw_json = dict(spec.raw_json or {})
+        nested_extra = (raw_json.get("properties") or {}).pop("_extra", None)
+        if isinstance(nested_extra, dict):
+            raw_json.setdefault("_extra", {}).update(nested_extra)
         raw_json.setdefault("id", _arm_id(subscription_id, spec.resource_group, spec.arm_type, spec.name))
         raw_json.setdefault("name", spec.name)
         raw_json.setdefault("resourceGroup", spec.resource_group)
@@ -2013,6 +2252,18 @@ def seed_dummy_subscription(db_path: Path, subscription_id: str, display_name: s
             ("sql_server", "cosmos", "pairs_with"),
             ("cosmos", "cosmos_db", "contains"),
             ("cosmos_db", "cosmos_container", "contains"),
+            ("appgw_edge", "container_app", "routes_to"),
+            ("container_apps_env", "container_app", "hosts"),
+            ("container_app", "subnet_app", "runs_in"),
+            ("container_group", "subnet_app", "runs_in"),
+            ("synapse", "synapse_spark", "contains"),
+            ("synapse", "subnet_data", "runs_in"),
+            ("batch", "batch_pool", "contains"),
+            ("batch", "subnet_app", "runs_in"),
+            ("hdinsight", "subnet_data", "runs_in"),
+            ("spring", "subnet_app", "runs_in"),
+            ("avs", "subnet_app", "runs_in"),
+            ("sf_managed", "subnet_app", "resides_in"),
             ("aks_ingress", "aks_nodepool", "routes_to"),
             ("kv", "appcfg", "stores_config_for"),
         ]

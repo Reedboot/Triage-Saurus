@@ -17,7 +17,7 @@ BANNED_TERMS = {
     "cop",
     "payuk",
     "clearbank",
-    "cbinovation",
+    "cars",
     "sts",
     "previewaks",
     "externalaks",
@@ -64,7 +64,7 @@ def test_seed_dummy_azure_subscription_populates_cozo(tmp_path):
         assets = conn.execute(
             "SELECT name, resource_group, COALESCE(fqdn, '') AS fqdn FROM provisioned_assets ORDER BY name"
         ).fetchall()
-        assert len(assets) >= 44
+        assert len(assets) >= 55
         names = {row["name"] for row in assets}
         assert {
             "bas-marketlane-core",
@@ -92,6 +92,17 @@ def test_seed_dummy_azure_subscription_populates_cozo(tmp_path):
             "snet-marketlane-aks",
             "snet-marketlane-ase",
             "snet-marketlane-appsvc",
+            "cae-marketlane-apps",
+            "ca-marketlane-catalog",
+            "aci-marketlane-jobs",
+            "syn-marketlane-analytics",
+            "spark-marketlane-etl",
+            "batch-marketlane-jobs",
+            "pool-marketlane-workers",
+            "hd-marketlane-analytics",
+            "spring-marketlane-apps",
+            "avs-marketlane-privatecloud",
+            "sfmc-marketlane-platform",
         }.issubset(names)
         assert "waf-marketlane-edge" not in names
 
@@ -104,6 +115,30 @@ def test_seed_dummy_azure_subscription_populates_cozo(tmp_path):
             ("agw-marketlane-edge",),
         ).fetchone()
         assert tuple(app_gateway) == ("WAF_v2", "Prevention")
+        managed = conn.execute(
+            """
+            SELECT name, json_extract(raw_json, '$._extra.platform_managed'),
+                   json_extract(raw_json, '$._extra.compute_scope')
+            FROM provisioned_assets
+            WHERE name IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ORDER BY name
+            """,
+            (
+                "cae-marketlane-apps",
+                "ca-marketlane-catalog",
+                "aci-marketlane-jobs",
+                "syn-marketlane-analytics",
+                "spark-marketlane-etl",
+                "batch-marketlane-jobs",
+                "pool-marketlane-workers",
+                "hd-marketlane-analytics",
+                "spring-marketlane-apps",
+                "avs-marketlane-privatecloud",
+                "sfmc-marketlane-platform",
+            ),
+        ).fetchall()
+        assert len(managed) == 11
+        assert all(row[1] == 1 for row in managed)
 
         conn_count = conn.execute("SELECT COUNT(*) FROM resource_connections").fetchone()[0]
         assert conn_count >= 40

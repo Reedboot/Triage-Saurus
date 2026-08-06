@@ -2358,7 +2358,7 @@ class TestIngressDiagramGeneration:
                 0,
                 None,
                 json.dumps([
-                    {"target": "production-authentication-totp.internal.cbinnovation.uk", "name": "production-authentication-totp.internal.cbinnovation.uk"}
+                    {"target": "production-authentication-totp.internal.car.uk", "name": "production-authentication-totp.internal.car.uk"}
                 ]),
                 json.dumps({}),
                 None,
@@ -2387,7 +2387,7 @@ class TestIngressDiagramGeneration:
                 "production-shared-aks-uksouth",
                 "default",
                 "authentication-totp-ingress",
-                "production-authentication-totp.internal.cbinnovation.uk",
+                "production-authentication-totp.internal.car.uk",
                 "/*",
                 "Internal",
                 "authentication-totp",
@@ -2408,14 +2408,14 @@ class TestIngressDiagramGeneration:
             and "service" in str(value.get("arm_type") or "").lower()
         )
         assert "Internet -->" not in mermaid, mermaid
-        assert "production-authentication-totp.internal.cbinnovation.uk" in mermaid, mermaid
+        assert "production-authentication-totp.internal.car.uk" in mermaid, mermaid
         assert "authentication-totp 🔒" not in mermaid, mermaid
         assert "authentication-totp" in mermaid, mermaid
         assert any(
             "-->" in line and "aks_ingress" in line and "authentication_totp_80" in line
             for line in mermaid.splitlines()
         ), mermaid
-        assert service_node["ingress_host"] == "production-authentication-totp.internal.cbinnovation.uk", service_node
+        assert service_node["ingress_host"] == "production-authentication-totp.internal.car.uk", service_node
         assert service_node["ingress_path"] == "/*", service_node
 
     def test_internal_aks_ingress_connects_to_service_in_overview(self):
@@ -2446,7 +2446,7 @@ class TestIngressDiagramGeneration:
                 "production-shared-aks-uksouth",
                 "prodyellow-account-products",
                 "account-identification-ingress",
-                "prodyellow-account-identification.internal.cbinnovation.uk",
+                "prodyellow-account-identification.internal.car.uk",
                 "/",
                 "Internal",
                 "account-identification-service",
@@ -4676,13 +4676,13 @@ class TestIngressDiagramGeneration:
             {
                 "apim_name": "main-api-uksouth",
                 "backend_id": "production-eventgrid-bridge",
-                "title": "production-eventgrid-bridge.internal.cbinnovation.uk",
-                "url": "https://production-eventgrid-bridge.internal.cbinnovation.uk/",
+                "title": "production-eventgrid-bridge.internal.car.uk",
+                "url": "https://production-eventgrid-bridge.internal.car.uk/",
             }
         ]
         apim_route_map = {
             "main-api-uksouth": [
-                "https://production-eventgrid-bridge.internal.cbinnovation.uk/",
+                "https://production-eventgrid-bridge.internal.car.uk/",
             ]
         }
 
@@ -4699,11 +4699,11 @@ class TestIngressDiagramGeneration:
             if value.get("arm_type") == "APIM Backend Target"
         )
 
-        assert "production-eventgrid-bridge.internal.cbinnovation.uk 🔒" not in mermaid, mermaid
-        assert "production-eventgrid-bridge.internal.cbinnovation.uk</div>" in mermaid, mermaid
-        assert "rg_api_cbuk_core_production_api_uksouth__production_eventgrid_bridge_internal_cbinnovation_uk" in mermaid, mermaid
-        assert target.get("title") == "production-eventgrid-bridge.internal.cbinnovation.uk", target
-        assert target.get("resources", [{}])[0].get("name") == "main-api-uksouth::production-eventgrid-bridge.internal.cbinnovation.uk", target
+        assert "production-eventgrid-bridge.internal.car.uk 🔒" not in mermaid, mermaid
+        assert "production-eventgrid-bridge.internal.car.uk</div>" in mermaid, mermaid
+        assert "rg_api_uk_core_production_api_uksouth__production_eventgrid_bridge_internal_car_uk" in mermaid, mermaid
+        assert target.get("title") == "production-eventgrid-bridge.internal.car.uk", target
+        assert target.get("resources", [{}])[0].get("name") == "main-api-uksouth::production-eventgrid-bridge.internal.car.uk", target
 
     def test_marketlane_apim_backend_targets_use_backend_id_and_apim_subnet(self):
         """APIM backend targets should keep the backend id label and inherit APIM subnet placement."""
@@ -7216,10 +7216,10 @@ class TestCloudPosture:
 
         rows = [
             (
-                "production-fincrime-casemanagementorchestrator-api",
+                "production-broken-problemorchestrator-api",
                 "APIM backend target",
                 "rg-api",
-                "production-fincrime-casemanagementorchestrator-api.internal.cbinnovation.uk",
+                "production-broken-problemorchestrator-api.internal.car.uk",
                 0,
                 "Standard",
                 "backend-id",
@@ -7229,8 +7229,8 @@ class TestCloudPosture:
                 None,
                 json.dumps([
                     {
-                        "target": "production-fincrime-casemanagementorchestrator-api.internal.cbinnovation.uk",
-                        "name": "production-fincrime-casemanagementorchestrator-api.internal.cbinnovation.uk",
+                        "target": "production-broken-problemorchestrator-api.internal.car.uk",
+                        "name": "production-broken-problemorchestrator-api.internal.car.uk",
                     }
                 ]),
                 json.dumps({"properties": {}}),
@@ -11222,9 +11222,9 @@ class TestCloudPosture:
             (
                 "main-api-uksouth",
                 "production-eventgrid-bridge",
-                "production-eventgrid-bridge.internal.cbinnovation.uk",
+                "production-eventgrid-bridge.internal.car.uk",
                 "EventGrid bridge backend",
-                "https://production-eventgrid-bridge.internal.cbinnovation.uk/",
+                "https://production-eventgrid-bridge.internal.car.uk/",
                 "https",
                 "sub-1",
             ),
@@ -11241,8 +11241,8 @@ class TestCloudPosture:
                 "bridge-api",
                 "Bridge API",
                 "/bridge",
-                "https://production-eventgrid-bridge.internal.cbinnovation.uk/",
-                "https://production-eventgrid-bridge.internal.cbinnovation.uk/",
+                "https://production-eventgrid-bridge.internal.car.uk/",
+                "https://production-eventgrid-bridge.internal.car.uk/",
                 1,
                 "sub-1",
             ),
@@ -11254,8 +11254,8 @@ class TestCloudPosture:
         resp = client.get(
             "/api/cloud/resource-details",
             query_string={
-                "id": "cbuk_core_production_api_uksouth_production_eventgrid_bridge_internal_cbinnovation_uk",
-                "name": "production-eventgrid-bridge.internal.cbinnovation.uk",
+                "id": "uk_core_production_api_uksouth_production_eventgrid_bridge_internal_car_uk",
+                "name": "production-eventgrid-bridge.internal.car.uk",
                 "resource_group": "main-api-uksouth",
                 "type": "APIM Backend Target",
                 "sub": "sub-1",
@@ -11265,7 +11265,7 @@ class TestCloudPosture:
         assert resp.status_code == 200, resp.get_data(as_text=True)
         data = resp.get_json()
         assert data["type_label"] == "APIM Backend Target"
-        assert data["name"] == "production-eventgrid-bridge.internal.cbinnovation.uk"
+        assert data["name"] == "production-eventgrid-bridge.internal.car.uk"
         assert data["parent_resource"]["name"] == "main-api-uksouth"
         assert data["configuration"]["backend_id"] == "production-eventgrid-bridge"
         assert data["network"]["subnet"] is None or isinstance(data["network"]["subnet"], str)
@@ -14044,7 +14044,7 @@ class TestCloudPosture:
                 "Microsoft.Network/applicationGateways",
                 "uksouth",
                 "WAF_v2",
-                "napier-events.mydomain.co.uk",
+                "red-events.mydomain.co.uk",
                 1,
                 "active",
                 None,
@@ -14098,13 +14098,13 @@ class TestCloudPosture:
                 "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.Network/applicationGateways/appgw-one",
                 "rg-api",
                 "rule-1",
-                "napier-events.mydomain.co.uk_public",
-                "napier-events.mydomain.co.uk",
+                "red-events.mydomain.co.uk_public",
+                "red-events.mydomain.co.uk",
                 "HTTPS",
                 "/*",
                 "apim-gateway",
                 json.dumps(["production-api-uksouth.azure-api.net"]),
-                "napier-events",
+                "red-events",
                 443,
                 "HTTPS",
                 None,
@@ -14122,17 +14122,17 @@ class TestCloudPosture:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "production-api-uksouth::napier-api",
+                "production-api-uksouth::red-api",
                 "sub-1",
                 "production-api-uksouth",
                 "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/production-api-uksouth",
-                "napier-api",
-                "napier-api",
-                "/napier-api",
+                "red-api",
+                "red-api",
+                "/red-api",
                 json.dumps(["https"]),
-                "fincrime-napier-api",
-                "https://production-fincrime-napier-api.internal.cbinnovation.uk",
-                "https://production-fincrime-napier-api.internal.cbinnovation.uk",
+                "broken-red-api",
+                "https://production-broken-red-api.internal.car.uk",
+                "https://production-broken-red-api.internal.car.uk",
                 1,
                 json.dumps(["production-api-uksouth.azure-api.net"]),
                 "Public",
@@ -14147,13 +14147,13 @@ class TestCloudPosture:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "production-api-uksouth::fincrime-napier-api",
+                "production-api-uksouth::broken-red-api",
                 "sub-1",
                 "production-api-uksouth",
-                "fincrime-napier-api",
-                "fincrime-napier-api",
-                "Napier backend",
-                "https://production-fincrime-napier-api.internal.cbinnovation.uk",
+                "broken-red-api",
+                "broken-red-api",
+                "red backend",
+                "https://production-broken-red-api.internal.car.uk",
                 "http",
                 None,
                 None,
@@ -14171,24 +14171,24 @@ class TestCloudPosture:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "production-shared-aks-uksouth::finance::fincrime-napier-api-ingress::production-fincrime-napier-api.internal.cbinnovation.uk::/*::fincrime-napier-api::80::fincrime-napier-api::rule",
+                "production-shared-aks-uksouth::finance::broken-red-api-ingress::production-broken-red-api.internal.car.uk::/*::broken-red-api::80::broken-red-api::rule",
                 "sub-1",
                 "production-shared-aks-uksouth",
                 "/subscriptions/sub-1/resourceGroups/rg-aks/providers/Microsoft.ContainerService/managedClusters/production-shared-aks-uksouth",
                 "rg-aks",
                 "finance",
-                "fincrime-napier-api-ingress",
-                "production-fincrime-napier-api.internal.cbinnovation.uk",
-                json.dumps(["production-fincrime-napier-api.internal.cbinnovation.uk"]),
+                "broken-red-api-ingress",
+                "production-broken-red-api.internal.car.uk",
+                json.dumps(["production-broken-red-api.internal.car.uk"]),
                 "/*",
                 0,
-                "fincrime-napier-api",
+                "broken-red-api",
                 "80",
                 json.dumps([80]),
-                "fincrime-napier-api",
+                "broken-red-api",
                 "finance",
-                json.dumps({"app": "napier"}),
-                "git@example.com/napier",
+                json.dumps({"app": "red"}),
+                "git@example.com/red",
                 "platform",
                 "Internal",
                 "2026-06-01T00:00:00Z",
@@ -14200,11 +14200,11 @@ class TestCloudPosture:
         client = app_module.app.test_client()
         resp = client.get(
             "/api/cloud/route-trace",
-            query_string={"sub": "sub-1", "endpoint": "https://napier-events.mydomain.co.uk"},
+            query_string={"sub": "sub-1", "endpoint": "https://red-events.mydomain.co.uk"},
         )
         assert resp.status_code == 200, resp.get_data(as_text=True)
         data = resp.get_json()
-        assert data["host"] == "napier-events.mydomain.co.uk", data
+        assert data["host"] == "red-events.mydomain.co.uk", data
         assert data["path"] == "/", data
         kinds = [step["kind"] for step in data["resolved_chain"]]
         assert kinds[:6] == ["internet", "listener", "appgw", "backend_pool", "apim_api", "apim_service"], data
@@ -14214,9 +14214,9 @@ class TestCloudPosture:
         assert "classDef entryPointProtected stroke:#ea580c,stroke-width:2px,fill:#3d1c0d;" in data["mermaid"], data["mermaid"]
         assert "class appgw::appgw-one entryPointProtected;" in data["mermaid"], data["mermaid"]
         assert "class internet internet;" in data["mermaid"], data["mermaid"]
-        assert "napier-events.mydomain.co.uk" in data["mermaid"], data["mermaid"]
+        assert "red-events.mydomain.co.uk" in data["mermaid"], data["mermaid"]
         assert "production-api-uksouth" in data["mermaid"], data["mermaid"]
-        assert "fincrime-napier-api-ingress" in data["mermaid"], data["mermaid"]
+        assert "broken-red-api-ingress" in data["mermaid"], data["mermaid"]
 
         os.unlink(tmp.name)
 

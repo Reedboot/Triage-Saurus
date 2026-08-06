@@ -52,6 +52,9 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "raw_json": json.dumps({
                 **workspace,
                 "_extra": {
+                    "platform_managed": True,
+                    "compute_scope": "managed",
+                    "managed_service": "Databricks",
                     "workspace_id": props.get("workspaceId"),
                     "public_network_access": public_network_access,
                     "private_endpoint_connections": len(private_endpoints),

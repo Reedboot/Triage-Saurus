@@ -8,6 +8,9 @@ Usage:
     # Harvest all accessible subscriptions
     python Scripts/Harvest/harvest_azure_assets.py --all
 
+    # Harvest all subscriptions with bounded subscription-level concurrency
+    python Scripts/Harvest/harvest_azure_assets.py --all --subscription-workers 2
+
     # Dry-run: print what would be harvested without writing to DB
     python Scripts/Harvest/harvest_azure_assets.py --subscription "My-Prod-Sub" --dry-run
 
@@ -62,6 +65,7 @@ from Azure import network_security_group, route_table, public_ip, load_balancer,
 from Azure import user_assigned_identity, virtual_machine, virtual_machine_scale_set, image
 from Azure import log_analytics_workspace, monitor_action_group, activity_log_alert
 from Azure import app_service_certificate, app_service_certificate_order
+from Azure import managed_compute_services
 from Azure._staged import BackfillJob, StagedRows
 from Azure._helpers import canonical_azure_resource_type, set_probe_enabled
 import appgw_routing_map
@@ -85,16 +89,24 @@ PROVIDERS = [
     ("Web Apps",                web_apps.harvest),
     ("Function Apps",           function_apps.harvest),
     ("AKS",                     aks.harvest),
+    ("Container Apps",          managed_compute_services.harvest_container_apps),
+    ("Container Instances",     managed_compute_services.harvest_container_instances),
     ("Virtual Machines",        virtual_machine.harvest),
     ("Virtual Machine Scale Sets", virtual_machine_scale_set.harvest),
     ("Images",                  image.harvest),
     ("Service Fabric",          service_fabric.harvest),
+    ("Service Fabric Managed Clusters", managed_compute_services.harvest_service_fabric_managed),
     # ── Data ────────────────────────────────────────────────────────────
     ("Cosmos DB",               cosmos_db.harvest),
     ("SQL Servers",             sql_server.harvest),
     ("Redis Cache",             redis_cache.harvest),
     ("Storage",                 storage.harvest),
     ("Databricks",              databricks.harvest),
+    ("Synapse",                 managed_compute_services.harvest_synapse),
+    ("HDInsight",               managed_compute_services.harvest_hdinsight),
+    ("Azure Batch",             managed_compute_services.harvest_batch),
+    ("Azure VMware Solution",   managed_compute_services.harvest_avs),
+    ("Azure Spring Apps",       managed_compute_services.harvest_spring_apps),
     # ── Messaging / Integration ──────────────────────────────────────────
     ("Event Hubs",              event_hub.harvest),
     ("Event Grid",              event_grid.harvest),
@@ -133,13 +145,82 @@ PROVIDERS = [
     ("Kusto Clusters",          kusto.harvest),
 ]
 
+_PROVIDER_RESOURCE_NAMESPACE_HINTS = {
+    "App Gateways": ("microsoft.network/applicationgateways",),
+    "APIM": ("microsoft.apimanagement/",),
+    "Traffic Manager": ("microsoft.network/trafficmanagerprofiles",),
+    "CDN Profiles": ("microsoft.cdn/",),
+    "Front Door": ("microsoft.cdn/profiles", "microsoft.network/frontdoors"),
+    "App Service Environments": ("microsoft.web/hostingenvironments",),
+    "App Service Plans": ("microsoft.web/serverfarms",),
+    "Web Apps": ("microsoft.web/sites",),
+    "Function Apps": ("microsoft.web/sites",),
+    "AKS": ("microsoft.containerservice/managedclusters",),
+    "Virtual Machines": ("microsoft.compute/virtualmachines",),
+    "Virtual Machine Scale Sets": ("microsoft.compute/virtualmachinescalesets",),
+    "Images": ("microsoft.compute/images",),
+    "Service Fabric": ("microsoft.servicefabric/clusters",),
+    "Service Fabric Managed Clusters": ("microsoft.servicefabric/managedclusters",),
+    "Cosmos DB": ("microsoft.documentdb/databaseaccounts",),
+    "SQL Servers": ("microsoft.sql/servers",),
+    "Redis Cache": ("microsoft.cache/redis",),
+    "Storage": ("microsoft.storage/storageaccounts",),
+    "Databricks": ("microsoft.databricks/workspaces",),
+    "Synapse": ("microsoft.synapse/",),
+    "HDInsight": ("microsoft.hdinsight/clusters",),
+    "Azure Batch": ("microsoft.batch/batchaccounts",),
+    "Azure VMware Solution": ("microsoft.avs/privateclouds",),
+    "Azure Spring Apps": ("microsoft.appplatform/spring",),
+    "Container Apps": ("microsoft.app/",),
+    "Container Instances": ("microsoft.containerinstance/containergroups",),
+    "Event Hubs": ("microsoft.eventhub/namespaces",),
+    "Event Grid": ("microsoft.eventgrid/",),
+    "Service Bus": ("microsoft.servicebus/namespaces",),
+    "Logic Apps": ("microsoft.logic/workflows",),
+    "Data Factory": ("microsoft.datafactory/factories",),
+    "Machine Learning Workspaces": ("microsoft.machinelearningservices/workspaces",),
+    "Cognitive Services": ("microsoft.cognitiveservices/accounts",),
+    "Purview": ("microsoft.purview/accounts",),
+    "Key Vaults": ("microsoft.keyvault/vaults",),
+    "App Configuration": ("microsoft.appconfiguration/configurationstores",),
+    "Container Registries": ("microsoft.containerregistry/registries",),
+    "User Assigned Identities": ("microsoft.managedidentity/userassignedidentities",),
+    "Private Endpoints": ("microsoft.network/privateendpoints",),
+    "Private Link Services": ("microsoft.network/privatelinkservices",),
+    "App Insights": ("microsoft.insights/components",),
+    "Log Analytics Workspaces": ("microsoft.operationalinsights/workspaces",),
+    "Virtual Networks": ("microsoft.network/virtualnetworks",),
+    "Network Security Groups": ("microsoft.network/networksecuritygroups",),
+    "Route Tables": ("microsoft.network/routetables",),
+    "Public IPs": ("microsoft.network/publicipaddresses",),
+    "Load Balancers": ("microsoft.network/loadbalancers",),
+    "Bastion Hosts": ("microsoft.network/bastionhosts",),
+    "Firewalls": ("microsoft.network/azurefirewalls",),
+    "Search Services": ("microsoft.search/searchservices",),
+    "Kusto Clusters": ("microsoft.kusto/clusters",),
+}
+
 HarvestOutput = list[dict[str, Any]] | StagedRows
 ProviderFn = Callable[..., HarvestOutput]
 ProgressCallback = Callable[[str], None]
 _MAX_PROVIDER_WORKERS = 6
+_DEFAULT_SUBSCRIPTION_WORKERS = 2
+_SQLITE_BUSY_TIMEOUT_MS = 120000
 _PROGRESS_REFRESH_SECONDS = 10.0
 _PROVIDER_WRITE_CHUNK = 250
 _DIAGRAM_CHECKPOINT_ASSET_INTERVAL = 250
+_RESOURCE_GRAPH_TIMEOUT_SECONDS = 20
+_ANSI_RESET = "\033[0m"
+_ANSI_GREEN = "\033[32m"
+_ANSI_RED = "\033[31m"
+_ANSI_CYAN = "\033[36m"
+_ANSI_BLUE = "\033[34m"
+
+
+def _color(text: str, color: str) -> str:
+    if not sys.stdout.isatty():
+        return text
+    return f"{color}{text}{_ANSI_RESET}"
 
 
 def _precompute_subscription_diagram(sub_id: str, *, warm_traces: bool = True) -> None:
@@ -148,6 +229,21 @@ def _precompute_subscription_diagram(sub_id: str, *, warm_traces: bool = True) -
         sub_id,
         warm_traces=warm_traces,
     )
+
+
+def _open_harvest_connection(
+    db_path: Path,
+    *,
+    ensure_schema: bool = False,
+) -> sqlite3.Connection:
+    """Open a connection configured for bounded concurrent harvest writers."""
+    conn = sqlite3.connect(str(db_path), timeout=_SQLITE_BUSY_TIMEOUT_MS / 1000)
+    conn.execute(f"PRAGMA busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    if ensure_schema:
+        _ensure_schema(conn)
+    return conn
 
 
 def _normalize_provider_filters(raw_filters: list[str] | None) -> list[str]:
@@ -184,11 +280,78 @@ def _select_provider_specs(provider_filters: list[str] | None) -> list[tuple[str
     return selected
 
 
+def _resource_types_from_graph(subscription_id: str) -> set[str] | None:
+    """Return resource types present in a subscription, or None when Graph is unavailable."""
+    if not shutil.which("az"):
+        return None
+    try:
+        result = subprocess.run(
+            [
+                "az", "graph", "query",
+                "-q", "Resources | distinct type",
+                "--subscription", subscription_id,
+                "--output", "json",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_RESOURCE_GRAPH_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return None
+    rows = payload.get("data") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        return None
+    return {
+        str(row.get("type") or "").strip().lower()
+        for row in rows
+        if isinstance(row, dict) and str(row.get("type") or "").strip()
+    }
+
+
+def _gate_provider_specs_by_resource_graph(
+    provider_specs: list[tuple[str, ProviderFn]],
+    subscription_id: str,
+    *,
+    enabled: bool,
+) -> list[tuple[str, ProviderFn]]:
+    if not enabled:
+        return provider_specs
+    resource_types = _resource_types_from_graph(subscription_id)
+    if resource_types is None:
+        print("  [providers] Resource Graph unavailable; running all providers", flush=True)
+        return provider_specs
+
+    selected: list[tuple[str, ProviderFn]] = []
+    skipped: list[str] = []
+    for label, provider_fn in provider_specs:
+        hints = _PROVIDER_RESOURCE_NAMESPACE_HINTS.get(label)
+        if not hints or any(
+            resource_type == hint or resource_type.startswith(hint)
+            for resource_type in resource_types
+            for hint in hints
+        ):
+            selected.append((label, provider_fn))
+        else:
+            skipped.append(label)
+    if skipped:
+        print(f"  [providers] Resource Graph skipped {len(skipped)} empty providers", flush=True)
+    return selected
+
+
 @dataclass
 class _ProviderState:
     label: str
     state: str = "queued"
     detail: str = ""
+    queued_at: float | None = None
     started_at: float | None = None
     finished_at: float | None = None
 
@@ -202,6 +365,8 @@ class HarvestProgress:
         self._lock = threading.Lock()
         self._started_at = time.monotonic()
         self._last_render = 0.0
+        for state in self._states.values():
+            state.queued_at = self._started_at
 
     def mark_running(self, label: str, detail: str = "fetching inventory") -> None:
         with self._lock:
@@ -245,6 +410,7 @@ class HarvestProgress:
             states = [self._states[label] for label in self._labels]
             self._last_render = now
 
+        print("\033[2J\033[H", end="", flush=True)
         total = len(states)
         completed = sum(1 for state in states if state.state in {"done", "failed"})
         running = sum(1 for state in states if state.state == "running")
@@ -287,16 +453,18 @@ def _format_provider_state(state: _ProviderState, now: float) -> str:
     bar = _format_provider_progress_bar(state, now)
     detail = f" — {state.detail}" if state.detail else ""
     if state.state == "queued":
-        return f"{bar} queued"
+        queued_at = state.queued_at or now
+        return _color(f"{bar} queued {_format_duration(now - queued_at)}", _ANSI_BLUE)
 
     started_at = state.started_at or now
     if state.state == "running":
-        return f"{bar} running {_format_duration(now - started_at)}{detail}"
+        return _color(f"{bar} running {_format_duration(now - started_at)}{detail}", _ANSI_CYAN)
 
     finished_at = state.finished_at or now
     elapsed = _format_duration(finished_at - started_at)
     status = "done" if state.state == "done" else "FAILED"
-    return f"{bar} {status} {elapsed}{detail}"
+    color = _ANSI_GREEN if state.state == "done" else _ANSI_RED
+    return _color(f"{bar} {status} {elapsed}{detail}", color)
 
 
 def _format_provider_progress_bar(state: _ProviderState, now: float, width: int = 24) -> str:
@@ -717,7 +885,11 @@ def harvest_subscription(
     dry_run: bool = False,
     provider_filters: list[str] | None = None,
     skip_post_harvest: bool = False,
+    diagram_checkpoints: bool = False,
+    resource_graph_gating: bool = True,
+    provider_workers: int = _MAX_PROVIDER_WORKERS,
 ) -> int:
+    harvest_started = time.perf_counter()
     sub_id = sub["id"]
     sub_name = sub.get("name") or sub.get("displayName") or sub_id
     print(f"\n[subscription] {sub_name} ({sub_id})")
@@ -731,10 +903,16 @@ def harvest_subscription(
     assets_persisted = 0
     assets_since_diagram_checkpoint = 0
     provider_specs = _select_provider_specs(provider_filters)
+    if not provider_filters:
+        provider_specs = _gate_provider_specs_by_resource_graph(
+            provider_specs,
+            sub_id,
+            enabled=resource_graph_gating,
+        )
 
     def _diagram_checkpoint() -> None:
         nonlocal assets_persisted, assets_since_diagram_checkpoint
-        if dry_run:
+        if dry_run or not diagram_checkpoints:
             return
         assets_persisted += 1
         assets_since_diagram_checkpoint += 1
@@ -773,13 +951,13 @@ def harvest_subscription(
     if provider_specs:
         print(
             f"  [providers] harvesting {len(provider_specs)} resource types "
-            f"in parallel ({min(_MAX_PROVIDER_WORKERS, len(provider_specs))} workers)...",
+            f"in parallel ({min(provider_workers, len(provider_specs))} workers)...",
             flush=True,
         )
         progress = HarvestProgress([label for label, _ in provider_specs])
         future_map: dict[Any, str] = {}
 
-        with ThreadPoolExecutor(max_workers=min(_MAX_PROVIDER_WORKERS, len(provider_specs))) as pool:
+        with ThreadPoolExecutor(max_workers=min(provider_workers, len(provider_specs))) as pool:
             for label, provider_fn in provider_specs:
                 future = pool.submit(_run_provider_task, label, provider_fn, sub_id, progress)
                 future_map[future] = label
@@ -850,92 +1028,99 @@ def harvest_subscription(
     else:
         # App Gateway routing + rewrites + WAF — runs after assets so fqdn_to_asset lookup is populated
         print(f"  [App Gateway Routing] harvesting listeners, routing rules, rewrite rules & WAF policies...", flush=True)
+        phase_started = time.perf_counter()
         try:
             rules, rewrite_sets, rewrite_rules, waf = appgw_routing_map.harvest_routing(sub_id, conn, dry_run=dry_run)
             action = "would write" if dry_run else "written"
             print(
                 f"  [App Gateway Routing] {rules} routing rules, "
                 f"{rewrite_sets} rewrite rule sets ({rewrite_rules} rewrite rules), "
-                f"{waf} WAF policies {action}"
+                f"{waf} WAF policies {action} in {time.perf_counter() - phase_started:.2f}s"
             )
         except Exception as exc:
-            print(f"  [App Gateway Routing] FAILED ({exc})")
+            print(f"  [App Gateway Routing] FAILED ({exc}) in {time.perf_counter() - phase_started:.2f}s")
 
         # Private DNS zones/records for internal host resolution coverage
         print(f"  [Private DNS] harvesting zones, records, and VNet links...", flush=True)
+        phase_started = time.perf_counter()
         try:
             dns_summary = private_dns_map.harvest_private_dns(sub_id, conn, dry_run=dry_run)
             action = "would harvest" if dry_run else "written"
             print(
                 f"  [Private DNS] {dns_summary.get('zones', 0)} zones, "
-                f"{dns_summary.get('records', 0)} records {action}"
+                f"{dns_summary.get('records', 0)} records {action} in {time.perf_counter() - phase_started:.2f}s"
             )
         except Exception as exc:
-            print(f"  [Private DNS] FAILED ({exc})")
+            print(f"  [Private DNS] FAILED ({exc}) in {time.perf_counter() - phase_started:.2f}s")
 
         # AKS ingress → service → deployment route model
         print(f"  [AKS Routes] harvesting ingress→service→deployment mappings...", flush=True)
+        phase_started = time.perf_counter()
         try:
             route_count = aks.harvest_routes(sub_id, conn, dry_run=dry_run)
             action = "would harvest" if dry_run else "written"
-            print(f"  [AKS Routes] {route_count} routes {action}")
+            print(f"  [AKS Routes] {route_count} routes {action} in {time.perf_counter() - phase_started:.2f}s")
         except Exception as exc:
-            print(f"  [AKS Routes] FAILED ({exc})")
+            print(f"  [AKS Routes] FAILED ({exc}) in {time.perf_counter() - phase_started:.2f}s")
 
         # APIM API → backend routes
         print(f"  [APIM Routes] harvesting API→backend mappings...", flush=True)
+        phase_started = time.perf_counter()
         try:
-            phase_started = time.perf_counter()
             route_count = apim_routing_map.harvest_routes(sub_id, conn, dry_run=dry_run)
             action = "would write" if dry_run else "written"
             print(f"  [APIM Routes] {route_count} routes {action} in {time.perf_counter() - phase_started:.2f}s")
         except Exception as exc:
-            print(f"  [APIM Routes] FAILED ({exc})")
+            print(f"  [APIM Routes] FAILED ({exc}) in {time.perf_counter() - phase_started:.2f}s")
 
         # APIM backend inventory + API-to-backend links
         print(f"  [APIM Backend Links] harvesting backend inventory and route links...", flush=True)
+        phase_started = time.perf_counter()
         try:
-            phase_started = time.perf_counter()
             backend_count, link_count = apim_routing_map.harvest_backends(sub_id, conn, dry_run=dry_run)
             action = "would write" if dry_run else "written"
             print(f"  [APIM Backend Links] {backend_count} backends, {link_count} links {action} in {time.perf_counter() - phase_started:.2f}s")
         except Exception as exc:
-            print(f"  [APIM Backend Links] FAILED ({exc})")
+            print(f"  [APIM Backend Links] FAILED ({exc}) in {time.perf_counter() - phase_started:.2f}s")
 
         # Function App triggers
         print(f"  [Function App Triggers] harvesting trigger bindings...", flush=True)
+        phase_started = time.perf_counter()
         try:
             trigger_count = function_apps.harvest_http_triggers(sub_id, conn, dry_run=dry_run)
             action = "would write" if dry_run else "written"
-            print(f"  [Function App Triggers] {trigger_count} triggers {action}")
+            print(f"  [Function App Triggers] {trigger_count} triggers {action} in {time.perf_counter() - phase_started:.2f}s")
         except Exception as exc:
-            print(f"  [Function App Triggers] FAILED ({exc})")
+            print(f"  [Function App Triggers] FAILED ({exc}) in {time.perf_counter() - phase_started:.2f}s")
 
     # Front Door routing rules
     print(f"  [Front Door Routes] harvesting routing rules...", flush=True)
+    phase_started = time.perf_counter()
     try:
         fd_count = front_door.harvest_routes(sub_id, conn, dry_run=dry_run)
         action = "would write" if dry_run else "written"
-        print(f"  [Front Door Routes] {fd_count} routes {action}")
+        print(f"  [Front Door Routes] {fd_count} routes {action} in {time.perf_counter() - phase_started:.2f}s")
     except Exception as exc:
-        print(f"  [Front Door Routes] FAILED ({exc})")
+        print(f"  [Front Door Routes] FAILED ({exc}) in {time.perf_counter() - phase_started:.2f}s")
 
     # Azure Firewall NAT + app rules
     print(f"  [Firewall Rules] harvesting NAT and application rules...", flush=True)
+    phase_started = time.perf_counter()
     try:
         nat_count, app_count = firewall.harvest_rules(sub_id, conn, dry_run=dry_run)
         action = "would write" if dry_run else "written"
-        print(f"  [Firewall Rules] {nat_count} NAT rules, {app_count} app rules {action}")
+        print(f"  [Firewall Rules] {nat_count} NAT rules, {app_count} app rules {action} in {time.perf_counter() - phase_started:.2f}s")
     except Exception as exc:
-        print(f"  [Firewall Rules] FAILED ({exc})")
+        print(f"  [Firewall Rules] FAILED ({exc}) in {time.perf_counter() - phase_started:.2f}s")
 
     print(f"  [Firewall Policies] harvesting policy summaries...", flush=True)
+    phase_started = time.perf_counter()
     try:
         policy_count = firewall.harvest_policies(sub_id, conn, dry_run=dry_run)
         action = "would write" if dry_run else "written"
-        print(f"  [Firewall Policies] {policy_count} policies {action}")
+        print(f"  [Firewall Policies] {policy_count} policies {action} in {time.perf_counter() - phase_started:.2f}s")
     except Exception as exc:
-        print(f"  [Firewall Policies] FAILED ({exc})")
+        print(f"  [Firewall Policies] FAILED ({exc}) in {time.perf_counter() - phase_started:.2f}s")
 
     processed_backfills = _flush_backfill_jobs(
         pending_backfill_jobs,
@@ -973,8 +1158,36 @@ def harvest_subscription(
     elif skip_post_harvest:
         print("  [Mermaid Diagram] skipped with post-harvest steps")
 
-    print(f"  [total] {total} assets for {sub_name}")
+    print(f"  [total] {total} assets for {sub_name} in {time.perf_counter() - harvest_started:.2f}s")
     return total
+
+
+def _harvest_subscription_task(
+    sub: dict[str, Any],
+    db_path: Path,
+    *,
+    dry_run: bool,
+    provider_filters: list[str] | None,
+    skip_post_harvest: bool,
+    diagram_checkpoints: bool,
+    resource_graph_gating: bool,
+    provider_workers: int,
+) -> int:
+    """Harvest one subscription with a connection owned by its worker."""
+    conn = _open_harvest_connection(db_path)
+    try:
+        return harvest_subscription(
+            sub,
+            conn,
+            dry_run=dry_run,
+            provider_filters=provider_filters,
+            skip_post_harvest=skip_post_harvest,
+            diagram_checkpoints=diagram_checkpoints,
+            resource_graph_gating=resource_graph_gating,
+            provider_workers=provider_workers,
+        )
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -990,8 +1203,20 @@ def main() -> None:
     group.add_argument("--all", action="store_true", dest="all_subs", help="Harvest all accessible subscriptions")
     parser.add_argument("--dry-run", action="store_true", help="Print what would be harvested without writing to DB")
     parser.add_argument("--skip-prereq-check", action="store_true", help="Skip prerequisites check")
-    parser.add_argument("--skip-probes", action="store_true",
-                        help="Skip active connectivity probes (faster, no network connections made)")
+    probe_group = parser.add_mutually_exclusive_group()
+    probe_group.add_argument(
+        "--probes",
+        action="store_true",
+        dest="probes",
+        help="Enable active connectivity probes (disabled by default)",
+    )
+    probe_group.add_argument(
+        "--skip-probes",
+        action="store_false",
+        dest="probes",
+        help="Compatibility alias; active connectivity probes are disabled by default",
+    )
+    parser.set_defaults(probes=False)
     parser.add_argument(
         "--skip-storage-blobs",
         action="store_true",
@@ -1010,9 +1235,38 @@ def main() -> None:
         action="store_true",
         help="Skip post-harvest correlation steps such as routing, DNS, AKS, APIM, and trigger enrichment",
     )
+    parser.add_argument(
+        "--diagram-checkpoints",
+        action="store_true",
+        help="Precompute Mermaid diagrams every 250 assets during harvest (slower; final precompute is always performed)",
+    )
+    parser.add_argument(
+        "--no-resource-graph-gating",
+        action="store_true",
+        help="Run every provider even when Azure Resource Graph reports no matching resource types",
+    )
+    parser.add_argument(
+        "--subscription-workers",
+        type=int,
+        default=_DEFAULT_SUBSCRIPTION_WORKERS,
+        metavar="N",
+        help="Maximum subscriptions to harvest concurrently when using --all (default: 2)",
+    )
+    parser.add_argument(
+        "--provider-workers",
+        type=int,
+        default=_MAX_PROVIDER_WORKERS,
+        metavar="N",
+        help=f"Maximum provider harvesters per subscription (default: {_MAX_PROVIDER_WORKERS})",
+    )
     args = parser.parse_args()
 
-    set_probe_enabled(not args.skip_probes)
+    if args.subscription_workers < 1:
+        parser.error("--subscription-workers must be at least 1")
+    if args.provider_workers < 1:
+        parser.error("--provider-workers must be at least 1")
+
+    set_probe_enabled(args.probes)
     storage.set_include_blob_children(not args.skip_storage_blobs)
 
     if not args.skip_prereq_check:
@@ -1039,28 +1293,56 @@ def main() -> None:
 
     db_path = REPO_ROOT / "Output" / "Data" / "cozo.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    schema_conn = _open_harvest_connection(db_path, ensure_schema=True)
+    schema_conn.close()
 
-    conn = sqlite3.connect(str(db_path), timeout=30)
-    conn.execute("PRAGMA journal_mode=WAL;")
-    _ensure_schema(conn)
+    provider_filters = _normalize_provider_filters(args.provider_filters)
+    worker_count = min(args.subscription_workers, len(target_subs))
+    if not args.all_subs:
+        worker_count = 1
 
     grand_total = 0
-    provider_filters = _normalize_provider_filters(args.provider_filters)
-    for sub in target_subs:
-        try:
-            grand_total += harvest_subscription(
-                sub,
-                conn,
-                dry_run=args.dry_run,
-                provider_filters=provider_filters,
-                skip_post_harvest=args.skip_post_harvest,
-            )
-        except ValueError as exc:
-            print(f"[error] {exc}", file=sys.stderr)
-            conn.close()
-            sys.exit(1)
+    if worker_count == 1:
+        grand_total = _harvest_subscription_task(
+            target_subs[0],
+            db_path,
+            dry_run=args.dry_run,
+            provider_filters=provider_filters,
+            skip_post_harvest=args.skip_post_harvest,
+            diagram_checkpoints=args.diagram_checkpoints,
+            resource_graph_gating=not args.no_resource_graph_gating,
+            provider_workers=args.provider_workers,
+        )
+    else:
+        print(
+            f"[harvest] Processing {len(target_subs)} subscriptions in parallel "
+            f"({worker_count} workers; SQLite writes use WAL and busy timeouts)...",
+            flush=True,
+        )
+        with ThreadPoolExecutor(max_workers=worker_count) as pool:
+            future_map = {
+                pool.submit(
+                    _harvest_subscription_task,
+                    sub,
+                    db_path,
+                    dry_run=args.dry_run,
+                    provider_filters=provider_filters,
+                    skip_post_harvest=args.skip_post_harvest,
+                    diagram_checkpoints=args.diagram_checkpoints,
+                    resource_graph_gating=not args.no_resource_graph_gating,
+                    provider_workers=args.provider_workers,
+                ): sub
+                for sub in target_subs
+            }
+            for future in future_map:
+                try:
+                    grand_total += future.result()
+                except ValueError as exc:
+                    print(f"[error] {exc}", file=sys.stderr)
+                    for pending in future_map:
+                        pending.cancel()
+                    sys.exit(1)
 
-    conn.close()
     print(f"\n[harvest] Done. {grand_total} assets across {len(target_subs)} subscription(s).")
     if not args.dry_run:
         print(f"[harvest] Stored in: {db_path}")

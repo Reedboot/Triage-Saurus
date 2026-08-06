@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from ._helpers import (
@@ -13,13 +14,15 @@ from ._helpers import (
 )
 
 RESOURCE_TYPE = "Microsoft.DocumentDB/databaseAccounts"
+_MAX_DETAIL_WORKERS = 8
 
 
 def harvest(subscription_id: str) -> list[dict[str, Any]]:
     raw = az(["cosmosdb", "list"], subscription_id)
-    results = []
+    detail_by_id: dict[str, dict[str, Any] | None] = {}
 
-    for acct in raw:
+    def fetch_detail(acct: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
+        resource_id = acct.get("id", "")
         list_props = acct.get("properties") or {}
         needs_detail = not isinstance(list_props, dict) or any(
             key not in list_props
@@ -30,11 +33,20 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
                 "isVirtualNetworkFilterEnabled",
             )
         )
-        detailed = (
-            az_resource_show(acct.get("id", ""), subscription_id, runner=az)
-            if acct.get("id") and needs_detail
-            else None
-        )
+        if not resource_id or not needs_detail:
+            return resource_id, None
+        return resource_id, az_resource_show(resource_id, subscription_id, runner=az)
+
+    detail_targets = [acct for acct in raw if acct.get("id")]
+    if detail_targets:
+        with ThreadPoolExecutor(max_workers=min(_MAX_DETAIL_WORKERS, len(detail_targets))) as pool:
+            for resource_id, detailed in pool.map(fetch_detail, detail_targets):
+                detail_by_id[resource_id] = detailed
+
+    results = []
+
+    for acct in raw:
+        detailed = detail_by_id.get(acct.get("id", ""))
         if detailed:
             acct = {**acct, **detailed}
         props = acct.get("properties") or acct  # az cosmosdb list flattens properties to root

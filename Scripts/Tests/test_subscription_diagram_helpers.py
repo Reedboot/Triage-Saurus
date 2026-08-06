@@ -36,6 +36,56 @@ def test_load_balancer_label_includes_service_fabric_node_type():
     assert "SF node type: systemz" in label
 
 
+def test_platform_managed_services_are_backend_boundaries():
+    rows = [
+        (
+            "ca-marketlane-catalog",
+            "Microsoft.App/containerApps",
+            "rg-app",
+            "catalog.marketlane.example",
+            True,
+            None,
+            "/subscriptions/000/resourceGroups/rg-app/providers/Microsoft.App/containerApps/ca-marketlane-catalog",
+            False,
+            None,
+            False,
+            None,
+            None,
+            json.dumps({
+                "_extra": {
+                    "platform_managed": True,
+                    "compute_scope": "managed",
+                    "managed_service": "Container Apps",
+                },
+                "properties": {"configuration": {"ingress": {"external": True}}},
+            }),
+            None,
+        ),
+        (
+            "syn-marketlane-analytics",
+            "Microsoft.Synapse/workspaces",
+            "rg-data",
+            "syn-marketlane-analytics.dev.azuresynapse.net",
+            False,
+            None,
+            "/subscriptions/000/resourceGroups/rg-data/providers/Microsoft.Synapse/workspaces/syn-marketlane-analytics",
+            False,
+            None,
+            True,
+            None,
+            None,
+            json.dumps({"_extra": {"platform_managed": True, "compute_scope": "managed"}}),
+            None,
+        ),
+    ]
+
+    assets = subscription_assets_from_rows(rows, _friendly_type)
+
+    assert all(asset["tier"] == "backend" for asset in assets)
+    assert all(asset["platform_managed"] is True for asset in assets)
+    assert assets[0]["routing_targets"] == []
+
+
 def test_extracts_aks_vnet_and_subnet_from_agent_pool_profiles():
     subnet_id = "/subscriptions/000/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/aks-vnet/subnets/aks-subnet"
     rows = [

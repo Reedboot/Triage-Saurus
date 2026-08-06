@@ -30,6 +30,7 @@ import sqlite3
 import subprocess
 import sys
 import signal
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -842,11 +843,12 @@ def harvest_routing(
 
     Returns (routing_rules, rewrite_rule_sets, rewrite_rules, waf_policies).
     """
+    started = time.perf_counter()
     _ensure_appgw_schema(conn)
 
     gateways = list_appgw(subscription_id)
     if not gateways:
-        print("  No Application Gateways found — skipping")
+        print("  No Application Gateways found — skipping (0.00s)")
         return 0, 0, 0, 0
 
     total_rules = 0
@@ -865,7 +867,7 @@ def harvest_routing(
     }
 
     full_gateways = []
-    gateway_results: list[tuple[dict, dict]] = []
+    gateway_results: list[tuple[dict, dict, float]] = []
     max_workers = min(_APPGW_FETCH_WORKERS, len(gateways))
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {}
@@ -873,20 +875,24 @@ def harvest_routing(
             name = gw_stub["name"]
             rg = gw_stub.get("resourceGroup", "")
             print(f"    [appgw-routing] {name}...", end=" ", flush=True)
-            futures[pool.submit(show_appgw, name, rg, subscription_id)] = gw_stub
+            gateway_started = time.perf_counter()
+            futures[pool.submit(show_appgw, name, rg, subscription_id)] = (gw_stub, gateway_started)
 
         for future in as_completed(futures):
-            gw_stub = futures[future]
+            gw_stub, gateway_started = futures[future]
             try:
                 gw = future.result()
             except Exception:
                 gw = None
             if not gw:
-                print("FAILED (show returned nothing)")
+                print(
+                    f"FAILED (show returned nothing) in "
+                    f"{time.perf_counter() - gateway_started:.2f}s"
+                )
                 continue
-            gateway_results.append((gw_stub, gw))
+            gateway_results.append((gw_stub, gw, gateway_started))
 
-    for gw_stub, gw in gateway_results:
+    for gw_stub, gw, gateway_started in gateway_results:
         full_gateways.append(gw)
         rules, _connections = process_gateway(
             gw_stub, subscription_id, conn, fqdn_to_asset, dry_run, now, gw=gw
@@ -897,11 +903,22 @@ def harvest_routing(
         )
         total_rewrite_sets += rewrite_sets
         total_rewrite_rules += rewrite_rules
+        print(
+            f"    [appgw-routing] {gw_stub['name']} gathered in "
+            f"{time.perf_counter() - gateway_started:.2f}s "
+            f"({rules} routes, {rewrite_sets} rewrite set(s), {rewrite_rules} rewrite rule(s))",
+            flush=True,
+        )
 
     if total_rules == 0:
         print("  [warn] no App Gateway routing rows were harvested; check routingRules/requestRoutingRules coverage")
 
     total_waf = process_waf_policies(subscription_id, full_gateways, conn, dry_run, now)
+    print(
+        f"    [appgw-routing] completed in {time.perf_counter() - started:.2f}s "
+        f"({len(gateway_results)} gateway(s), {total_waf} WAF polic{'y' if total_waf == 1 else 'ies'})",
+        flush=True,
+    )
     return total_rules, total_rewrite_sets, total_rewrite_rules, total_waf
 
 

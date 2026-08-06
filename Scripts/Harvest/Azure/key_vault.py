@@ -2,27 +2,41 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from ._helpers import az, az_resource_show, build_endpoints, extract_ip_restrictions, safe_str
 
 RESOURCE_TYPE = "Microsoft.KeyVault/vaults"
+_MAX_DETAIL_WORKERS = 12
 
 
 def harvest(subscription_id: str) -> list[dict[str, Any]]:
     raw = az(["keyvault", "list"], subscription_id)
-    results = []
+    detailed_by_id: dict[str, dict[str, Any] | None] = {}
 
-    for kv in raw:
+    def fetch_detail(kv: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
+        resource_id = kv.get("id", "")
+        if not resource_id:
+            return "", None
         list_props = kv.get("properties") or {}
         needs_detail = "properties" not in kv or (bool(list_props) and (
             "networkAcls" not in list_props or "publicNetworkAccess" not in list_props
         ))
-        detailed = (
-            az_resource_show(kv.get("id", ""), subscription_id, runner=az)
-            if kv.get("id") and needs_detail
-            else None
-        )
+        if not needs_detail:
+            return resource_id, None
+        return resource_id, az_resource_show(resource_id, subscription_id, runner=az)
+
+    detail_targets = [kv for kv in raw if kv.get("id")]
+    if detail_targets:
+        with ThreadPoolExecutor(max_workers=min(_MAX_DETAIL_WORKERS, len(detail_targets))) as pool:
+            for resource_id, detailed in pool.map(fetch_detail, detail_targets):
+                detailed_by_id[resource_id] = detailed
+
+    results = []
+
+    for kv in raw:
+        detailed = detailed_by_id.get(kv.get("id", ""))
         if detailed:
             kv = {**kv, **detailed}
         props = kv.get("properties") or kv

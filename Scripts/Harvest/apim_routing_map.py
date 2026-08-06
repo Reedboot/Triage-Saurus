@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -175,6 +176,28 @@ def list_operations(apim_name: str, resource_group: str, api_id: str, subscripti
     )
 
 
+def get_api_policy(apim_name: str, resource_group: str, api_id: str, subscription_id: str) -> str:
+    policy_url = (
+        f"https://management.azure.com/subscriptions/{subscription_id}"
+        f"/resourceGroups/{resource_group}/providers/Microsoft.ApiManagement"
+        f"/service/{apim_name}/apis/{api_id}/policies?api-version=2022-08-01"
+    )
+    policy_response = _az("rest", "--method", "get", "--url", policy_url, subscription_id=subscription_id)
+    policy = (
+        (policy_response.get("value") or [{}])[0]
+        if isinstance(policy_response, dict)
+        else {}
+    )
+    if isinstance(policy, dict):
+        return str(policy.get("properties", {}).get("value") or policy.get("value") or "")
+    return ""
+
+
+def _policy_backend_id(policy: str) -> str | None:
+    match = re.search(r"<set-backend-service\b[^>]*\bbackend-id=[\"']([^\"']+)", policy or "", re.IGNORECASE)
+    return match.group(1).strip() if match else None
+
+
 # ---------------------------------------------------------------------------
 # FQDN extraction helpers
 # ---------------------------------------------------------------------------
@@ -325,6 +348,16 @@ def process_apim(
             if burl and service_url and _url_to_fqdn(burl) == _url_to_fqdn(service_url):
                 backend_id = bname
                 break
+
+        # APIM APIs commonly select a named backend through policy instead of
+        # exposing serviceUrl. Resolve that policy reference before persisting
+        # the route so downstream tracing can follow the actual target.
+        if not backend_id:
+            backend_id = _policy_backend_id(
+                get_api_policy(apim_name, resource_group, api_name, subscription_id)
+            )
+            if backend_id:
+                backend_url = backend_map.get(backend_id) or backend_url
 
         route_id = f"{apim_name}::{api_name}"
 
@@ -612,12 +645,18 @@ def harvest_routes(
     """Harvest APIM API→backend routes for every APIM instance in a subscription."""
     apim_instances = list_apim_instances(subscription_id)
     if not apim_instances:
-        print("  No APIM instances found — skipping")
+        print("  No APIM instances found — skipping (0.00s)")
         return 0
 
+    started = time.perf_counter()
     total = 0
     for apim in apim_instances:
         total += process_apim(apim, subscription_id, conn, dry_run)
+    print(
+        f"    [apim-routing] route harvest completed in "
+        f"{time.perf_counter() - started:.2f}s ({len(apim_instances)} APIM instance(s))",
+        flush=True,
+    )
     return total
 
 

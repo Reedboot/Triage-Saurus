@@ -45,7 +45,7 @@ _DNS_DDL = """
 CREATE TABLE IF NOT EXISTS private_dns_zones (
     id                  TEXT PRIMARY KEY,   -- resource id
     subscription_id     TEXT NOT NULL,
-    name                TEXT NOT NULL,      -- e.g. internal.cbinnovation.uk
+    name                TEXT NOT NULL,      -- e.g. internal.car.uk
     resource_group      TEXT,
     zone_type           TEXT,               -- privatelink | internal | apim | ase | custom
     record_count        INTEGER DEFAULT 0,

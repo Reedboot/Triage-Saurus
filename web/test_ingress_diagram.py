@@ -17,6 +17,57 @@ from app import _sanitise_node_id
 from app import _subscription_access_level
 
 
+def test_waf_policy_child_does_not_hide_application_gateway():
+    rows = [
+        (
+            "gateway",
+            "microsoft.network/applicationgateways",
+            "rg-network",
+            "",
+            True,
+            "",
+            1,
+            True,
+            None,
+            False,
+            "Prevention",
+            None,
+            '{"properties":{}}',
+            None,
+            None,
+        ),
+        (
+            "waf-policy",
+            "microsoft.network/applicationgatewaywebapplicationfirewallpolicies",
+            "rg-network",
+            "",
+            False,
+            "",
+            2,
+            False,
+            None,
+            False,
+            None,
+            None,
+            '{"properties":{}}',
+            None,
+            None,
+        ),
+    ]
+
+    mermaid = _build_ingress_diagram(
+        rows,
+        appgw_routes=[
+            ("gateway", "example.com", '["backend.example.com"]', "pool", "listener", "/*", "HTTPS", "waf-policy"),
+        ],
+        appgw_waf_policy_rows=[("waf-policy", '["gateway"]', "Enabled")],
+    )["mermaid"]
+
+    assert 'WAF: waf-policy' in mermaid
+    assert 'gateway (1 hostname)' in mermaid
+    assert "waf_rg_network_gateway_waf_policy --> rg_network_gateway" in mermaid
+
+
 def test_network_subgraphs_split_by_vnet():
     rows = [
         (
@@ -485,7 +536,7 @@ def test_apim_service_fabric_backend_routes_to_cluster_load_balancer():
         rows,
         apim_route_map={
             "main-yellow-api-uksouth": [
-                "https://main-yellow-sfha-uksouth.cbinnovation.uk:19080",
+                "https://main-yellow-sfha-uksouth.car.uk:19080",
             ],
         },
         apim_backend_rows=[
@@ -494,7 +545,7 @@ def test_apim_service_fabric_backend_routes_to_cluster_load_balancer():
                 "backend_id": "main-yellow-sfha",
                 "title": "main-yellow-sfha",
                 "description": "Service Fabric backend",
-                "url": "https://main-yellow-sfha-uksouth.cbinnovation.uk:19080",
+                "url": "https://main-yellow-sfha-uksouth.car.uk:19080",
                 "protocol": "http",
             },
         ],
@@ -508,6 +559,49 @@ def test_apim_service_fabric_backend_routes_to_cluster_load_balancer():
         "main-yellow-sfha-uksouth_stock"
     )
     assert f"{backend_id} --> {load_balancer_id}" in mermaid
+
+
+def test_apim_backend_route_matches_when_route_has_path_suffix():
+    """APIM backend nodes must survive harmless URL path differences."""
+    rows = [
+        (
+            "apim-prod",
+            "microsoft.apimanagement/service",
+            "rg-api",
+            "apim-prod.azure-api.net",
+            True,
+            "",
+            "/subscriptions/000/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/apim-prod",
+            False,
+            None,
+            False,
+            None,
+            None,
+            "{}",
+            None,
+            None,
+        ),
+    ]
+
+    diagram = _build_ingress_diagram(
+        rows,
+        apim_route_map={
+            "apim-prod": ["https://orders.internal.example.test/api/orders"],
+        },
+        apim_backend_rows=[
+            {
+                "apim_name": "apim-prod",
+                "backend_id": "orders",
+                "title": "orders",
+                "url": "https://orders.internal.example.test",
+            },
+        ],
+    )
+    mermaid = diagram["mermaid"]
+    backend_id = _sanitise_node_id("apim-prod::orders")
+
+    assert backend_id in mermaid
+    assert f"grp_APIM_Public --> {backend_id}" in mermaid
 
 
 def test_appgw_routes_keep_edges_for_multiple_apim_backend_pools():

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 from ._helpers import az, az_resource_show, build_endpoints, extract_ip_restrictions, safe_str
@@ -14,6 +15,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
 
     total = len(raw)
     for idx, store in enumerate(raw, start=1):
+        resource_started = time.perf_counter()
         list_props = store.get("properties") or {}
         needs_detail = "properties" not in store or (
             bool(list_props)
@@ -67,7 +69,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "pipeline_tag": (store.get("tags") or {}).get("pipeline") or (store.get("tags") or {}).get("ado-pipeline"),
             "raw_json": json.dumps({**store, "_extra": extra}),
         })
-        print("done")
+        print(f"done in {time.perf_counter() - resource_started:.2f}s")
 
     return results
 

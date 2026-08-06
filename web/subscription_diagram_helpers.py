@@ -45,6 +45,15 @@ SUBSCRIPTION_DRILLABLE_ARM_TYPES = {
     "microsoft.eventgrid/topics",
     "microsoft.kusto/clusters",
     "microsoft.databricks/workspaces",
+    "microsoft.app/managedenvironments",
+    "microsoft.app/containerapps",
+    "microsoft.containerinstance/containergroups",
+    "microsoft.synapse/workspaces",
+    "microsoft.batch/batchaccounts",
+    "microsoft.hdinsight/clusters",
+    "microsoft.appplatform/spring",
+    "microsoft.avs/privateclouds",
+    "microsoft.servicefabric/managedclusters",
     "microsoft.network/firewallpolicies",
     "microsoft.cdn/profiles",
     "microsoft.cdn/profiles/endpoints",
@@ -193,6 +202,18 @@ def subscription_asset_tier(arm_type: str, name: str = "") -> str:
         or "web/connections" in type_key
         or "fabric/capacities" in type_key
         or "databricks/workspaces" in type_key
+        or "microsoft.app/" in type_key
+        or "containerinstance/containergroups" in type_key
+        or "synapse/workspaces" in type_key
+        or "batch/batchaccounts" in type_key
+        or "hdinsight/clusters" in type_key
+        or "appplatform/spring" in type_key
+        or "avs/privateclouds" in type_key
+        or "servicefabric/managedclusters" in type_key
+        or "apim backend target" in type_key
+        or "apimbackendtarget" in type_key
+        or "apim backend pool" in type_key
+        or "apimbackendpool" in type_key
         # insights/components intentionally excluded — App Insights is a monitoring
         # sink, not a compute backend; classifying it as backend implies it routes traffic
     ):
@@ -494,6 +515,23 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
             "short_name": subscription_short_name(name or "resource"),
             "auth_methods": auth_methods,
         }
+        if isinstance(parsed_raw, dict):
+            extra = parsed_raw.get("_extra")
+            if isinstance(extra, dict) and extra.get("platform_managed") is True:
+                asset["platform_managed"] = True
+                asset["compute_scope"] = str(extra.get("compute_scope") or "managed")
+                asset["managed_service"] = str(extra.get("managed_service") or "").strip()
+        if isinstance(parsed_raw, dict) and (
+            "apim backend target" in str(rtype or "").lower()
+            or "apimbackendtarget" in str(rtype or "").lower()
+            or "apim backend pool" in str(rtype or "").lower()
+            or "apimbackendpool" in str(rtype or "").lower()
+        ):
+            asset["parent_apim_name"] = str(
+                parsed_raw.get("apim_name")
+                or (parsed_raw.get("_extra") or {}).get("apim_name")
+                or ""
+            ).strip()
         fqdns = [str(fqdn).strip()] if fqdn else []
         try:
             endpoint_values = json.loads(endpoints_raw or "[]") if isinstance(endpoints_raw, str) else (endpoints_raw or [])

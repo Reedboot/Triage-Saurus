@@ -13416,9 +13416,9 @@ def _build_subscription_architecture_payload(
                         "pipeline_tag": None,
                         "first_detected": None,
                         "last_synced": None,
-                        "sub_id": subscription_id,
-                        "sub_name": subscription_name,
-                        "environment": environment,
+                        "sub_id": sub_id,
+                        "sub_name": sub_name,
+                        "environment": sub_env,
                         "cloud_provider": "Azure",
                         "linked_repo": None,
                         "kind": None,
@@ -17835,9 +17835,12 @@ def api_cloud_resource_details():
                 details["ingress_services"] = ingress_services
         if "applicationgateway" in str(asset_row["type"] or "").lower() and _table_exists(conn, "appgw_routing_rules"):
             try:
+                appgw_route_columns = _table_columns(conn, "appgw_routing_rules")
+                exposure_select = "exposure_level" if "exposure_level" in appgw_route_columns else "NULL AS exposure_level"
                 route_rows = conn.execute(
-                    """
-                    SELECT backend_fqdns, backend_pool_name, listener_name, url_path, protocol, waf_policy_name
+                    f"""
+                    SELECT backend_fqdns, backend_pool_name, listener_name, url_path, protocol,
+                           waf_policy_name, {exposure_select}
                     FROM appgw_routing_rules
                     WHERE subscription_id = ? AND gateway_name = ?
                     ORDER BY backend_pool_name, listener_name, url_path
@@ -17863,6 +17866,7 @@ def api_cloud_resource_details():
                             "url_path": route_row["url_path"],
                             "protocol": route_row["protocol"],
                             "waf_policy_name": route_row["waf_policy_name"],
+                            "exposure_level": route_row["exposure_level"],
                         }
                         routing_targets.append(target)
                 if routing_targets:
@@ -19804,7 +19808,6 @@ def _trace_subscription_endpoint(
                 pass
             private_suffixes = (
                 ".internal",
-                ".internal.cbinnovation.uk",
                 ".appserviceenvironment.net",
                 ".azure-api.net",
                 ".azurewebsites.net",
@@ -19925,7 +19928,6 @@ def _trace_subscription_endpoint(
             apim_chain = list(chain_prefix)
 
             backend_rows: list[sqlite3.Row] = []
-            backend_targets: set[str] = set()
             if _table_exists(conn, "apim_backends"):
                 backend_rows = conn.execute(
                     """
@@ -19936,13 +19938,6 @@ def _trace_subscription_endpoint(
                     """,
                     (subscription, apim_name),
                 ).fetchall()
-                for row in backend_rows:
-                    backend_url_value = str(row["url"] or "").strip()
-                    if backend_url_value:
-                        backend_targets.add(backend_url_value.lower().rstrip("/"))
-                        backend_host_value = _host_from_url(backend_url_value)
-                        if backend_host_value:
-                            backend_targets.add(backend_host_value)
 
             api_rows: list[sqlite3.Row] = []
             if _table_exists(conn, "apim_api_routes"):
@@ -19966,9 +19961,31 @@ def _trace_subscription_endpoint(
                 for term in re.split(r"[^a-z0-9]+", host.lower())
                 if len(term) >= 4 and term not in _route_stopwords
             }
+            host_match_scores = {}
             for row in api_rows:
-                backend_urls = [str(row["backend_url"] or "").strip(), str(row["service_url"] or "").strip()]
-                backend_hosts = {_host_from_url(url) for url in backend_urls if url}
+                row_terms = {
+                    term
+                    for term in re.split(
+                        r"[^a-z0-9]+",
+                        " ".join(
+                            filter(
+                                None,
+                                [
+                                    str(row["api_name"] or "").strip().lower(),
+                                    str(row["api_display_name"] or "").strip().lower(),
+                                    str(row["api_path"] or "").strip().lower(),
+                                ],
+                            )
+                        ),
+                    )
+                    if len(term) >= 4 and term not in _route_stopwords
+                }
+                host_match_scores[
+                    (str(row["api_name"] or "").strip().lower(), str(row["api_path"] or "").strip().lower())
+                ] = len(endpoint_terms.intersection(row_terms))
+            best_host_match = max(host_match_scores.values(), default=0)
+            best_host_match_count = sum(score == best_host_match for score in host_match_scores.values())
+            for row in api_rows:
                 api_path = str(row["api_path"] or "").strip()
                 api_name_text = str(row["api_name"] or "").strip().lower()
                 api_display_text = str(row["api_display_name"] or "").strip().lower()
@@ -19979,19 +19996,27 @@ def _trace_subscription_endpoint(
                     if len(term) >= 4 and term not in _route_stopwords
                 }
                 score = 0
-                if any(url.lower().rstrip("/") in backend_targets for url in backend_urls if url):
+                normalized_api_path = _normalize_route_path(api_path) if api_path else ""
+                normalized_request_path = _normalize_route_path(path) if path else "/"
+                api_path_matches = bool(
+                    normalized_api_path
+                    and normalized_api_path != "/"
+                    and (
+                        _route_path_matches(normalized_api_path, normalized_request_path)
+                        or normalized_request_path == normalized_api_path
+                        or normalized_request_path.startswith(f"{normalized_api_path.rstrip('/')}/")
+                    )
+                )
+                if api_path_matches:
                     score += 1000
-                elif backend_hosts.intersection(backend_targets):
-                    score += 1000
-                if endpoint_terms.intersection(api_terms):
+                row_key = (api_name_text, api_path.lower())
+                if endpoint_terms.intersection(api_terms) and best_host_match > 0 and host_match_scores.get(row_key) == best_host_match and best_host_match_count == 1:
                     score += 500
-                if api_path and _route_path_matches(api_path, path):
-                    score += 200
                 if score > chosen_api_score:
                     chosen_api = row
                     chosen_api_score = score
 
-            if chosen_api:
+            if chosen_api and chosen_api_score > 0:
                 api_display_name = str(chosen_api["api_display_name"] or chosen_api["api_name"] or "").strip()
                 api_name = str(chosen_api["api_name"] or "").strip()
                 api_path = str(chosen_api["api_path"] or "").strip()
@@ -20032,9 +20057,6 @@ def _trace_subscription_endpoint(
                     ):
                         backend_row = row
                         break
-                if not backend_row and backend_rows:
-                    backend_row = backend_rows[0]
-
                 if backend_row:
                     backend_id = str(backend_row["backend_id"] or "").strip()
                     backend_title = str(backend_row["title"] or backend_id or "").strip()
@@ -20956,7 +20978,7 @@ def api_cloud_route_trace(sub_id: str | None = None):
 
         # Include the trace shape version so cached pre-terminal-node results
         # are not reused after adding external/private/unknown destinations.
-        request_payload = {"endpoint": endpoint, "trace_version": 2}
+        request_payload = {"endpoint": endpoint, "trace_version": 6}
         if resolved_sub_id:
             request_payload["subscription_id"] = resolved_sub_id
             trace_payload = _load_trace_cache(conn, resolved_sub_id, "route", request_payload)
@@ -21679,7 +21701,7 @@ _SUBSCRIPTION_DIAGRAM_CACHE: dict[str, tuple[float, str, dict]] = {}
 _SUBSCRIPTION_DIAGRAM_CACHE_TTL = 600  # 10 minutes
 # Bump this whenever diagram rendering logic changes (listener icons, pool icons, edge labels, etc.)
 # so the DB cache is automatically invalidated for all subscriptions.
-_DIAGRAM_CODE_VERSION = "v39"  # Compact Mermaid payload omits duplicate render data
+_DIAGRAM_CODE_VERSION = "v41"  # Public child and managed-resource assets are included in Mermaid rows
 
 
 def _subscription_diagram_cache_signature(conn, sub_id: str) -> tuple[str | None, tuple[str, str] | None]:
@@ -22086,6 +22108,87 @@ def api_subscription_diagram(sub_id: str):
         if not rows:
             return jsonify({"error": "No assets harvested for this subscription yet."}), 404
 
+        # APIM backends are harvested into dedicated routing tables rather than
+        # provisioned_assets. Materialize linked targets for the subscription
+        # Mermaid view so APIM -> backend target -> workload is visible.
+        if _table_exists(conn, "apim_backends") and _table_exists(conn, "apim_api_routes"):
+            apim_rgs = {
+                str(row[0] or "").strip().lower(): str(row[1] or "").strip()
+                for row in conn.execute(
+                    """
+                    SELECT name, resource_group
+                    FROM provisioned_assets
+                    WHERE subscription_id = ?
+                      AND LOWER(type) LIKE '%apimanagement/service%'
+                    """,
+                    (sub_id,),
+                ).fetchall()
+            }
+            backend_rows = conn.execute(
+                "SELECT apim_name, backend_id, title, url FROM apim_backends WHERE subscription_id = ?",
+                (sub_id,),
+            ).fetchall()
+            route_rows = conn.execute(
+                """
+                SELECT apim_name, backend_id, backend_url, service_url
+                FROM apim_api_routes
+                WHERE subscription_id = ?
+                  AND (backend_url IS NOT NULL OR service_url IS NOT NULL)
+                """,
+                (sub_id,),
+            ).fetchall()
+
+            def _route_key(value: object) -> str:
+                return str(value or "").strip().lower().rstrip("/")
+
+            existing_ids = {str(row[6] or "").strip().lower() for row in rows if len(row) > 6}
+            for backend in backend_rows:
+                apim_name = str(backend[0] or "").strip()
+                backend_id = str(backend[1] or "").strip()
+                backend_url = str(backend[3] or "").strip()
+                if not apim_name or not backend_id or not backend_url:
+                    continue
+                apim_key = apim_name.lower()
+                matching_targets = {
+                    route_url
+                    for route in route_rows
+                    if str(route[0] or "").strip().lower() == apim_key
+                    for route_url in [str(route[2] or route[3] or "").strip()]
+                    if route_url
+                    and (
+                        str(route[1] or "").strip().lower() == backend_id.lower()
+                        or _route_key(route_url) == _route_key(backend_url)
+                    )
+                }
+                if not matching_targets:
+                    continue
+                synthetic_id = f"{apim_name}::{backend_id}"
+                if synthetic_id.lower() in existing_ids:
+                    continue
+                rows.append([
+                    backend_id,
+                    "APIM Backend Target",
+                    apim_rgs.get(apim_key) or "default",
+                    None,
+                    0,
+                    None,
+                    synthetic_id,
+                    0,
+                    None,
+                    0,
+                    None,
+                    [{"target": target} for target in sorted(matching_targets)],
+                    json.dumps({
+                        "apim_name": apim_name,
+                        "backend_id": backend_id,
+                        "backend_url": backend_url,
+                        "_extra": {"display_label": str(backend[2] or backend_id).strip()},
+                    }),
+                    None,
+                    None,
+                ])
+                existing_ids.add(synthetic_id.lower())
+
         # Query App Service / Function App hosting relationships from raw_json.
         # raw_json stores appServicePlanId/serverFarmId and hostingEnvironmentProfile.id
         # as full ARM resource IDs.
@@ -22269,9 +22372,25 @@ def api_subscription_diagram(sub_id: str):
                 pass
             return "APIM Backend Target"
 
-        backend_url_lookup: dict[str, tuple[str, str]] = {}
+        backend_url_lookup: dict[tuple[str, str], tuple[str, str]] = {}
+        backend_host_lookup: dict[tuple[str, str], tuple[str, str]] = {}
         backend_key_lookup: dict[tuple[str, str], tuple[str, str, str]] = {}
         apim_pool_node_ids: dict[str, list[str]] = {}
+
+        def _apim_url_keys(value: str) -> tuple[str, str]:
+            normalized = str(value or "").strip().lower().rstrip("/")
+            if not normalized:
+                return "", ""
+            try:
+                from urllib.parse import urlsplit as _urlsplit
+                parsed = _urlsplit(normalized if "://" in normalized else f"https://{normalized}")
+                host = str(parsed.hostname or "").strip().lower().rstrip(".")
+                if parsed.port:
+                    host = f"{host}:{parsed.port}"
+            except Exception:
+                host = ""
+            return normalized, host
+
         for row in apim_backend_rows:
             apim_name = str(row["apim_name"] or "").strip().lower()
             backend_id = str(row["backend_id"] or "").strip()
@@ -22283,7 +22402,11 @@ def api_subscription_diagram(sub_id: str):
             display_label = _apim_backend_display_label(apim_name, backend_id, title, url)
             backend_key_lookup[key] = (display_label, url, backend_id)
             if url:
-                backend_url_lookup[(apim_name, url.strip().lower().rstrip("/"))] = (display_label, url)
+                url_key, host_key = _apim_url_keys(url)
+                if url_key:
+                    backend_url_lookup[(apim_name, url_key)] = (display_label, url)
+                if host_key:
+                    backend_host_lookup[(apim_name, host_key)] = (display_label, url)
 
         apim_route_targets: dict[str, set[str]] = {}
         backend_targets: dict[tuple[str, str], set[str]] = {}
@@ -22302,7 +22425,10 @@ def api_subscription_diagram(sub_id: str):
                 if backend_info:
                     backend_name, backend_url, backend_id = backend_info
             if not backend_name and target_url:
-                backend_info = backend_url_lookup.get((apim_name, target_url.lower().rstrip("/")))
+                target_url_key, target_host_key = _apim_url_keys(target_url)
+                backend_info = backend_url_lookup.get((apim_name, target_url_key))
+                if not backend_info and target_host_key:
+                    backend_info = backend_host_lookup.get((apim_name, target_host_key))
                 if backend_info:
                     backend_name, backend_url = backend_info
                     backend_id = backend_id or backend_name or ""
@@ -22687,10 +22813,26 @@ def _friendly_type(arm_type: str) -> str:
         "microsoft.cache/redis": "Redis Cache",
         "microsoft.datafactory/factories": "Data Factory",
         "microsoft.cognitiveservices/accounts": "AI Services",
+        "microsoft.app/managedenvironments": "Container Apps Environment",
+        "microsoft.app/containerapps": "Container App",
+        "microsoft.containerinstance/containergroups": "Container Instance",
+        "microsoft.synapse/workspaces": "Synapse Workspace",
+        "microsoft.synapse/workspaces/bigdatapools": "Synapse Spark Pool",
+        "microsoft.synapse/workspaces/sqlpools": "Synapse SQL Pool",
+        "microsoft.batch/batchaccounts": "Azure Batch",
+        "microsoft.batch/batchaccounts/pools": "Azure Batch Pool",
+        "microsoft.hdinsight/clusters": "HDInsight",
+        "microsoft.appplatform/spring": "Azure Spring Apps",
+        "microsoft.appplatform/spring/apps": "Azure Spring App",
+        "microsoft.avs/privateclouds": "Azure VMware Solution",
+        "microsoft.avs/privateclouds/clusters": "AVS Cluster",
         "microsoft.insights/components": "App Insights",
         "microsoft.appconfiguration/configurationstores": "App Config",
         "microsoft.network/trafficmanagerprofiles": "Traffic Manager",
         "microsoft.servicefabric/clusters": "Service Fabric",
+        "microsoft.servicefabric/managedclusters": "Service Fabric Managed Cluster",
+        "microsoft.servicefabric/managedclusters/nodetypes": "Service Fabric Managed Node Type",
+        "microsoft.databricks/workspaces": "Databricks",
         "microsoft.search/searchservices": "AI Search",
     }
     return labels.get((arm_type or "").lower(), arm_type.split("/")[-1] if arm_type else "Resource")
@@ -23888,8 +24030,24 @@ def _build_ingress_diagram(
                 pass
             return "APIM Backend Target"
 
-        backend_url_lookup: dict[str, tuple[str, str]] = {}
+        backend_url_lookup: dict[tuple[str, str], tuple[str, str]] = {}
+        backend_host_lookup: dict[tuple[str, str], tuple[str, str]] = {}
         backend_key_lookup: dict[tuple[str, str], tuple[str, str, str]] = {}
+        def _apim_url_keys(value: str) -> tuple[str, str]:
+            """Return stable URL and host keys for APIM route reconciliation."""
+            normalized = str(value or "").strip().lower().rstrip("/")
+            if not normalized:
+                return "", ""
+            try:
+                from urllib.parse import urlsplit as _urlsplit
+                parsed = _urlsplit(normalized if "://" in normalized else f"https://{normalized}")
+                host = str(parsed.hostname or "").strip().lower().rstrip(".")
+                if parsed.port:
+                    host = f"{host}:{parsed.port}"
+            except Exception:
+                host = ""
+            return normalized, host
+
         for row in apim_backend_rows:
             apim_name = str(row["apim_name"] or "").strip().lower()
             backend_id = str(row["backend_id"] or "").strip()
@@ -24076,6 +24234,7 @@ def _build_ingress_diagram(
         Supports historical/current row layouts and normalizes to:
         (gw, host, backends, backend_pool_name, listener_name, url_path, listener_protocol, waf_policy_name).
         """
+        route_gateway_names: set[str] = set()
         for _row in (appgw_routes or []):
             try:
                 _gw_name = _row[0]
@@ -24088,7 +24247,36 @@ def _build_ingress_diagram(
                 _waf_policy_name = _row[7] if len(_row) > 7 else None
             except Exception:
                 continue
+            _gw_key = str(_gw_name or "").strip().lower()
+            if _gw_key:
+                route_gateway_names.add(_gw_key)
             yield _gw_name, _hostname, _be_fqdns_json, _pool_name, _listener_name, _url_path, _listener_protocol, _waf_policy_name
+
+        # Older or partially harvested subscriptions may have the compact
+        # listener summary on the App Gateway asset but no routing-rule rows.
+        # Preserve the listener chain in that case; detailed rows above remain
+        # authoritative whenever they exist for a gateway.
+        for _item in rows:
+            _type_key = str(_item[1] or "").strip().lower() if len(_item) > 1 else ""
+            if "applicationgateway" not in _type_key:
+                continue
+            _gw_name = str(_item[0] or "").strip()
+            _gw_key = _gw_name.lower()
+            if not _gw_name or _gw_key in route_gateway_names:
+                continue
+            _listeners = _item[8] if len(_item) > 8 else None
+            if not _listeners:
+                continue
+            for _listener in str(_listeners).split(","):
+                _listener = _listener.strip()
+                if not _listener:
+                    continue
+                _protocol = _listener.split(":", 1)[0].strip().upper() or "HTTPS"
+                _hostname = _listener.split(":", 1)[1].strip() if ":" in _listener else (
+                    str(_item[3] or "").strip() if len(_item) > 3 else ""
+                )
+                _listener_name = f"{_protocol.lower()}-listener"
+                yield _gw_name, _hostname, "[]", None, _listener_name, "/*", _protocol, None
 
     def _iter_appgw_waf_policy_rows():
         for _row in (appgw_waf_policy_rows or []):
@@ -24229,17 +24417,16 @@ def _build_ingress_diagram(
             else []
         )
 
-        # Skip child resources (e.g. storageAccounts/blobServices/containers,
-        # servers/databases). These have no independent public FQDNs and inflating
-        # parent counts distorts exposure counts dramatically.
-        if len(type_key.split("/")) > 2:
+        # Keep public child resources in the exposure inventory. They may not have
+        # independent DNS endpoints, but omitting them hides harvested public
+        # storage containers and CDN endpoints from the diagram drilldown.
+        if type_key.endswith("/sites/slots") or "/sites/slots/" in type_key:
             continue
 
-        # Skip AKS-managed or Kubernetes-managed RG noise (managed-rg-*, MC_*).
-        # Resources inside these RGs are infrastructure managed by AKS/k8s and
-        # should not appear as customer-owned data store or backend nodes.
+        # Keep public assets in managed RGs visible so the diagram accounts for
+        # every harvested public resource; private AKS infrastructure remains noise.
         rg_lower = (rg or "").lower()
-        if rg_lower.startswith(("managed-rg-", "mc_")):
+        if rg_lower.startswith(("managed-rg-", "mc_")) and not bool(is_public):
             continue
 
         # Override is_public for ILB App Service Environments: the harvest script
@@ -24253,6 +24440,12 @@ def _build_ingress_diagram(
         # Classify for ingress flow
         if "apim api" in type_key:
             entry_points.append(item)
+        elif "applicationgatewaywebapplicationfirewallpolicies" in type_key:
+            # WAF policies are rendered as synthetic children of their
+            # Application Gateway from appgw_waf_policy_rows. Treating the
+            # harvested child resource as an entry point makes it get grouped
+            # with the gateway and can hide the real gateway node.
+            continue
         elif (
             "applicationgateway" in type_key
             or "frontdoor" in type_key
@@ -24260,6 +24453,8 @@ def _build_ingress_diagram(
             or "azurefirewalls" in type_key
             or "loadbalancer" in type_key
             or "bastionhost" in type_key
+            or "trafficmanager" in type_key
+            or "cdn/profiles" in type_key
         ):
             entry_points.append(item)
         elif "apimanagement" in type_key:
@@ -24270,6 +24465,8 @@ def _build_ingress_diagram(
               or "serverfarms" in type_key or "hostingenvironment" in type_key
               or "datafactory" in type_key or "cognitiveservices" in type_key
               or "containerregistry" in type_key or "servicefabric" in type_key
+              or "eventgrid/topics" in type_key or "purview/accounts" in type_key
+              or "kusto/clusters" in type_key
               or "sites" in type_key or "virtualmachinescalesets" in type_key
               ):
             # App Insights (insights/components) intentionally excluded — monitoring
@@ -24537,6 +24734,9 @@ def _build_ingress_diagram(
                 "type": "Kubernetes Ingress",
                 "arm_type": "microsoft.kubernetes/ingresses",
                 "is_group": False,
+                "platform_managed": bool(item.get("platform_managed")),
+                "compute_scope": item.get("compute_scope") or "",
+                "managed_service": item.get("managed_service") or "",
                 "resources": [{"rg": str(resource_group or cluster_item.get("rg") or "").strip(), "name": str(cluster_name or cluster_item.get("name") or "").strip()}],
                 "fqdns": [host_str] if host_str else [],
                 "public": _aks_ingress_is_public(exposure_level, host_str),
@@ -25033,6 +25233,9 @@ def _build_ingress_diagram(
                     "type": category,
                     "arm_type": items[0]["type"],
                     "is_group": True,
+                    "platform_managed": all(bool(i.get("platform_managed")) for i in items),
+                    "compute_scope": next((i.get("compute_scope") for i in items if i.get("compute_scope")), ""),
+                    "managed_service": next((i.get("managed_service") for i in items if i.get("managed_service")), ""),
                     "resources": [{"rg": i.get("rg"), "name": i["name"]} for i in items],
                     "fqdns": [i["fqdn"] for i in items if i.get("fqdn")],
                     "public": any(i.get("public") for i in items),
@@ -25835,7 +26038,7 @@ def _build_ingress_diagram(
     # Flag App Service Plans whose publicly-exposed hosted apps are not confirmed
     # in APIM routing. Derive "APIM resource names" from backend URLs by taking the
     # hostname prefix (e.g. "production-account-viewing-permissions" from
-    # "https://production-account-viewing-permissions.internal.cbinnovation.uk").
+    # "https://production-account-viewing-permissions.internal.car.uk").
     # A plan is flagged ⚠️ when it is publicly exposed AND none of its hosted site
     # names appear among the APIM backend names — indicating the apps may bypass
     # the API gateway layer.
@@ -26358,9 +26561,26 @@ def _build_ingress_diagram(
         if all(spec.get("node_id") != _listener_nid for spec in listener_node_specs):
             listener_node_specs.append(_listener_spec)
             _listener_nids[_gw_nid].append((_listener_nid, _is_http))
-        _waf_name = str(_waf_policy_name or _gw_level_waf_policy.get(_gw_key) or "").strip()
+        _gateway_item = next(
+            (item for item in shown_entry if _get_node_id(item) == _gw_nid),
+            {},
+        )
+        _waf_name = str(
+            _waf_policy_name
+            or _gw_level_waf_policy.get(_gw_key)
+            or (
+                _gateway_item.get("waf_mode")
+                or "WAF"
+                if _gateway_item.get("has_waf") or _gateway_item.get("waf_mode")
+                else ""
+            )
+        ).strip()
         if _waf_name:
-            _waf_nid = f"waf_{_gw_nid}_{_sanitise_node_id(_waf_name)}"
+            _waf_nid = (
+                f"waf_{_gw_nid}"
+                if not (_waf_policy_name or _gw_level_waf_policy.get(_gw_key))
+                else f"waf_{_gw_nid}_{_sanitise_node_id(_waf_name)}"
+            )
             _waf_spec = {
                 "node_id": _waf_nid,
                 "gateway_node_id": _gw_nid,
@@ -28229,7 +28449,6 @@ def _build_ingress_diagram(
                             else:
                                 _be_nid = _parent_nid
                 
-                # Fallback for unresolved internal FQDNs (e.g. *.internal.cbinnovation.uk).
                 # Prefer a harvested AKS ingress node when the hostname is available;
                 # only fall back to the cluster node if we cannot resolve the host.
                 if not _be_nid and ".internal." in _fqdn_s:

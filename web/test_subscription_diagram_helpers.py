@@ -268,7 +268,7 @@ def test_aks_route_backend_prefers_ingress_hostname_over_cluster():
             None,
             0,
             None,
-            '[{"target":"production-portalui2.internal.cbinnovation.uk","name":"production-portalui2.internal.cbinnovation.uk"}]',
+            '[{"target":"production-portalui2.internal.car.uk","name":"production-portalui2.internal.car.uk"}]',
             '{"properties":{}}',
             None,
             None,
@@ -296,7 +296,7 @@ def test_aks_route_backend_prefers_ingress_hostname_over_cluster():
             "SharedAKS",
             "default",
             "portalui-ingress",
-            "production-portalui2.internal.cbinnovation.uk",
+            "production-portalui2.internal.car.uk",
             "/*",
             "Internal",
             "portalui",
@@ -325,7 +325,7 @@ def test_aks_route_backend_prefers_ingress_hostname_over_cluster():
         lambda value: value.replace("-", "_").replace("/", "_").replace(".", "_"),
     )
     ingress_nid = subscription_node_id(
-        {"name": "SharedAKS-default-portalui-ingress-production-portalui2.internal.cbinnovation.uk-ingress", "rg": "rg-aks"},
+        {"name": "SharedAKS-default-portalui-ingress-production-portalui2.internal.car.uk-ingress", "rg": "rg-aks"},
         lambda value: value.replace("-", "_").replace("/", "_").replace(".", "_"),
     )
     service_nid = subscription_node_id(
@@ -337,7 +337,7 @@ def test_aks_route_backend_prefers_ingress_hostname_over_cluster():
         lambda value: value.replace("-", "_").replace("/", "_").replace(".", "_"),
     )
 
-    assert "production-portalui2.internal.cbinnovation.uk" in mermaid
+    assert "production-portalui2.internal.car.uk" in mermaid
     assert f"{portalui_nid} --> {ingress_nid}" in mermaid
     assert f"{ingress_nid} --> {service_nid}" in mermaid
     assert f"{service_nid} --> {cluster_nid}" in mermaid
