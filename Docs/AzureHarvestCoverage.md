@@ -31,3 +31,31 @@ added with a provider-specific collector when their network exposure or
 dependency relationships affect architecture analysis. Examples for future
 coverage include Azure Bot Service, Azure Maps, Communication Services, Media
 Services, and Notification Hubs.
+
+## Scripted collection safeguards
+
+The shared Azure helpers reject mutating CLI operations, require an explicit
+subscription ID, enforce bounded subprocess execution, and redact
+secret-bearing fields before provider data is returned. Provider outcomes are
+recorded in `azure_harvest_coverage` as `checked`, `partial`,
+`permission-blocked`, `api-unsupported`, or `failed`; an empty provider result
+is not treated as proof that the provider is absent or secure.
+
+Normalized asset JSON includes `_extra.access_semantics`. This keeps anonymous
+permissions (for example, a Storage `publicAccess` ACL) separate from network
+reachability, including default ACL action, allowlists, trusted-service
+bypass, private-endpoint count, and unresolved states.
+
+For bounded read-only evidence collection on an existing asset, use:
+
+```bash
+python3 Scripts/Harvest/azure_followup.py \
+  --subscription-id SUBSCRIPTION_ID \
+  --resource-id RESOURCE_ID \
+  --field properties.publicNetworkAccess \
+  --field properties.networkAcls
+```
+
+The follow-up utility accepts at most 50 resources and only approved metadata
+fields. Cross-subscription resources and unavailable details remain explicitly
+unresolved.

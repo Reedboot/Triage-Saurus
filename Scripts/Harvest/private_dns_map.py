@@ -203,6 +203,24 @@ def _extract_records(record_set: dict, zone_name: str) -> dict | None:
 # Process one zone
 # ---------------------------------------------------------------------------
 
+def _graph_resource_id(conn: sqlite3.Connection, asset_id: str | None) -> int | None:
+    """Resolve a harvested ARM asset to an IaC resource graph row when present."""
+    if not asset_id:
+        return None
+    row = conn.execute(
+        """
+        SELECT r.id
+        FROM resources AS r
+        WHERE r.resource_name = ?
+           OR r.source_file = ?
+        ORDER BY r.id
+        LIMIT 1
+        """,
+        (asset_id.rsplit("/", 1)[-1], asset_id),
+    ).fetchone()
+    return int(row[0]) if row else None
+
+
 def process_zone(
     zone: dict,
     subscription_id: str,
@@ -260,6 +278,7 @@ def process_zone(
          1 if externaldns else 0, now),
     )
 
+    skipped_connections = 0
     # Upsert records + create resource_connections
     for rec in records:
         conn.execute(
@@ -306,28 +325,36 @@ def process_zone(
         if source_asset_id or target_asset_id or rec["record_type"] in ("A", "CNAME"):
             # Check if this hostname is an APIM backend
             is_apim_backend = rec["record_name"] in apim_backend_fqdns or rec["fqdn"] in apim_backend_fqdns
-
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO resource_connections
-                    (source_id, target_id, connection_type, metadata)
-                VALUES (?, ?, 'dns_resolution', ?)
-                """,
-                (
-                    source_asset_id or f"fqdn:{target_fqdn}",
-                    target_asset_id or (f"fqdn:{rec['cname_target']}" if rec["cname_target"] else f"zone:{zone_name}"),
-                    json.dumps({
-                        "zone": zone_name,
-                        "record_type": rec["record_type"],
-                        "record_name": rec["record_name"],
-                        "fqdn": rec["fqdn"],
-                        "ips": json.loads(rec["ip_addresses"]) if rec["ip_addresses"] else [],
-                        "cname": rec["cname_target"],
-                        "managed_by": rec["managed_by"],
-                        "is_apim_backend": is_apim_backend,
-                    }),
-                ),
-            )
+            # resource_connections is the IaC topology table and requires
+            # numeric resources; provisioned_assets IDs are ARM strings.
+            source_graph_id = _graph_resource_id(conn, source_asset_id)
+            target_graph_id = _graph_resource_id(conn, target_asset_id)
+            if source_graph_id is None or target_graph_id is None:
+                skipped_connections += 1
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO resource_connections
+                        (experiment_id, source_resource_id, target_resource_id,
+                         connection_type, connection_metadata)
+                    VALUES (?, ?, ?, 'dns_resolution', ?)
+                    """,
+                    (
+                        f"harvest-{subscription_id}",
+                        source_graph_id,
+                        target_graph_id,
+                        json.dumps({
+                            "zone": zone_name,
+                            "record_type": rec["record_type"],
+                            "record_name": rec["record_name"],
+                            "fqdn": rec["fqdn"],
+                            "ips": json.loads(rec["ip_addresses"]) if rec["ip_addresses"] else [],
+                            "cname": rec["cname_target"],
+                            "managed_by": rec["managed_by"],
+                            "is_apim_backend": is_apim_backend,
+                        }),
+                    ),
+                )
 
     # Upsert VNet links
     for link in links_raw:
@@ -356,6 +383,7 @@ def process_zone(
         )
 
     conn.commit()
+    stats["skipped_connections"] = skipped_connections
     return stats
 
 

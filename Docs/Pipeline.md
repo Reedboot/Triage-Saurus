@@ -133,3 +133,20 @@ Resolution writes auditable `context_answers` records and updates `enrichment_qu
 - `insert_connection()` upserts by experiment/source/target/connection type and merge-updates non-null topology metadata.
 - Enrichment queue insertion is deduplicated by pending `context`.
 - `init_database.py` / `db_helpers._ensure_schema()` apply additive migrations (`CREATE TABLE IF NOT EXISTS` + `ALTER TABLE` guards).
+
+## Azure harvest evidence
+
+The Azure subscription harvester remains the canonical collector. Its shared
+helpers enforce read-only Azure CLI usage, explicit subscription scoping,
+bounded execution, and sensitive-field redaction. Provider-level outcomes are
+stored in `azure_harvest_coverage` so permission failures, unsupported APIs,
+partial results, and other collection gaps remain visible.
+
+Asset `raw_json` contains a normalized `_extra.access_semantics` object when
+the provider returned resource properties. Consumers must distinguish
+anonymous authorization from effective network reachability and preserve
+`unknown` when controls are incomplete.
+
+`Scripts/Harvest/azure_followup.py` provides an optional deterministic,
+allowlisted, read-only detail request for up to 50 existing resource IDs. It
+does not perform AI handoffs or resource writes.

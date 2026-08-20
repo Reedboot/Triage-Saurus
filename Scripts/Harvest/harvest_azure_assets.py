@@ -67,7 +67,12 @@ from Azure import log_analytics_workspace, monitor_action_group, activity_log_al
 from Azure import app_service_certificate, app_service_certificate_order
 from Azure import managed_compute_services
 from Azure._staged import BackfillJob, StagedRows
-from Azure._helpers import canonical_azure_resource_type, set_probe_enabled
+from Azure._helpers import (
+    build_access_semantics,
+    canonical_azure_resource_type,
+    get_last_azure_call_status,
+    set_probe_enabled,
+)
 import appgw_routing_map
 import apim_routing_map
 import private_dns_map
@@ -205,6 +210,7 @@ ProviderFn = Callable[..., HarvestOutput]
 ProgressCallback = Callable[[str], None]
 _MAX_PROVIDER_WORKERS = 6
 _DEFAULT_SUBSCRIPTION_WORKERS = 2
+_DEFAULT_POST_HARVEST_WORKERS = 4
 _SQLITE_BUSY_TIMEOUT_MS = 120000
 _PROGRESS_REFRESH_SECONDS = 10.0
 _PROVIDER_WRITE_CHUNK = 250
@@ -215,6 +221,7 @@ _ANSI_GREEN = "\033[32m"
 _ANSI_RED = "\033[31m"
 _ANSI_CYAN = "\033[36m"
 _ANSI_BLUE = "\033[34m"
+_POST_HARVEST_CONNECTION_LOCK = threading.Lock()
 
 
 def _color(text: str, color: str) -> str:
@@ -244,6 +251,49 @@ def _open_harvest_connection(
     if ensure_schema:
         _ensure_schema(conn)
     return conn
+
+
+def _run_post_harvest_jobs(
+    conn: sqlite3.Connection,
+    subscription_id: str,
+    dry_run: bool,
+    workers: int,
+    jobs: list[tuple[str, Callable[[sqlite3.Connection, str, bool], Any]]],
+) -> dict[str, Any]:
+    """Run independent post-harvest enrichments with one SQLite connection each."""
+    db_row = conn.execute("PRAGMA database_list").fetchone()
+    db_path = db_row[2] if db_row else ""
+
+    def run(label: str, job: Callable[[sqlite3.Connection, str, bool], Any]) -> tuple[str, Any]:
+        started = time.perf_counter()
+        try:
+            if db_path in ("", ":memory:"):
+                result = job(conn, subscription_id, dry_run)
+                print(f"  [{label}] completed in {time.perf_counter() - started:.2f}s", flush=True)
+                return label, result
+            # WAL mode initialization briefly needs an exclusive lock. Keep
+            # that setup serialized; the network-heavy job remains parallel.
+            with _POST_HARVEST_CONNECTION_LOCK:
+                worker_conn = _open_harvest_connection(Path(db_path))
+            try:
+                result = job(worker_conn, subscription_id, dry_run)
+                print(f"  [{label}] completed in {time.perf_counter() - started:.2f}s", flush=True)
+                return label, result
+            finally:
+                worker_conn.close()
+        except Exception as exc:
+            print(
+                f"  [{label}] failed in {time.perf_counter() - started:.2f}s: {exc}",
+                flush=True,
+            )
+            return label, exc
+
+    if len(jobs) <= 1 or workers <= 1 or db_path in ("", ":memory:"):
+        return dict(run(label, job) for label, job in jobs)
+
+    with ThreadPoolExecutor(max_workers=min(workers, len(jobs))) as pool:
+        futures = [pool.submit(run, label, job) for label, job in jobs]
+        return dict(future.result() for future in futures)
 
 
 def _normalize_provider_filters(raw_filters: list[str] | None) -> list[str]:
@@ -467,6 +517,39 @@ def _format_provider_state(state: _ProviderState, now: float) -> str:
     return _color(f"{bar} {status} {elapsed}{detail}", color)
 
 
+def _record_provider_coverage(
+    conn: sqlite3.Connection,
+    subscription_id: str,
+    label: str,
+    *,
+    status: str,
+    resource_count: int = 0,
+    detail: str = "",
+    command_status: dict[str, Any] | None = None,
+    started_at: float | None = None,
+    finished_at: float | None = None,
+) -> None:
+    """Persist a deterministic provider-level coverage record for this run."""
+    conn.execute(
+    """
+    INSERT INTO azure_harvest_coverage
+        (subscription_id, provider_label, status, resource_count, detail,
+         command_status, started_at, finished_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """,
+    (
+        subscription_id,
+        label,
+        status,
+        resource_count,
+        detail[:1000],
+        json.dumps(command_status, sort_keys=True) if command_status else None,
+        datetime.now(timezone.utc).isoformat(),
+        datetime.now(timezone.utc).isoformat(),
+    ),
+    )
+
+
 def _format_provider_progress_bar(state: _ProviderState, now: float, width: int = 24) -> str:
     if width <= 0:
         return "[]"
@@ -539,19 +622,43 @@ def _run_provider_task(
     provider_fn: ProviderFn,
     sub_id: str,
     progress: HarvestProgress,
-) -> HarvestOutput:
+) -> tuple[HarvestOutput, dict[str, Any] | None]:
     progress.mark_running(label)
     progress_cb: ProgressCallback | None = (
         (lambda detail, _label=label: progress.update(_label, detail))
         if label == "Storage"
         else None
     )
-    return _invoke_provider(
+    result = _invoke_provider(
         provider_fn,
         sub_id,
         progress_cb,
         stage_backfill=(label == "Storage"),
     )
+    return result, get_last_azure_call_status()
+
+
+def _coverage_status(
+    *,
+    command_status: dict[str, Any] | None,
+    failed: bool = False,
+) -> str:
+    """Map scripted collection outcomes to explicit coverage states."""
+    if failed:
+        error = str((command_status or {}).get("error", "")).lower()
+        if any(token in error for token in ("forbidden", "unauthorized", "permission")):
+            return "permission-blocked"
+        if "api-version" in error or "unsupported" in error:
+            return "api-unsupported"
+        return "failed"
+    if command_status and command_status.get("status") in {"timeout", "error", "invalid-json"}:
+        error = str(command_status.get("error", "")).lower()
+        if any(token in error for token in ("forbidden", "unauthorized", "permission")):
+            return "permission-blocked"
+        if "api-version" in error or "unsupported" in error:
+            return "api-unsupported"
+        return "partial"
+    return "checked"
 
 
 def _normalize_rows(result: Any) -> list[dict[str, Any]]:
@@ -567,9 +674,32 @@ def _normalize_rows(result: Any) -> list[dict[str, Any]]:
         raise TypeError(f"unexpected harvest result type: {type(result)!r}")
     normalized: list[dict[str, Any]] = []
     for row in rows:
-        normalized.append({
+        normalized_row = {
             **row,
             "type": canonical_azure_resource_type(row.get("type")),
+        }
+        raw_json = normalized_row.get("raw_json")
+        if isinstance(raw_json, str):
+            try:
+                raw = json.loads(raw_json)
+            except json.JSONDecodeError:
+                raw = None
+            if isinstance(raw, dict):
+                props = raw.get("properties")
+                if not isinstance(props, dict):
+                    props = {}
+                extra = raw.get("_extra")
+                if not isinstance(extra, dict):
+                    extra = {}
+                extra["access_semantics"] = build_access_semantics(
+                    props,
+                    endpoint_present=bool(normalized_row.get("endpoints") or normalized_row.get("fqdn")),
+                    anonymous_permission=extra.get("anonymous_permission"),
+                )
+                raw["_extra"] = extra
+                normalized_row["raw_json"] = json.dumps(raw, sort_keys=True)
+        normalized.append({
+            **normalized_row,
         })
     return normalized
 
@@ -888,6 +1018,7 @@ def harvest_subscription(
     diagram_checkpoints: bool = False,
     resource_graph_gating: bool = True,
     provider_workers: int = _MAX_PROVIDER_WORKERS,
+    post_harvest_workers: int = _DEFAULT_POST_HARVEST_WORKERS,
 ) -> int:
     harvest_started = time.perf_counter()
     sub_id = sub["id"]
@@ -983,13 +1114,36 @@ def harvest_subscription(
                 for future in done:
                     label = future_map[future]
                     try:
-                        assets = future.result()
+                        assets, command_status = future.result()
                     except Exception as exc:
                         progress.mark_failed(label, str(exc))
+                        if not dry_run:
+                            _record_provider_coverage(
+                                conn,
+                                sub_id,
+                                label,
+                                status=_coverage_status(failed=True),
+                                detail=str(exc),
+                            )
+                            conn.commit()
                         progress.render(force=True)
                         continue
 
                     asset_count, backfill_count = _store_result(assets)
+                    if not dry_run:
+                        _record_provider_coverage(
+                            conn,
+                            sub_id,
+                            label,
+                            status=_coverage_status(command_status=command_status),
+                            resource_count=asset_count,
+                            detail=(
+                                "provider completed with an Azure CLI error"
+                                if command_status and command_status.get("status") != "ok"
+                                else ""
+                            ),
+                            command_status=command_status,
+                        )
 
                     processed_backfills = _drain_ready_backfill_jobs(
                         pending_backfill_jobs,
@@ -1026,52 +1180,37 @@ def harvest_subscription(
     if skip_post_harvest:
         print("  [post-harvest] skipped by request")
     else:
-        # App Gateway routing + rewrites + WAF — runs after assets so fqdn_to_asset lookup is populated
-        print(f"  [App Gateway Routing] harvesting listeners, routing rules, rewrite rules & WAF policies...", flush=True)
-        phase_started = time.perf_counter()
-        try:
-            rules, rewrite_sets, rewrite_rules, waf = appgw_routing_map.harvest_routing(sub_id, conn, dry_run=dry_run)
-            action = "would write" if dry_run else "written"
-            print(
-                f"  [App Gateway Routing] {rules} routing rules, "
-                f"{rewrite_sets} rewrite rule sets ({rewrite_rules} rewrite rules), "
-                f"{waf} WAF policies {action} in {time.perf_counter() - phase_started:.2f}s"
-            )
-        except Exception as exc:
-            print(f"  [App Gateway Routing] FAILED ({exc}) in {time.perf_counter() - phase_started:.2f}s")
-
-        # Private DNS zones/records for internal host resolution coverage
-        print(f"  [Private DNS] harvesting zones, records, and VNet links...", flush=True)
-        phase_started = time.perf_counter()
-        try:
-            dns_summary = private_dns_map.harvest_private_dns(sub_id, conn, dry_run=dry_run)
-            action = "would harvest" if dry_run else "written"
-            print(
-                f"  [Private DNS] {dns_summary.get('zones', 0)} zones, "
-                f"{dns_summary.get('records', 0)} records {action} in {time.perf_counter() - phase_started:.2f}s"
-            )
-        except Exception as exc:
-            print(f"  [Private DNS] FAILED ({exc}) in {time.perf_counter() - phase_started:.2f}s")
-
-        # AKS ingress → service → deployment route model
-        print(f"  [AKS Routes] harvesting ingress→service→deployment mappings...", flush=True)
-        phase_started = time.perf_counter()
-        try:
-            route_count = aks.harvest_routes(sub_id, conn, dry_run=dry_run)
-            action = "would harvest" if dry_run else "written"
-            print(f"  [AKS Routes] {route_count} routes {action} in {time.perf_counter() - phase_started:.2f}s")
-        except Exception as exc:
-            print(f"  [AKS Routes] FAILED ({exc}) in {time.perf_counter() - phase_started:.2f}s")
-
-        # APIM API → backend routes
-        print(f"  [APIM Routes] harvesting API→backend mappings...", flush=True)
-        phase_started = time.perf_counter()
-        try:
-            route_count = apim_routing_map.harvest_routes(sub_id, conn, dry_run=dry_run)
-            action = "would write" if dry_run else "written"
-            print(f"  [APIM Routes] {route_count} routes {action} in {time.perf_counter() - phase_started:.2f}s")
-        except Exception as exc:
-            print(f"  [APIM Routes] FAILED ({exc}) in {time.perf_counter() - phase_started:.2f}s")
+        print(
+            f"  [post-harvest] running independent routing enrichments in parallel "
+            f"({post_harvest_workers} workers)...",
+            flush=True,
+        )
+        post_jobs = [
+            ("App Gateway Routing", lambda c, s, d: appgw_routing_map.harvest_routing(s, c, dry_run=d)),
+            ("Private DNS", lambda c, s, d: private_dns_map.harvest_private_dns(s, c, dry_run=d)),
+            ("AKS Routes", lambda c, s, d: aks.harvest_routes(s, c, dry_run=d)),
+            ("APIM Routes", lambda c, s, d: apim_routing_map.harvest_routes(s, c, dry_run=d)),
+            ("Function App Triggers", lambda c, s, d: function_apps.harvest_http_triggers(s, c, dry_run=d)),
+        ]
+        post_results = _run_post_harvest_jobs(
+            conn, sub_id, dry_run, post_harvest_workers, post_jobs
+        )
+        for label, result in post_results.items():
+            if isinstance(result, Exception):
+                print(f"  [{label}] FAILED ({result})")
+            elif label == "App Gateway Routing":
+                rules, rewrite_sets, rewrite_rules, waf = result
+                action = "would write" if dry_run else "written"
+                print(f"  [{label}] {rules} routing rules, {rewrite_sets} rewrite rule sets "
+                      f"({rewrite_rules} rewrite rules), {waf} WAF policies {action}")
+            elif label == "Private DNS":
+                action = "would harvest" if dry_run else "written"
+                print(f"  [{label}] {result.get('zones', 0)} zones, "
+                      f"{result.get('records', 0)} records {action}")
+            else:
+                action = "would write" if dry_run else "written"
+                count = result if isinstance(result, int) else result[0] if isinstance(result, tuple) else result
+                print(f"  [{label}] {count} {action}")
 
         # APIM backend inventory + API-to-backend links
         print(f"  [APIM Backend Links] harvesting backend inventory and route links...", flush=True)
@@ -1082,16 +1221,6 @@ def harvest_subscription(
             print(f"  [APIM Backend Links] {backend_count} backends, {link_count} links {action} in {time.perf_counter() - phase_started:.2f}s")
         except Exception as exc:
             print(f"  [APIM Backend Links] FAILED ({exc}) in {time.perf_counter() - phase_started:.2f}s")
-
-        # Function App triggers
-        print(f"  [Function App Triggers] harvesting trigger bindings...", flush=True)
-        phase_started = time.perf_counter()
-        try:
-            trigger_count = function_apps.harvest_http_triggers(sub_id, conn, dry_run=dry_run)
-            action = "would write" if dry_run else "written"
-            print(f"  [Function App Triggers] {trigger_count} triggers {action} in {time.perf_counter() - phase_started:.2f}s")
-        except Exception as exc:
-            print(f"  [Function App Triggers] FAILED ({exc}) in {time.perf_counter() - phase_started:.2f}s")
 
     # Front Door routing rules
     print(f"  [Front Door Routes] harvesting routing rules...", flush=True)
@@ -1172,6 +1301,7 @@ def _harvest_subscription_task(
     diagram_checkpoints: bool,
     resource_graph_gating: bool,
     provider_workers: int,
+    post_harvest_workers: int,
 ) -> int:
     """Harvest one subscription with a connection owned by its worker."""
     conn = _open_harvest_connection(db_path)
@@ -1185,6 +1315,7 @@ def _harvest_subscription_task(
             diagram_checkpoints=diagram_checkpoints,
             resource_graph_gating=resource_graph_gating,
             provider_workers=provider_workers,
+            post_harvest_workers=post_harvest_workers,
         )
     finally:
         conn.close()
@@ -1259,12 +1390,21 @@ def main() -> None:
         metavar="N",
         help=f"Maximum provider harvesters per subscription (default: {_MAX_PROVIDER_WORKERS})",
     )
+    parser.add_argument(
+        "--post-harvest-workers",
+        type=int,
+        default=_DEFAULT_POST_HARVEST_WORKERS,
+        metavar="N",
+        help=f"Maximum independent post-harvest enrichments per subscription (default: {_DEFAULT_POST_HARVEST_WORKERS})",
+    )
     args = parser.parse_args()
 
     if args.subscription_workers < 1:
         parser.error("--subscription-workers must be at least 1")
     if args.provider_workers < 1:
         parser.error("--provider-workers must be at least 1")
+    if args.post_harvest_workers < 1:
+        parser.error("--post-harvest-workers must be at least 1")
 
     set_probe_enabled(args.probes)
     storage.set_include_blob_children(not args.skip_storage_blobs)
@@ -1312,6 +1452,7 @@ def main() -> None:
             diagram_checkpoints=args.diagram_checkpoints,
             resource_graph_gating=not args.no_resource_graph_gating,
             provider_workers=args.provider_workers,
+            post_harvest_workers=args.post_harvest_workers,
         )
     else:
         print(
@@ -1331,6 +1472,7 @@ def main() -> None:
                     diagram_checkpoints=args.diagram_checkpoints,
                     resource_graph_gating=not args.no_resource_graph_gating,
                     provider_workers=args.provider_workers,
+                    post_harvest_workers=args.post_harvest_workers,
                 ): sub
                 for sub in target_subs
             }

@@ -1557,6 +1557,7 @@ def render_subscription_view(
     css_lines = [
         "/* Subscription Diagram Styling */",
         ".internet { stroke: #d32f2f; stroke-width: 2px; fill: #3b0a0a; }",
+        ".internet .nodeLabel { padding: 14px 24px !important; }",
         ".entryPoint { stroke: #d32f2f; stroke-width: 2px; fill: #3b0a0a; }",
         ".entryPointProtected { stroke: #ea580c; stroke-width: 2px; fill: #3d1c0d; }",
         ".apiGateway { stroke: #0ea5e9; stroke-width: 2px; fill: #082f49; }",

@@ -34,7 +34,9 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     results = []
 
     for gw in raw:
-        props = gw.get("properties") or {}
+        # `az network application-gateway list` returns a flat resource shape,
+        # while ARM REST responses may wrap the same fields in `properties`.
+        props = gw.get("properties") or gw
         fqdn = _get_frontend_fqdn(props)
         waf_mode = _get_waf_mode(gw, subscription_id)
         is_public = _has_public_frontend(props)
@@ -66,6 +68,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "auth_methods": auth_methods,
             "fqdn": fqdn,
             "pipeline_tag": None,
+            "waf_mode": waf_mode,
             "raw_json": json.dumps({**gw, "_extra": extra}),
         })
 
@@ -75,7 +78,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
 def _get_frontend_fqdn(props: dict[str, Any]) -> str | None:
     """Extract the first public frontend IP DNS name from App Gateway properties."""
     for fip in props.get("frontendIPConfigurations") or []:
-        fip_props = fip.get("properties") or {}
+        fip_props = fip.get("properties") or fip
         pip = fip_props.get("publicIPAddress")
         if pip:
             pip_props = pip.get("properties") or {}
@@ -94,7 +97,7 @@ def _extract_public_ip_ids(props: dict[str, Any]) -> list[str]:
     found: list[str] = []
     seen: set[str] = set()
     for fip in props.get("frontendIPConfigurations") or []:
-        fip_props = fip.get("properties") or {}
+        fip_props = fip.get("properties") or fip
         refs = [
             (fip_props.get("publicIPAddress") or {}).get("id"),
             fip_props.get("publicIPAddressId"),
@@ -112,7 +115,7 @@ def _get_endpoint_entries(props: dict[str, Any]) -> list[tuple[str | None, int, 
     # Collect public frontend IP FQDNs and IPs
     frontend_addresses: list[str] = []
     for fip in props.get("frontendIPConfigurations") or []:
-        fip_props = fip.get("properties") or {}
+        fip_props = fip.get("properties") or fip
         pip = fip_props.get("publicIPAddress")
         if pip:
             pip_props = pip.get("properties") or {}
@@ -177,7 +180,7 @@ def _get_waf_mode(gw: dict[str, Any], subscription_id: str) -> str | None:
     
     Returns the WAF mode only if it is enabled. Returns None if WAF is disabled.
     """
-    props = gw.get("properties") or {}
+    props = gw.get("properties") or gw
     sku = gw.get("sku") or {}
     sku_name = (sku.get("name") or "").upper()
 
@@ -207,7 +210,7 @@ def get_backend_fqdns(subscription_id: str) -> dict[str, str]:
     raw = az(["network", "application-gateway", "list"], subscription_id)
     index: dict[str, str] = {}
     for gw in raw:
-        props = gw.get("properties") or {}
+        props = gw.get("properties") or gw
         gw_name = gw.get("name", "")
         for pool in props.get("backendAddressPools") or []:
             pool_props = pool.get("properties") or {}

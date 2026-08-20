@@ -28,7 +28,11 @@ import db_helpers
 from Azure import app_service_environment
 from Azure._helpers import (
     canonical_azure_resource_type,
+    build_access_semantics,
     safe_str,
+    redact_azure_value,
+    get_last_azure_call_status,
+    _validate_azure_args,
     infer_fqdn,
     build_endpoints,
     extract_ip_restrictions,
@@ -108,6 +112,49 @@ class TestSafeStr:
 
     def test_coerces_int_to_string(self):
         assert safe_str(42) == "42"
+
+
+class TestAzureCommandSafety:
+    def test_rejects_mutating_commands(self):
+        with pytest.raises(ValueError, match="mutating"):
+            _validate_azure_args(["resource", "delete"])
+
+    def test_redacts_sensitive_fields_and_values(self):
+        value = redact_azure_value({
+            "password": "secret-value",
+            "note": "token=abc123",
+            "properties": {"name": "retained"},
+        })
+        assert value == {
+            "password": "[REDACTED]",
+            "note": "token=[REDACTED]",
+            "properties": {"name": "retained"},
+        }
+
+    def test_status_is_thread_local_and_copyable(self):
+        assert get_last_azure_call_status() is None
+
+
+class TestAccessSemantics:
+    def test_separates_acl_permission_from_network_reachability(self):
+        semantics = build_access_semantics({
+            "publicAccess": "blob",
+            "publicNetworkAccess": "Enabled",
+            "networkAcls": {
+                "defaultAction": "Deny",
+                "ipRules": [{"value": "10.0.0.0/8"}],
+                "bypass": "AzureServices",
+            },
+        })
+        assert semantics["anonymous_permission"] == "blob"
+        assert semantics["network_default_action"] == "Deny"
+        assert semantics["effective_reachability"] == "ip_restricted"
+        assert semantics["trusted_service_bypass"] == "AzureServices"
+
+    def test_missing_network_controls_remain_unknown(self):
+        semantics = build_access_semantics({"publicAccess": "container"})
+        assert semantics["anonymous_permission"] == "container"
+        assert semantics["effective_reachability"] == "unknown"
 
 
 class TestLoadBalancerHarvest:
@@ -1348,6 +1395,79 @@ class TestAppGatewayPublicIpDetection:
         }
         assert app_gateway._has_public_frontend(props) == 1
         assert app_gateway._extract_public_ip_ids(props) == [
+            "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Network/publicIPAddresses/pip-one"
+        ]
+
+    def test_harvest_reads_flat_az_cli_gateway_shape(self, monkeypatch):
+        gateway = {
+            "id": "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Network/applicationGateways/gw-one",
+            "name": "gw-one",
+            "resourceGroup": "rg",
+            "type": "Microsoft.Network/applicationGateways",
+            "location": "uksouth",
+            "sku": {"name": "WAF_v2"},
+            "firewallPolicy": {
+                "id": "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Network/ApplicationGatewayWebApplicationFirewallPolicies/policy-one"
+            },
+            "frontendIPConfigurations": [
+                {
+                    "name": "frontend-one",
+                    "publicIPAddress": {
+                        "id": "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Network/publicIPAddresses/pip-one",
+                        "properties": {
+                            "dnsSettings": {"fqdn": "gw-one.uksouth.cloudapp.azure.com"}
+                        },
+                    },
+                }
+            ],
+            "frontendPorts": [
+                {
+                    "name": "port-443",
+                    "id": "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Network/applicationGateways/gw-one/frontendPorts/port-443",
+                    "properties": {"port": 443},
+                }
+            ],
+            "httpListeners": [
+                {
+                    "name": "listener-one",
+                    "properties": {
+                        "protocol": "Https",
+                        "frontendPort": {
+                            "id": "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Network/applicationGateways/gw-one/frontendPorts/port-443"
+                        },
+                    },
+                }
+            ],
+            "backendAddressPools": [],
+        }
+
+        monkeypatch.setattr(app_gateway, "az", lambda args, subscription_id: [gateway])
+        monkeypatch.setattr(
+            app_gateway,
+            "build_endpoints",
+            lambda entries: json.dumps(
+                [
+                    {"address": address, "port": port, "protocol": protocol}
+                    for address, port, protocol in entries
+                ]
+            ),
+        )
+
+        row = app_gateway.harvest("sub-1")[0]
+        raw = json.loads(row["raw_json"])
+
+        assert row["is_public"] == 1
+        assert row["fqdn"] == "gw-one.uksouth.cloudapp.azure.com"
+        assert raw["_extra"]["waf_mode"] == "PolicyAttached"
+        assert json.loads(row["endpoints"]) == [
+            {
+                "address": "gw-one.uksouth.cloudapp.azure.com",
+                "port": 443,
+                "protocol": "https",
+            }
+        ]
+        assert raw["_extra"]["listener_count"] == 1
+        assert raw["_extra"]["public_ip_resource_ids"] == [
             "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Network/publicIPAddresses/pip-one"
         ]
 

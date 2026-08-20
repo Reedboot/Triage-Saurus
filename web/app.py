@@ -12867,7 +12867,6 @@ def _build_subscription_architecture_payload(
                        git_repository, resource_group, pod_template_labels
                 FROM aks_routes
                 WHERE subscription_id=?
-                LIMIT 100
                 """.format(aks_route_exposure_select=aks_route_exposure_select),
                 (sub_id,),
             ).fetchall()
@@ -12879,7 +12878,7 @@ def _build_subscription_architecture_payload(
     try:
         if _table_exists(conn, "apim_backends"):
             apim_rows = conn.execute(
-                "SELECT url FROM apim_backends WHERE subscription_id = ? AND url IS NOT NULL LIMIT 50",
+                "SELECT url FROM apim_backends WHERE subscription_id = ? AND url IS NOT NULL",
                 (sub_id,),
             ).fetchall()
             for (url,) in apim_rows:
@@ -12917,11 +12916,20 @@ def _build_subscription_architecture_payload(
         pass
 
     apim_api_rows: list = []
+    apim_api_route_rows: list = []
     try:
         if _table_exists(conn, "apim_api_routes"):
             apim_api_rows = conn.execute(
                 """
                 SELECT apim_name, apim_resource_id, api_name, api_display_name, api_path
+                FROM apim_api_routes
+                WHERE subscription_id=?
+                """,
+                (sub_id,),
+            ).fetchall()
+            apim_api_route_rows = conn.execute(
+                """
+                SELECT apim_name, api_name, backend_id, backend_url, service_url
                 FROM apim_api_routes
                 WHERE subscription_id=?
                 """,
@@ -14033,6 +14041,31 @@ def _build_subscription_architecture_payload(
             asset for asset in assets
             if "apimanagement" in str(asset.get("type") or "").lower()
         ]
+        def _route_host(value: object) -> str:
+            from urllib.parse import urlsplit
+
+            text = str(value or "").strip()
+            if not text:
+                return ""
+            parsed = urlsplit(text if "://" in text else f"https://{text}")
+            return (parsed.hostname or "").strip().lower().rstrip(".")
+
+        apim_routes_by_backend: dict[tuple[str, str], set[str]] = defaultdict(set)
+        apim_routes_by_host: dict[tuple[str, str], set[str]] = defaultdict(set)
+        for route_row in apim_api_route_rows:
+            route_apim = str(route_row["apim_name"] or "").strip().lower()
+            route_backend_id = str(route_row["backend_id"] or "").strip().lower()
+            route_urls = {
+                str(route_row["backend_url"] or "").strip(),
+                str(route_row["service_url"] or "").strip(),
+            }
+            route_urls.discard("")
+            if route_apim and route_backend_id:
+                apim_routes_by_backend[(route_apim, route_backend_id)].update(route_urls)
+            for route_url in route_urls:
+                route_host = _route_host(route_url)
+                if route_apim and route_host:
+                    apim_routes_by_host[(route_apim, route_host)].add(route_url)
         seen_backend_keys: set[tuple[str, str]] = set()
         for row in apim_backend_rows:
             apim_name = str(row["apim_name"] or "").strip().lower()
@@ -14058,6 +14091,12 @@ def _build_subscription_architecture_payload(
                 continue
 
             backend_label = _apim_backend_label(apim_name, backend_id, title, url)
+            backend_route_targets = set(
+                apim_routes_by_backend.get((apim_name, backend_id.lower()), set())
+            )
+            backend_route_targets.update(
+                apim_routes_by_host.get((apim_name, _route_host(url)), set())
+            )
             synthetic_apim_backend_assets.append({
                 "id": f"apim-backend::{apim_name}::{backend_label}",
                 "name": backend_label,
@@ -14092,13 +14131,43 @@ def _build_subscription_architecture_payload(
                 "provider_key": "azure",
                 "provider_label": "Azure",
                 "tier": "backend",
-                "routing_targets": [],
+                "routing_targets": [
+                    {"target": target_url, "name": target_url}
+                    for target_url in sorted(backend_route_targets)
+                ],
                 "vnet_name": parent_asset.get("vnet_name"),
                 "vnet_resource_group": parent_asset.get("vnet_resource_group"),
                 "subnet_name": parent_asset.get("subnet_name"),
                 "subnet_id": parent_asset.get("subnet_id"),
                 "network": dict(parent_asset.get("network") or {}),
             })
+
+        backend_asset_by_key = {
+            (
+                str(asset.get("id") or "").split("::", 2)[1].lower(),
+                str(asset.get("sku") or "").lower(),
+            ): asset
+            for asset in synthetic_apim_backend_assets
+        }
+        for api_asset in synthetic_apim_api_assets:
+            api_apim, api_name = str(api_asset.get("id") or "").split("::", 2)[1:]
+            for route_row in apim_api_route_rows:
+                if (
+                    str(route_row["apim_name"] or "").strip().lower() != api_apim
+                    or str(route_row["api_name"] or "").strip().lower() != api_name.lower()
+                ):
+                    continue
+                backend_key = (api_apim, str(route_row["backend_id"] or "").strip().lower())
+                backend_asset = backend_asset_by_key.get(backend_key)
+                if not backend_asset:
+                    continue
+                api_asset.setdefault("routing_targets", []).append(
+                    {
+                        "target_resource_id": backend_asset["id"],
+                        "target": backend_asset["id"],
+                        "name": backend_asset.get("name") or backend_asset["id"],
+                    }
+                )
 
     if synthetic_apim_api_assets:
         assets.extend(synthetic_apim_api_assets)
@@ -15839,17 +15908,27 @@ def _build_subscription_architecture_payload(
                 continue
             host_str = str(host or "").strip()
             path_str = str(path or "").strip() or "/*"
-            route_key = "::".join([
-                cluster_key[0],
-                cluster_key[1],
-                str(namespace or "").strip().lower(),
-                str(ingress_name or host_str or f"{cluster_name}-ingress").strip().lower(),
-                host_str.lower(),
-                path_str.lower(),
-                str(service_name or deployment_name or "").strip().lower(),
-                str(service_port or "").strip().lower(),
-            ])
-            ingress_node_id = f"aks-ingress::{route_key}"
+            cluster_asset = next(
+                (
+                    asset for asset in assets
+                    if "managedcluster" in str(asset.get("type") or "").lower()
+                    and str(asset.get("name") or "").strip().lower() == cluster_key[1]
+                    and (
+                        not cluster_key[0]
+                        or str(asset.get("resource_group") or "").strip().lower() == cluster_key[0]
+                    )
+                ),
+                None,
+            )
+            if not cluster_asset:
+                continue
+            ingress_label = str(ingress_name or host_str or f"{cluster_name}-ingress").strip()
+            ingress_node_id = (
+                f"aks-ingress::{cluster_asset.get('id')}::{namespace or 'default'}::"
+                f"{ingress_label}::{host_str or 'host'}"
+            )
+            if not any(str(asset.get("id") or "") == ingress_node_id for asset in assets):
+                continue
     node_ids = {
         str(node.get("id") or "").strip().lower()
         for node in nodes
@@ -18255,6 +18334,22 @@ def _is_appgw_waf_policy_resource_type(resource_type: str | None) -> bool:
 
 def _is_apim_publicly_accessible(raw_json: dict) -> bool:
     """Return True when Azure APIM should be treated as internet-facing."""
+    props = raw_json.get("properties") if isinstance(raw_json.get("properties"), dict) else {}
+    extra = raw_json.get("_extra") if isinstance(raw_json.get("_extra"), dict) else {}
+    outbound_public_ips = (
+        props.get("outboundPublicIpAddresses")
+        or props.get("outbound_public_ip_addresses")
+        or extra.get("outbound_public_ips")
+        or extra.get("outboundPublicIpAddresses")
+    )
+    has_explicit_ingress_settings = any(
+        key in props
+        for key in ("virtualNetworkType", "virtual_network_type", "publicNetworkAccess", "public_network_access")
+    )
+    # A harvested APIM may expose only outbound public addresses. Do not turn
+    # that egress evidence into an inbound/public classification.
+    if outbound_public_ips and not has_explicit_ingress_settings:
+        return False
     vnet_type = str(_extract_virtual_network_type(raw_json) or "").strip().lower()
     if vnet_type in {"internal", "injected", "private"}:
         return False
@@ -20676,6 +20771,14 @@ def _trace_subscription_component(
         if part.strip()
     ]
 
+    def route_host(url: object) -> str:
+        from urllib.parse import urlsplit
+
+        text = str(url or "").strip()
+        if "://" not in text:
+            text = f"https://{text}"
+        return str(urlsplit(text).hostname or "").strip().lower().rstrip(".")
+
     def matches(step: dict) -> bool:
         values = {
             str(step.get("label") or "").strip().lower(),
@@ -20708,11 +20811,6 @@ def _trace_subscription_component(
 
     def orient(chain: list[dict]) -> list[dict]:
         if direction == "both":
-            if "kubernetes service" in selected_type or "kubernetes_service" in selected_type:
-                return [
-                    step for step in chain
-                    if str(step.get("kind") or "").strip().lower() in {"internet", "aks_ingress"}
-                ]
             return chain
         index = next((idx for idx, step in enumerate(chain) if matches(step)), None)
         if index is None:
@@ -20797,12 +20895,61 @@ def _trace_subscription_component(
             hostname = str(row["host"] or "").strip()
             if not hostname:
                 continue
-            payload = _trace_subscription_endpoint(
-                conn,
-                endpoint=f"https://{hostname}",
-                subscription_id=subscription_id,
-            )
-            chain = payload.get("resolved_chain") or []
+            candidate_endpoints = [f"https://{hostname}"]
+            if (
+                _table_exists(conn, "apim_api_routes")
+                and _table_exists(conn, "appgw_routing_rules")
+                and _table_exists(conn, "provisioned_assets")
+            ):
+                apim_routes = conn.execute(
+                    """
+                    SELECT api_path, apim_name, backend_url, service_url
+                    FROM apim_api_routes
+                    WHERE subscription_id = ?
+                    """,
+                    (subscription_id,),
+                ).fetchall()
+                for apim_route in apim_routes:
+                    if route_host(apim_route["backend_url"] or apim_route["service_url"]) != hostname.lower():
+                        continue
+                    service = conn.execute(
+                        """
+                        SELECT fqdn
+                        FROM provisioned_assets
+                        WHERE subscription_id = ? AND LOWER(name) = LOWER(?)
+                          AND LOWER(type) LIKE '%apimanagement/service%'
+                        LIMIT 1
+                        """,
+                        (subscription_id, apim_route["apim_name"]),
+                    ).fetchone()
+                    if not service or not service["fqdn"]:
+                        continue
+                    gateway_routes = conn.execute(
+                        """
+                        SELECT DISTINCT hostname
+                        FROM appgw_routing_rules
+                        WHERE subscription_id = ?
+                          AND LOWER(COALESCE(backend_fqdns, '')) LIKE ?
+                        """,
+                        (subscription_id, f"%{str(service['fqdn']).lower()}%"),
+                    ).fetchall()
+                    api_path = str(apim_route["api_path"] or "/").strip() or "/"
+                    api_path = "/" + api_path.lstrip("/")
+                    candidate_endpoints.extend(
+                        f"https://{gateway_route['hostname']}{api_path}"
+                        for gateway_route in gateway_routes
+                        if gateway_route["hostname"]
+                    )
+            chain = []
+            for candidate_endpoint in candidate_endpoints:
+                payload = _trace_subscription_endpoint(
+                    conn,
+                    endpoint=candidate_endpoint,
+                    subscription_id=subscription_id,
+                )
+                candidate_chain = payload.get("resolved_chain") or []
+                if len(candidate_chain) > len(chain):
+                    chain = candidate_chain
             if not any(matches(step) for step in chain):
                 continue
             oriented_chain = orient(chain)
@@ -21701,7 +21848,7 @@ _SUBSCRIPTION_DIAGRAM_CACHE: dict[str, tuple[float, str, dict]] = {}
 _SUBSCRIPTION_DIAGRAM_CACHE_TTL = 600  # 10 minutes
 # Bump this whenever diagram rendering logic changes (listener icons, pool icons, edge labels, etc.)
 # so the DB cache is automatically invalidated for all subscriptions.
-_DIAGRAM_CODE_VERSION = "v41"  # Public child and managed-resource assets are included in Mermaid rows
+_DIAGRAM_CODE_VERSION = "v48"  # Distinguish APIM ingress exposure from egress-only public IPs
 
 
 def _subscription_diagram_cache_signature(conn, sub_id: str) -> tuple[str | None, tuple[str, str] | None]:
@@ -22208,7 +22355,6 @@ def api_subscription_diagram(sub_id: str):
                            git_repository, resource_group, pod_template_labels
                     FROM aks_routes
                     WHERE subscription_id=?
-                    LIMIT 100
                     """.format(aks_route_exposure_select=aks_route_exposure_select),
                     (sub_id,),
                 ).fetchall()
@@ -22571,7 +22717,6 @@ def api_subscription_diagram(sub_id: str):
                            git_repository, resource_group, pod_template_labels
                     FROM aks_routes
                     WHERE subscription_id=?
-                    LIMIT 100
                     """.format(aks_route_exposure_select=aks_route_exposure_select),
                     (sub_id,),
                 ).fetchall()
@@ -22591,7 +22736,6 @@ def api_subscription_diagram(sub_id: str):
                            git_repository, resource_group, pod_template_labels
                     FROM aks_routes
                     WHERE subscription_id=?
-                    LIMIT 100
                     """.format(aks_route_exposure_select=aks_route_exposure_select),
                     (sub_id,),
                 ).fetchall()
@@ -26336,9 +26480,27 @@ def _build_ingress_diagram(
         node_id = _get_node_id(item)
         arm_type = item.get("arm_type") or item["type"]
         label = item.get("label") or item.get("type") or _friendly_type(arm_type)
+        app_gateway_identity = " ".join(
+            str(item.get(field) or "").lower()
+            for field in ("arm_type", "type", "name", "label")
+        )
+        is_app_gateway = (
+            "applicationgateway" in app_gateway_identity
+            or "app gateway" in app_gateway_identity
+        )
+        parent_indent = _node_indent[0]
+        if is_app_gateway:
+            gateway_label = str(item.get("name") or item.get("label") or "App Gateway")
+            gateway_group_id = f"appgw_{_sanitise_node_id(node_id)}"
+            safe_gateway_label = gateway_label.replace('"', "&quot;")
+            lines.append(
+                f'{parent_indent}subgraph {gateway_group_id}["App Gateway: {safe_gateway_label}"]'
+            )
+            appgw_subgraph_ids.append(gateway_group_id)
+            _node_indent[0] = f"{parent_indent}    "
         # Note: bastion_children (Public IPs) are not rendered as nodes in Mermaid
         # They are surfaced as properties on the Bastion resource instead
-        if "applicationgateway" in (arm_type or "").lower():
+        if is_app_gateway:
             appgw_node_resources_by_id[node_id] = item.get("resources") or [{"rg": item.get("rg"), "name": item.get("name")}]
             appgw_node_title_by_id[node_id] = item.get("name") or item.get("label") or "App Gateway"
             for spec in waf_node_specs:
@@ -26361,7 +26523,7 @@ def _build_ingress_diagram(
                 )
         lines.append(_node_line(node_id, label, arm_type))
         rendered_node_ids.add(node_id)
-        if "applicationgateway" in (arm_type or "").lower():
+        if is_app_gateway:
             for spec in listener_node_specs:
                 if spec.get("gateway_node_id") != node_id:
                     continue
@@ -26375,6 +26537,8 @@ def _build_ingress_diagram(
                 if spec["node_id"] not in rendered_node_ids:
                     lines.append(_node_line(spec["node_id"], spec["pool_name"], "microsoft.network/applicationgatewaybackendpools"))
                     rendered_node_ids.add(spec["node_id"])
+            _node_indent[0] = parent_indent
+            lines.append(f"{parent_indent}end")
     def _render_network_backend_item(item: dict) -> None:
         node_id = _get_node_id(item)
         # Guard: don't re-declare a node that already appears in another subnet/VNet.
@@ -26680,6 +26844,7 @@ def _build_ingress_diagram(
 
     network_subgraph_ids: list[str] = []
     subnet_subgraph_ids: list[str] = []
+    appgw_subgraph_ids: list[str] = []
     bastion_child_edges: list[tuple[str, str]] = []
     # Network-attached backends that should be represented inside the VNet boundary.
     _network_backend_node_ids: set[str] = set()
@@ -28376,6 +28541,16 @@ def _build_ingress_diagram(
                 if not _be_nid:
                     _ase_prefix = _fqdn_s.removesuffix(".appserviceenvironment.net")
                     if _ase_prefix != _fqdn_s:
+                        _site_match = next(
+                            (
+                                _site
+                                for _site in shown_backend
+                                if str(_site.get("name") or "").strip().lower() == _ase_prefix
+                            ),
+                            None,
+                        )
+                        if _site_match:
+                            _be_nid = _get_node_id(_site_match)
                         _be_nid = _resolve_routing_target_node_id(
                             {"target": _ase_prefix, "name": _ase_prefix.split(".", 1)[0]},
                             node_by_resource=node_by_resource,
@@ -28384,7 +28559,7 @@ def _build_ingress_diagram(
                             node_by_fqdn_normalized=node_by_fqdn_normalized,
                             node_by_name=node_by_name,
                             node_by_name_normalized=node_by_name_normalized,
-                        )
+                        ) or _be_nid
                 if not _be_nid and _pool_name:
                     _pool_name_key = str(_pool_name or "").strip().lower()
                     if _pool_name_key:
@@ -28451,13 +28626,14 @@ def _build_ingress_diagram(
                 
                 # Prefer a harvested AKS ingress node when the hostname is available;
                 # only fall back to the cluster node if we cannot resolve the host.
-                if not _be_nid and ".internal." in _fqdn_s:
+                if not _be_nid:
                     _fqdn_norm = _routing_lookup_key(_fqdn_s)
                     for _aks_item in aks_ingress_assets:
                         _candidate_values = [
                             str(_aks_item.get("host") or "").strip().lower(),
                             str(_aks_item.get("ingress_host") or "").strip().lower(),
                             str(_aks_item.get("fqdn") or "").strip().lower(),
+                            str(_aks_item.get("source_host") or "").strip().lower(),
                             str(_aks_item.get("ingress_name") or "").strip().lower(),
                             str(_aks_item.get("short_name") or "").strip().lower(),
                             str(_aks_item.get("name") or "").strip().lower(),
@@ -28923,6 +29099,8 @@ def _build_ingress_diagram(
         lines.append(f"    style {net_id} stroke:#1971c2,stroke-width:2px,fill:none;")
     for subnet_id in subnet_subgraph_ids:
         lines.append(f"    style {subnet_id} stroke:#94a3b8,stroke-width:2px,fill:none;")
+    for appgw_id in appgw_subgraph_ids:
+        lines.append(f"    style {appgw_id} stroke:#f59e0b,stroke-width:2px,fill:none;")
     if _all_standalone:
         lines.append("    style az_backbone stroke:#475569,stroke-width:2px,stroke-dasharray:5 5,fill:none;")
      
@@ -29244,6 +29422,92 @@ def _build_ingress_diagram(
                 "dns_verified_private": bool(_item.get("dns_verified_private")),
             })
     result["nodes"] = _nodes_list
+    _collapsible_target_node_ids = {
+        _get_node_id(_item)
+        for _item in shown_backend
+        if any(
+            token in str(_item.get("type") or _item.get("arm_type") or "").lower()
+            for token in (
+                "apim backend target",
+                "apimbackendtarget",
+                "apim backend pool",
+                "apimbackendpool",
+            )
+        )
+    }
+    _collapsible_target_node_ids.update(appgw_pool_node_specs)
+    result["collapsible_target_node_ids"] = sorted(_collapsible_target_node_ids)
+    result["collapsible_target_count"] = len(_collapsible_target_node_ids)
+    _collapsible_target_groups: dict[str, dict] = {}
+    for _pool_node_id, _pool_spec in appgw_pool_node_specs.items():
+        _gateway_node_id = str(_pool_spec.get("gateway_node_id") or "").strip()
+        if not _gateway_node_id:
+            continue
+        _group = _collapsible_target_groups.setdefault(
+            _gateway_node_id,
+            {
+                "node_id": _gateway_node_id,
+                "label": _pool_spec.get("gateway_name") or "App Gateway",
+                "target_node_ids": [],
+            },
+        )
+        if _pool_node_id not in _group["target_node_ids"]:
+            _group["target_node_ids"].append(_pool_node_id)
+    for _item in shown_backend:
+        _target_node_id = _get_node_id(_item)
+        if _target_node_id not in _collapsible_target_node_ids:
+            continue
+        _parent_node_id = str(_item.get("parent_id") or "").strip()
+        if not _parent_node_id:
+            continue
+        _parent_item = next(
+            (
+                _candidate
+                for _candidate in (shown_entry + shown_api + shown_backend + assets)
+                if str(_candidate.get("id") or "").strip() == _parent_node_id
+            ),
+            None,
+        )
+        if _parent_item:
+            _parent_node_id = _get_node_id(_parent_item)
+        _group = _collapsible_target_groups.setdefault(
+            _parent_node_id,
+            {
+                "node_id": _parent_node_id,
+                "label": _item.get("parent_name") or "APIM",
+                "target_node_ids": [],
+            },
+        )
+        if _target_node_id not in _group["target_node_ids"]:
+            _group["target_node_ids"].append(_target_node_id)
+    _api_gateway_node_ids = {
+        _match.group(1)
+        for _line in lines
+        if (_match := re.match(r"\s*class\s+(\S+)\s+apiGateway(?:\s|;)", _line))
+    }
+    _target_id_set = set(_collapsible_target_node_ids)
+    for _line in lines:
+        _edge_match = re.match(r"\s*(\S+)\s+-->.*?\s+(\S+)\s*$", _line)
+        if not _edge_match or _edge_match.group(1) not in _api_gateway_node_ids:
+            continue
+        _target_node_id = _edge_match.group(2)
+        if _target_node_id not in _target_id_set or _target_node_id in appgw_pool_node_specs:
+            continue
+        _group = _collapsible_target_groups.setdefault(
+            _edge_match.group(1),
+            {
+                "node_id": _edge_match.group(1),
+                "label": "APIM",
+                "target_node_ids": [],
+            },
+        )
+        if _target_node_id not in _group["target_node_ids"]:
+            _group["target_node_ids"].append(_target_node_id)
+    result["collapsible_target_groups"] = [
+        _group
+        for _group in _collapsible_target_groups.values()
+        if _group["target_node_ids"]
+    ]
 
     return result
 

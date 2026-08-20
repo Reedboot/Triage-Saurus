@@ -9,6 +9,7 @@ import socket
 import ssl
 import subprocess
 import signal
+import threading
 import time
 import urllib.request
 from urllib.parse import urlparse
@@ -34,6 +35,21 @@ _MSAL_LOCK_RE = re.compile(
     r"msal_token_cache.*\.lockfile|Permission denied.*lockfile",
     re.IGNORECASE,
 )
+_SENSITIVE_KEY_RE = re.compile(
+    r"(?i)(secret|password|passwd|token|api[_-]?key|access[_-]?token|"
+    r"connection[_-]?string|primary[_-]?key|secondary[_-]?key)"
+)
+_SENSITIVE_VALUE_RE = re.compile(
+    r"(?i)((?:secret|password|passwd|token|api[_-]?key|access[_-]?token|"
+    r"connection[_-]?string|primary[_-]?key|secondary[_-]?key)\s*[:=]\s*)"
+    r"([^\s,;&]+)"
+)
+_MUTATING_AZ_TOKENS = {
+    "create", "delete", "remove", "update", "patch", "put", "post",
+    "set", "reset", "restore", "start", "stop", "restart", "scale",
+    "invoke", "action", "run-command", "runcommand",
+}
+_AZ_STATUS = threading.local()
 
 # Azure's ARM namespace is case-insensitive, but the casing emitted by
 # ``az`` varies between resource providers and API versions.  Keep the
@@ -80,6 +96,37 @@ def _is_msal_lock_error(stderr: str) -> bool:
     return bool(_MSAL_LOCK_RE.search(stderr))
 
 
+def redact_azure_value(value: Any) -> Any:
+    """Remove secret-bearing fields and values before they leave the helper."""
+    if isinstance(value, dict):
+        return {
+            key: "[REDACTED]" if _SENSITIVE_KEY_RE.search(str(key))
+            else redact_azure_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_azure_value(item) for item in value]
+    if isinstance(value, str):
+        return _SENSITIVE_VALUE_RE.sub(r"\1[REDACTED]", value)
+    return value
+
+
+def _validate_azure_args(args: list[str]) -> None:
+    """Reject mutating Azure CLI operations before starting a subprocess."""
+    if not args or any(not isinstance(item, str) or not item for item in args):
+        raise ValueError("Azure CLI arguments must be non-empty strings")
+    lowered = {item.lower().lstrip("-") for item in args}
+    blocked = sorted(lowered & _MUTATING_AZ_TOKENS)
+    if blocked:
+        raise ValueError(f"mutating Azure CLI operation rejected: {', '.join(blocked)}")
+
+
+def get_last_azure_call_status() -> dict[str, Any] | None:
+    """Return the current thread's most recent Azure CLI call status."""
+    status = getattr(_AZ_STATUS, "value", None)
+    return dict(status) if isinstance(status, dict) else None
+
+
 def set_probe_enabled(enabled: bool) -> None:
     global _PROBES_ENABLED
     _PROBES_ENABLED = enabled
@@ -92,6 +139,9 @@ def az(args: list[str], subscription_id: str) -> list[dict[str, Any]]:
     registered in the subscription) so providers degrade gracefully.
     Retries up to _AZ_RETRY_MAX times when the MSAL token cache is locked.
     """
+    _validate_azure_args(args)
+    if not safe_str(subscription_id):
+        raise ValueError("an explicit Azure subscription ID is required")
     cmd = ["az"] + args + ["--subscription", subscription_id, "--output", "json"]
     for attempt in range(_AZ_RETRY_MAX):
         proc = subprocess.Popen(
@@ -111,18 +161,41 @@ def az(args: list[str], subscription_id: str) -> list[dict[str, Any]]:
             except ProcessLookupError:
                 pass
             proc.communicate()
+            _AZ_STATUS.value = {
+                "status": "timeout",
+                "command": cmd,
+                "error": f"command timed out after 120s",
+            }
             return []
 
         if proc.returncode == 0:
             try:
-                return json.loads(stdout or "[]") or []
-            except Exception:
+                result = json.loads(stdout or "[]") or []
+                _AZ_STATUS.value = {"status": "ok", "command": cmd}
+                return redact_azure_value(result)
+            except (TypeError, ValueError):
+                _AZ_STATUS.value = {
+                    "status": "invalid-json",
+                    "command": cmd,
+                    "error": "Azure CLI returned invalid JSON",
+                }
                 return []
 
         if attempt < _AZ_RETRY_MAX - 1 and _is_msal_lock_error(stderr):
             time.sleep(_AZ_RETRY_BACKOFF * (attempt + 1))
             continue
+        _AZ_STATUS.value = {
+            "status": "error",
+            "command": cmd,
+            "error": redact_azure_value(stderr.strip()[:500]),
+            "exit_code": proc.returncode,
+        }
         return []
+    _AZ_STATUS.value = {
+        "status": "error",
+        "command": cmd,
+        "error": "Azure CLI call failed",
+    }
     return []
 
 
@@ -142,6 +215,8 @@ def _az_rest(url: str, resource: str | None = None) -> dict:
 
     Retries up to _AZ_RETRY_MAX times when the MSAL token cache is locked.
     """
+    if not url.startswith("https://management.azure.com/"):
+        raise ValueError("Azure REST URL must target management.azure.com")
     cmd = ["az", "rest", "--method", "GET", "--url", url, "--output", "json"]
     if resource:
         cmd += ["--resource", resource]
@@ -168,16 +243,30 @@ def _az_rest(url: str, resource: str | None = None) -> dict:
 
         if proc.returncode == 0:
             try:
-                return json.loads(stdout)
+                result = json.loads(stdout)
+                _AZ_STATUS.value = {"status": "ok", "command": cmd}
+                return redact_azure_value(result)
             except json.JSONDecodeError as exc:
                 preview = (stdout or "").replace("\n", " ")[:200]
+                _AZ_STATUS.value = {
+                    "status": "invalid-json",
+                    "command": cmd,
+                    "error": "Azure REST returned invalid JSON",
+                }
                 raise RuntimeError(f"az rest returned invalid JSON: {exc.msg}; output={preview!r}") from exc
 
         last_stderr = stderr.strip()
         if attempt < _AZ_RETRY_MAX - 1 and _is_msal_lock_error(last_stderr):
             time.sleep(_AZ_RETRY_BACKOFF * (attempt + 1))
             continue
+        _AZ_STATUS.value = {
+            "status": "error",
+            "command": cmd,
+            "error": redact_azure_value(last_stderr[:500]),
+            "exit_code": proc.returncode,
+        }
         raise RuntimeError(last_stderr[:200])
+    _AZ_STATUS.value = {"status": "error", "command": cmd, "error": "Azure REST call failed"}
     raise RuntimeError(last_stderr[:200])
 
 
@@ -276,6 +365,65 @@ def classify_network_access(
     # A private endpoint does not prove public access is disabled; with no
     # publicNetworkAccess field we must not infer either public or private.
     return 0, 0, [], "unknown"
+
+
+def build_access_semantics(
+    props: dict[str, Any],
+    *,
+    endpoint_present: bool = True,
+    anonymous_permission: str | None = None,
+    private_endpoint_connections: list[Any] | None = None,
+) -> dict[str, Any]:
+    """Return provider-neutral access facts without overstating reachability."""
+    network_acls = props.get("networkAcls") or props.get("network_acls") or {}
+    ip_rules = network_acls.get("ipRules") or network_acls.get("ip_rules") or []
+    vnet_rules = (
+        network_acls.get("virtualNetworkRules")
+        or network_acls.get("virtual_network_rules")
+        or []
+    )
+    public_network_access = safe_str(
+        props.get("publicNetworkAccess") or props.get("public_network_access")
+    )
+    default_action = safe_str(
+        network_acls.get("defaultAction") or network_acls.get("default_action")
+    )
+    is_public, is_restricted, ip_restrictions, reachability = classify_network_access(
+        props,
+        endpoint_present=endpoint_present,
+        network_acls=network_acls,
+        private_endpoint_connections=private_endpoint_connections,
+        ip_rules=ip_rules,
+        vnet_rules=vnet_rules,
+    )
+    if anonymous_permission is None:
+        anonymous_permission = safe_str(
+            props.get("publicAccess")
+            or props.get("public_access")
+            or props.get("anonymousAccess")
+            or props.get("anonymous_access")
+        )
+    return {
+        "anonymous_permission": anonymous_permission or "unknown",
+        "public_network_access": public_network_access or "unknown",
+        "network_default_action": default_action or "unknown",
+        "ip_rule_count": len(ip_rules) if isinstance(ip_rules, list) else 0,
+        "virtual_network_rule_count": len(vnet_rules) if isinstance(vnet_rules, list) else 0,
+        "private_endpoint_connection_count": (
+            len(private_endpoint_connections)
+            if isinstance(private_endpoint_connections, list)
+            else len(props.get("privateEndpointConnections") or [])
+        ),
+        "trusted_service_bypass": (
+            network_acls.get("bypass")
+            or network_acls.get("networkAclBypass")
+            or "unknown"
+        ),
+        "effective_reachability": reachability,
+        "is_public": is_public,
+        "is_restricted": is_restricted,
+        "ip_restrictions": ip_restrictions,
+    }
 
 
 def infer_fqdn(resource: dict[str, Any]) -> str | None:

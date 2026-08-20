@@ -41,6 +41,7 @@ const modalTitle = document.getElementById("modal-title");
 const modalSubtitle = document.getElementById("modal-subtitle");
 const modalBody = document.getElementById("modal-body");
 const modalIcon = document.getElementById("modal-icon");
+let modalActions = document.getElementById("modal-actions");
 const traceFormEl = document.getElementById("cloud-arch-trace-form");
 const componentInputEl = document.getElementById("cloud-arch-component-input");
 const componentOptionsEl = document.getElementById("cloud-arch-component-options");
@@ -50,6 +51,7 @@ const tracePanelEl = document.getElementById("cloud-arch-trace-panel");
 const traceRootEl = document.getElementById("cloud-arch-trace-root");
 const traceTitleEl = document.getElementById("cloud-arch-trace-title");
 const traceClearEl = document.getElementById("cloud-arch-trace-clear");
+const targetToggleEl = document.getElementById("cloud-arch-target-toggle");
 let componentTraceIndex = new Map();
 
 let activeViewMode = normalizeViewMode(CONFIG.initialViewMode || "mermaid");
@@ -64,6 +66,259 @@ let mermaidFitTimeout = null;
 let mermaidFitResizeObserver = null;
 let mermaidManualZoom = false;
 let activeMermaidCssText = "";
+let activeMermaidRenderPayload = null;
+let activeMermaidSubscriptionName = "";
+let backendTargetsCollapsed = null;
+let collapsedBackendTargetIdSet = new Set();
+let backendTargetGroupStateKey = "";
+
+const BACKEND_TARGET_COLLAPSE_THRESHOLD = 20;
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function collapseBackendTargetNodes(source, targetNodeIds = []) {
+  const ids = Array.from(new Set(targetNodeIds.map((id) => String(id || "").trim()).filter(Boolean)));
+  if (!ids.length) return source;
+
+  // API payloads retain resource IDs while Mermaid uses sanitized IDs.
+  // Match both forms so each resource's control affects its own children.
+  const targetIds = new Set(
+    ids.flatMap((id) => [
+      id,
+      sanitizeMermaidId(id, id),
+      resolveMermaidOriginalId(id),
+    ]).filter(Boolean)
+  );
+  const targetRef = new RegExp(
+    `(?:^|\\s)(?:${Array.from(targetIds).map(escapeRegExp).join("|")})(?=\\s|\\[|\\(|$)`
+  );
+  const edgePattern = /^(\s*)([A-Za-z0-9_]+)(?:\[[^\n]*\]|\([^\n]*\))?\s+([-.=]+>)(?:\|([^|]*)\|)?\s+([A-Za-z0-9_]+)(?:\[[^\n]*\]|\([^\n]*\))?\s*$/;
+  const lines = String(source || "").split("\n");
+  const firstLinkStyle = lines.findIndex((line) => /^\s*linkStyle\s+\d+\b/.test(line));
+  const edges = [];
+  const kept = [];
+
+  for (const line of lines) {
+    const edgeMatch = line.match(edgePattern);
+    if (edgeMatch) {
+      edges.push({
+        line,
+        indent: edgeMatch[1],
+        source: edgeMatch[2],
+        operator: edgeMatch[3],
+        label: edgeMatch[4] || "",
+        target: edgeMatch[5],
+      });
+    }
+    if (targetRef.test(line)) {
+      continue;
+    }
+    kept.push(line);
+  }
+
+  // Preserve the high-level route when a collapsed target node was the only
+  // hop between two visible services (for example App Gateway -> APIM or
+  // APIM -> AKS). Walk through removed nodes and add a direct summary edge.
+  const directEdges = new Set(
+    edges
+      .filter((edge) => !targetIds.has(edge.source) && !targetIds.has(edge.target))
+      .map((edge) => `${edge.source}->${edge.target}`)
+  );
+  const bridgeEdges = new Set();
+  for (const start of new Set(edges.map((edge) => edge.source))) {
+    if (targetIds.has(start)) continue;
+    const pending = edges
+      .filter((edge) => edge.source === start)
+      .map((edge) => ({ node: edge.target, crossedTarget: targetIds.has(edge.target) }));
+    const visited = new Set();
+    while (pending.length) {
+      const current = pending.shift();
+      const visitKey = `${current.node}|${current.crossedTarget}`;
+      if (visited.has(visitKey)) continue;
+      visited.add(visitKey);
+
+      if (!targetIds.has(current.node)) {
+        if (current.crossedTarget && current.node !== start) {
+          const edgeKey = `${start}->${current.node}`;
+          if (!directEdges.has(edgeKey)) bridgeEdges.add(edgeKey);
+        }
+        continue;
+      }
+      for (const edge of edges) {
+        if (edge.source === current.node) {
+          pending.push({ node: edge.target, crossedTarget: true });
+        }
+      }
+    }
+  }
+
+  const bridgeLines = Array.from(bridgeEdges, (edgeKey) => {
+    const [sourceId, targetId] = edgeKey.split("->");
+    return `    ${sourceId} -->|"Backend route"| ${targetId}`;
+  });
+  if (bridgeLines.length) {
+    const insertionIndex = firstLinkStyle < 0 ? kept.length : kept.findIndex((line) => /^\s*linkStyle\s+\d+\b/.test(line));
+    kept.splice(insertionIndex < 0 ? kept.length : insertionIndex, 0, ...bridgeLines);
+  }
+
+  if (firstLinkStyle < 0) return kept.join("\n");
+
+  const oldToNewEdgeIndex = new Map();
+  let oldEdgeIndex = 0;
+  let newEdgeIndex = 0;
+  for (const line of lines.slice(0, firstLinkStyle)) {
+    if (!line.includes("-->")) continue;
+    if (!targetRef.test(line)) {
+      oldToNewEdgeIndex.set(oldEdgeIndex, newEdgeIndex++);
+    }
+    oldEdgeIndex += 1;
+  }
+
+  return kept
+    .map((line) => {
+      const match = line.match(/^(\s*)linkStyle\s+(\d+)\b(.*)$/);
+      if (!match) return line;
+      const newIndex = oldToNewEdgeIndex.get(Number(match[2]));
+      return newIndex == null ? "" : `${match[1]}linkStyle ${newIndex}${match[3]}`;
+    })
+    .filter((line) => line !== "")
+    .join("\n");
+}
+
+function updateBackendTargetToggle(payload) {
+  // Backend expansion is controlled from the selected resource's details modal.
+}
+
+function initializeBackendTargetGroups(payload, subscriptionName) {
+  const groups = Array.isArray(payload?.collapsible_target_groups)
+    ? payload.collapsible_target_groups.filter((group) => group?.node_id && group?.target_node_ids?.length)
+    : [];
+  const stateKey = `${subscriptionName}|${groups.map((group) => `${group.node_id}:${group.target_node_ids.join(",")}`).join("|")}`;
+  if (stateKey === backendTargetGroupStateKey) return;
+  backendTargetGroupStateKey = stateKey;
+  collapsedBackendTargetIdSet = new Set(
+    groups
+      .filter((group) => group.target_node_ids.length > BACKEND_TARGET_COLLAPSE_THRESHOLD)
+      .flatMap((group) => group.target_node_ids.map((nodeId) => String(nodeId)))
+  );
+  backendTargetsCollapsed = groups.length
+    ? (payload.collapsible_target_node_ids || []).every((nodeId) => collapsedBackendTargetIdSet.has(String(nodeId)))
+    : Number(payload?.collapsible_target_count || 0) > BACKEND_TARGET_COLLAPSE_THRESHOLD;
+}
+
+function collapsedBackendTargetIds(payload) {
+  return Array.from(collapsedBackendTargetIdSet);
+}
+
+function toggleBackendTargetGroup(groupNodeId) {
+  const group = (activeMermaidRenderPayload?.collapsible_target_groups || [])
+    .find((candidate) => String(candidate?.node_id || "") === String(groupNodeId || ""));
+  if (!group?.target_node_ids?.length) return;
+  const targetIds = group.target_node_ids.map((nodeId) => String(nodeId));
+  const isCollapsed = targetIds.every((nodeId) => collapsedBackendTargetIdSet.has(nodeId));
+  if (isCollapsed) {
+    for (const nodeId of targetIds) collapsedBackendTargetIdSet.delete(nodeId);
+  } else {
+    for (const nodeId of targetIds) collapsedBackendTargetIdSet.add(nodeId);
+  }
+  backendTargetsCollapsed = (activeMermaidRenderPayload?.collapsible_target_node_ids || [])
+    .every((nodeId) => collapsedBackendTargetIdSet.has(String(nodeId)));
+}
+
+function renderMermaidExpandControls(svg) {
+  if (!mermaidRootEl || !svg) return;
+  let overlay = mermaidRootEl.querySelector(":scope > .cloud-arch-mermaid-expand-overlay");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.className = "cloud-arch-mermaid-expand-overlay";
+    overlay.style.cssText = "position:absolute;inset:0;pointer-events:none;z-index:4;";
+    mermaidRootEl.style.position = "relative";
+    mermaidRootEl.appendChild(overlay);
+  }
+  overlay.innerHTML = "";
+
+  const groups = Array.isArray(activeMermaidRenderPayload?.collapsible_target_groups)
+    ? activeMermaidRenderPayload.collapsible_target_groups
+    : [];
+  if (!groups.length) return;
+  const svgRect = svg.getBoundingClientRect();
+
+  for (const group of groups) {
+    const groupNodeId = String(group?.node_id || "").trim();
+    if (!groupNodeId) continue;
+    const candidates = [
+      groupNodeId,
+      sanitizeMermaidId(groupNodeId, groupNodeId),
+      resolveMermaidOriginalId(groupNodeId),
+    ];
+    const nodeElements = Array.from(svg.querySelectorAll("g.node[id]"));
+    let nodeEl = nodeElements.find((el) => {
+      const nodeId = normalizeMermaidNodeId(el.getAttribute("id") || "");
+      return candidates.includes(nodeId) || candidates.includes(resolveMermaidOriginalId(nodeId));
+    });
+    if (!nodeEl && group.label) {
+      const expectedLabel = String(group.label).trim().toLowerCase();
+      nodeEl = nodeElements.find((el) => {
+        const nodeId = normalizeMermaidNodeId(el.getAttribute("id") || "");
+        const nodeData = findMermaidNodeData(nodeId, el) || {};
+        const renderedLabel = String(
+          nodeData.label ||
+          nodeData.title ||
+          nodeData.name ||
+          el.querySelector(".nodeLabel")?.textContent ||
+          ""
+        ).trim().toLowerCase();
+        return renderedLabel === expectedLabel ||
+          renderedLabel.includes(expectedLabel) ||
+          expectedLabel.includes(renderedLabel);
+      });
+    }
+    if (!nodeEl) continue;
+
+    const nodeRect = nodeEl.getBoundingClientRect();
+    const button = document.createElement("button");
+    const targetIds = (group.target_node_ids || []).map((nodeId) => String(nodeId));
+    const isCollapsed = targetIds.some((nodeId) => collapsedBackendTargetIdSet.has(nodeId));
+    const count = (group.target_node_ids || []).length;
+    button.type = "button";
+    button.className = "cloud-arch-mermaid-expand-btn";
+    button.dataset.resourceId = groupNodeId;
+    button.dataset.targetCount = String(count);
+    button.textContent = isCollapsed ? "+" : "−";
+    button.title = `${isCollapsed ? "Show" : "Hide"} ${count} backend targets for ${group.label || "this service"}`;
+    button.setAttribute("aria-label", button.title);
+    button.setAttribute("aria-expanded", isCollapsed ? "false" : "true");
+    button.style.cssText = [
+      "position:absolute",
+      `left:${Math.max(0, nodeRect.right - svgRect.left - 28)}px`,
+      `top:${Math.max(0, nodeRect.top - svgRect.top + 8)}px`,
+      "width:22px",
+      "height:22px",
+      "padding:0",
+      "border:1px solid var(--border)",
+      "border-radius:5px",
+      "background:var(--bg-base)",
+      "color:var(--text)",
+      "cursor:pointer",
+      "pointer-events:auto",
+      "font-size:16px",
+      "font-weight:700",
+      "line-height:18px",
+      "z-index:5",
+    ].join(";");
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleBackendTargetGroup(groupNodeId);
+      renderMermaidGraph(activeMermaidRenderPayload, activeMermaidSubscriptionName)
+        .then(() => populateComponentTraceOptions(activeMermaidRenderPayload))
+        .catch((err) => console.error("[cloud-architecture] Backend target group toggle failed:", err));
+    });
+    overlay.appendChild(button);
+  }
+}
 
 function cancelMermaidDiagramFit() {
   if (mermaidFitRaf) cancelAnimationFrame(mermaidFitRaf);
@@ -841,6 +1096,7 @@ function buildMermaidGraph(payload, subscriptionName) {
   const providerOrder = Object.keys(PROVIDER_THEMES);
   const providerGroups = new Map();
   const hierarchy = buildHierarchyContext(nodes);
+  const usedMermaidIds = new Set();
   let autoIndex = 0;
 
   for (const node of nodes) {
@@ -968,8 +1224,34 @@ function buildMermaidGraph(payload, subscriptionName) {
     return Boolean(collectNodeVnet(node) || collectNodeSubnet(node) || isNetworkAssetNode(node));
   }
 
-  function renderNode(node, indent = "    ") {
-    const mermaidId = sanitizeMermaidId(node?.id, `node_${autoIndex++}`);
+  function isAppGatewayNode(node) {
+    const data = node?.data || {};
+    const resourceType = String(data.resourceType || data.type || "").toLowerCase();
+    const typeLabel = String(data.typeLabel || data.providerLabel || "").toLowerCase();
+    return (
+      /(?:^|\/)applicationgateways$/.test(resourceType) ||
+      typeLabel === "app gateway"
+    );
+  }
+
+  function renderNode(node, indent = "    ", insideAppGatewayGroup = false) {
+    if (isAppGatewayNode(node) && !insideAppGatewayGroup) {
+      const gatewayLabel = String(node?.data?.label || node?.id || "App Gateway");
+      const gatewayGroupId = `app_gateway_${sanitizeMermaidId(gatewayLabel, `gateway_${autoIndex++}`)}`;
+      lines.push(`${indent}subgraph ${gatewayGroupId}["App Gateway: ${escapeMermaidText(gatewayLabel)}"]`);
+      renderNode(node, `${indent}  `, true);
+      lines.push(`${indent}end`);
+      subgraphStyleAssignments.push(`  style ${gatewayGroupId} stroke:#f59e0b,stroke-width:2px;`);
+      return;
+    }
+
+    const baseMermaidId = sanitizeMermaidId(node?.id, `node_${autoIndex++}`);
+    let mermaidId = baseMermaidId;
+    let collisionIndex = 2;
+    while (usedMermaidIds.has(mermaidId)) {
+      mermaidId = `${baseMermaidId}_${collisionIndex++}`;
+    }
+    usedMermaidIds.add(mermaidId);
     nodeIdMap.set(String(node?.id), mermaidId);
 
     const title = node?.data?.label || node?.data?.providerLabel || node?.id || "Node";
@@ -1021,7 +1303,14 @@ function buildMermaidGraph(payload, subscriptionName) {
       const isVmssNode = /virtualmachinescalesets/i.test(
         String(node?.data?.resourceType || node?.data?.arm_type || node?.data?.type || "")
       );
-      if (node?.hidden && !isVmssNode) return false;
+      const resourceType = String(
+        node?.data?.resourceType || node?.data?.arm_type || node?.data?.type || ""
+      );
+      const isConnectionEndpointNode =
+        /kubernetes\/ingresses|applicationgatewaylisteners|applicationgateways|apimanagement\/service|container(?:service|registry)\/managedclusters/i.test(
+          resourceType
+        );
+      if (node?.hidden && !isVmssNode && !isConnectionEndpointNode) return false;
       const parentId = node?.data?.parentNodeId ? String(node.data.parentNodeId) : "";
       if (!parentId) return true;
       const parent = hierarchy.nodeById.get(parentId);
@@ -1112,6 +1401,25 @@ function buildMermaidGraph(payload, subscriptionName) {
   lines.push("");
   lines.push("  classDef cloudSummary fill:#111827,stroke:#94a3b8,stroke-width:2px,stroke-dasharray:4 3,color:#e2e8f0;");
 
+  // Collapsed resources still need their relationships represented. Route
+  // edges from omitted children to the nearest rendered parent node.
+  for (const node of nodes) {
+    const originalId = String(node?.id || "");
+    if (!originalId || nodeIdMap.has(originalId)) continue;
+    let parentId = node?.data?.parentNodeId ? String(node.data.parentNodeId) : "";
+    const visitedParents = new Set();
+    while (parentId && !visitedParents.has(parentId)) {
+      visitedParents.add(parentId);
+      const renderedParentId = nodeIdMap.get(parentId);
+      if (renderedParentId) {
+        nodeIdMap.set(originalId, renderedParentId);
+        break;
+      }
+      const parent = hierarchy.nodeById.get(parentId);
+      parentId = parent?.data?.parentNodeId ? String(parent.data.parentNodeId) : "";
+    }
+  }
+
   const seenEdges = new Set();
   for (const edge of edges) {
     const sourceId = nodeIdMap.get(String(edge?.source));
@@ -1132,6 +1440,8 @@ async function renderMermaidGraph(payload, subscriptionName) {
   if (!mermaidViewEl || !mermaidRootEl) {
     return;
   }
+  activeMermaidRenderPayload = payload;
+  activeMermaidSubscriptionName = subscriptionName;
   const mermaidScrollEl = document.getElementById("cloud-arch-mermaid-scroll");
   if (mermaidScrollEl) {
     mermaidScrollEl.scrollTop = 0;
@@ -1139,7 +1449,13 @@ async function renderMermaidGraph(payload, subscriptionName) {
   }
 
   const directDiagram = String(payload?.mermaid || "").trim();
-  const mermaidSource = sanitizeMermaidSource(directDiagram || buildMermaidGraph(payload, subscriptionName));
+  const rawMermaidSource = directDiagram || buildMermaidGraph(payload, subscriptionName);
+  initializeBackendTargetGroups(payload, subscriptionName);
+  const mermaidSource = sanitizeMermaidSource(
+    collapsedBackendTargetIds(payload).length
+      ? collapseBackendTargetNodes(rawMermaidSource, collapsedBackendTargetIds(payload))
+      : rawMermaidSource
+  );
   if (directDiagram) {
     mermaidNodeDataById = new Map(
       Object.entries(payload?.node_drilldown_map || {})
@@ -1172,6 +1488,7 @@ async function renderMermaidGraph(payload, subscriptionName) {
     }
   }
   applyMermaidCss(payload?.css_code || "");
+  updateBackendTargetToggle(payload);
   try {
     mermaidManualZoom = false;
     mermaidRootEl.dataset.diagramManualZoom = "false";
@@ -1201,11 +1518,17 @@ async function renderMermaidGraph(payload, subscriptionName) {
   }
 }
 
-function populateComponentTraceOptions() {
+function populateComponentTraceOptions(payload = null) {
   if (!componentOptionsEl || !componentDropdownEl) return;
   componentTraceIndex = new Map();
   const options = [];
-  for (const [nodeId, rawData] of mermaidNodeDataById.entries()) {
+  const nodeEntries = new Map(mermaidNodeDataById);
+  for (const node of Array.isArray(payload?.nodes) ? payload.nodes : []) {
+    const nodeId = String(node?.node_id || node?.id || "").trim();
+    if (!nodeId || nodeEntries.has(nodeId)) continue;
+    nodeEntries.set(nodeId, node);
+  }
+  for (const [nodeId, rawData] of nodeEntries.entries()) {
     const data = rawData || {};
     const rawType = String(data.arm_type || data.type || data.resourceType || data.typeLabel || "").trim();
     const type = normalizeModalText(rawType);
@@ -1225,6 +1548,7 @@ function populateComponentTraceOptions() {
     const rawLabel = String(
       data.label ||
       data.title ||
+      data.name ||
       resources[0]?.name ||
       nodeId
     ).trim();
@@ -1236,7 +1560,7 @@ function populateComponentTraceOptions() {
       name: rawLabel,
       displayName: label,
       type,
-      fqdn: String(data.fqdn || resources[0]?.fqdn || "").trim(),
+      fqdn: String(data.fqdn || data.fqdns?.[0] || resources[0]?.fqdn || "").trim(),
     });
     options.push(`<option value="${escapeHtml(display)}"></option>`);
 
@@ -1249,7 +1573,7 @@ function populateComponentTraceOptions() {
           name: apiName,
           displayName: apiName,
           type: "APIM API",
-          fqdn: String(data.fqdn || resources[0]?.fqdn || "").trim(),
+          fqdn: String(data.fqdn || data.fqdns?.[0] || resources[0]?.fqdn || "").trim(),
         });
         options.push(`<option value="${escapeHtml(apiDisplay)}"></option>`);
       }
@@ -1268,7 +1592,7 @@ function populateComponentTraceOptions() {
         name: apiName,
         displayName: apiLabel,
         type: apiType,
-        fqdn: String(data.fqdn || "").trim(),
+        fqdn: String(data.fqdn || data.fqdns?.[0] || "").trim(),
       });
       options.push(`<option value="${escapeHtml(apiDisplay)}"></option>`);
     }
@@ -1556,10 +1880,62 @@ function closeModal() {
   if (modalOverlay) {
     modalOverlay.hidden = true;
   }
+  if (modalActions) modalActions.innerHTML = "";
   resetModalRequestState();
 }
 
+function findBackendTargetGroup(resourceId) {
+  return (activeMermaidRenderPayload?.collapsible_target_groups || [])
+    .find((candidate) => {
+      const groupId = String(candidate?.node_id || "");
+      return groupId === String(resourceId || "") ||
+        sanitizeMermaidId(groupId, groupId) === sanitizeMermaidId(resourceId, resourceId);
+    });
+}
+
+function ensureModalActions() {
+  if (modalActions) return modalActions;
+  const header = modalOverlay?.querySelector(".cloud-arch-modal-header");
+  if (!header) return null;
+  modalActions = document.createElement("div");
+  modalActions.id = "modal-actions";
+  modalActions.className = "cloud-arch-modal-actions";
+  header.insertBefore(modalActions, header.querySelector(".cloud-arch-modal-close") || null);
+  return modalActions;
+}
+
+function updateModalExpansionAction(resourceId) {
+  const actions = ensureModalActions();
+  if (!actions) return;
+  actions.innerHTML = "";
+  const group = findBackendTargetGroup(resourceId);
+  if (!group?.target_node_ids?.length) return;
+  const targetIds = group.target_node_ids.map((nodeId) => String(nodeId));
+  const isCollapsed = targetIds.every((nodeId) => collapsedBackendTargetIdSet.has(nodeId));
+  const action = document.createElement("button");
+  action.type = "button";
+  action.textContent = isCollapsed ? "+ Expand" : "− Collapse";
+  action.title = `${isCollapsed ? "Expand" : "Collapse"} ${targetIds.length} backend targets`;
+  action.setAttribute("aria-label", action.title);
+  action.setAttribute("aria-expanded", isCollapsed ? "false" : "true");
+  action.addEventListener("click", () => {
+    toggleBackendTargetGroup(group.node_id);
+    renderMermaidGraph(activeMermaidRenderPayload, activeMermaidSubscriptionName)
+      .then(() => {
+        populateComponentTraceOptions(activeMermaidRenderPayload);
+        updateModalExpansionAction(resourceId);
+      })
+      .catch((err) => console.error("[cloud-architecture] Backend target toggle failed:", err));
+  });
+  actions.appendChild(action);
+}
+
 function openNodePopup(resourceId, nodeData) {
+  openNodeDetails(resourceId, nodeData);
+  updateModalExpansionAction(resourceId);
+}
+
+function openNodeDetails(resourceId, nodeData) {
   const resources = Array.isArray(nodeData?.resources) ? nodeData.resources.filter(Boolean) : [];
   const isGroupedNode = Boolean(nodeData?.is_group || nodeData?.isGroupNode || nodeData?.summaryNode || nodeData?.groupType);
   const armType = String(nodeData?.arm_type || nodeData?.type || nodeData?.resourceType || "").toLowerCase();
@@ -3369,7 +3745,7 @@ async function renderSelectedResourceGroup(rg = "") {
   const isEmpty = !String(selected.render?.mermaid || "").trim();
   if (!isEmpty) {
     await renderMermaidGraph(selected.render, selected.name);
-    populateComponentTraceOptions();
+    populateComponentTraceOptions(selected.render);
   } else if (mermaidRootEl) {
     mermaidRootEl.innerHTML = "";
   }
@@ -3425,10 +3801,17 @@ async function loadMermaidView(subscriptionName) {
       mermaid: chosen?.mermaid || ingress?.mermaid || "",
       css_code: chosen?.css_code || ingress?.css_code || "",
       node_drilldown_map: chosen?.node_drilldown_map || ingress?.node_drilldown_map || {},
+      collapsible_target_node_ids:
+        chosen?.collapsible_target_node_ids || ingress?.collapsible_target_node_ids || [],
+      collapsible_target_count:
+        chosen?.collapsible_target_count || ingress?.collapsible_target_count || 0,
+      collapsible_target_groups:
+        chosen?.collapsible_target_groups || ingress?.collapsible_target_groups || [],
     };
   };
 
   try {
+    backendTargetsCollapsed = null;
     let payload = null;
     let renderPayload = null;
     let summaryPayload = null;
@@ -3494,7 +3877,7 @@ async function loadMermaidView(subscriptionName) {
       mermaidRootEl.innerHTML = "";
     } else {
       await renderMermaidGraph(renderPayload, subscriptionName);
-      populateComponentTraceOptions();
+      populateComponentTraceOptions(renderPayload);
     }
 
     renderSummary(summaryPayload, summaryPayload?.subscription_name || subscriptionName, activeViewMode);
@@ -3520,6 +3903,9 @@ if (formEl) {
 
 resourceGroupSelectEl?.addEventListener("change", () => {
   if (activeViewMode === "mermaid") {
+    backendTargetsCollapsed = null;
+    backendTargetGroupStateKey = "";
+    collapsedBackendTargetIdSet = new Set();
     const selectedResourceGroup = resourceGroupSelectEl.value.trim();
     if (!selectedResourceGroup) {
       const subscription = currentMermaidSubscriptionId || subscriptionInput?.value?.trim() || "";
@@ -3535,6 +3921,26 @@ resourceGroupSelectEl?.addEventListener("change", () => {
       }
     });
   }
+});
+
+targetToggleEl?.addEventListener("click", () => {
+  if (!activeMermaidRenderPayload) return;
+  const groups = Array.isArray(activeMermaidRenderPayload?.collapsible_target_groups)
+    ? activeMermaidRenderPayload.collapsible_target_groups.filter((group) => group?.node_id && group?.target_node_ids?.length)
+    : [];
+  if (groups.length) {
+    const targetIds = Array.from(new Set(groups.flatMap((group) => group.target_node_ids || []).map((nodeId) => String(nodeId))));
+    const allCollapsed = targetIds.every((nodeId) => collapsedBackendTargetIdSet.has(nodeId));
+    collapsedBackendTargetIdSet = allCollapsed ? new Set() : new Set(targetIds);
+    backendTargetsCollapsed = !allCollapsed;
+  } else {
+    backendTargetsCollapsed = !backendTargetsCollapsed;
+  }
+  renderMermaidGraph(activeMermaidRenderPayload, activeMermaidSubscriptionName)
+    .then(() => populateComponentTraceOptions(activeMermaidRenderPayload))
+    .catch((err) => {
+      console.error("[cloud-architecture] Backend target toggle failed:", err);
+    });
 });
 
 if (traceFormEl) {

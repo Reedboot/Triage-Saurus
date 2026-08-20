@@ -599,6 +599,22 @@ _BASE_TABLES_SQL = """
     CREATE INDEX IF NOT EXISTS idx_provisioned_assets_fqdn
         ON provisioned_assets(fqdn);
 
+    -- Scripted Azure harvest coverage and evidence gaps.
+    CREATE TABLE IF NOT EXISTS azure_harvest_coverage (
+        id              INTEGER PRIMARY KEY,
+        subscription_id TEXT NOT NULL,
+        provider_label  TEXT NOT NULL,
+        status          TEXT NOT NULL, -- checked | partial | permission-blocked | api-unsupported | failed | not-applicable
+        resource_count  INTEGER DEFAULT 0,
+        detail          TEXT,
+        command_status  TEXT,
+        started_at      DATETIME,
+        finished_at     DATETIME,
+        UNIQUE(subscription_id, provider_label, started_at)
+    );
+    CREATE INDEX IF NOT EXISTS idx_azure_harvest_coverage_subscription
+        ON azure_harvest_coverage(subscription_id, started_at);
+
     -- Mapping of repositories to the Azure subscriptions they are deployed into
     -- (many-to-many: one repo can deploy to dev/staging/prod subscriptions)
     CREATE TABLE IF NOT EXISTS repository_subscriptions (

@@ -643,6 +643,8 @@ def harvest_routes(
     dry_run: bool = False,
 ) -> int:
     """Harvest APIM API→backend routes for every APIM instance in a subscription."""
+    _ensure_schema(conn)
+    _ensure_apim_schema(conn)
     apim_instances = list_apim_instances(subscription_id)
     if not apim_instances:
         print("  No APIM instances found — skipping (0.00s)")

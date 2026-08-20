@@ -1888,7 +1888,7 @@ function App() {
 
     if (mode === "mermaid") {
       if (typeof window.__triageCloudArchLoadMermaid !== "function") {
-        await import("./cloud-architecture-mermaid.js?v=27");
+        await import("./cloud-architecture-mermaid.js?v=30");
       }
       if (typeof window.__triageCloudArchLoadMermaid === "function") {
         await window.__triageCloudArchLoadMermaid(sub || CONFIG.initialSubscription || "");
@@ -2191,7 +2191,7 @@ for (const button of viewButtons) {
     
     // Load Mermaid support when switching to mermaid mode
     if (mode === "mermaid" && !window.__triageCloudArchLoadMermaid) {
-      import("./cloud-architecture-mermaid.js?v=16").then(() => {
+      import("./cloud-architecture-mermaid.js?v=30").then(() => {
         if (typeof window.__triageCloudArchLoad === "function") {
           window.__triageCloudArchLoad((subscriptionInput.value || "").trim(), activeViewMode);
         }

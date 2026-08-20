@@ -913,6 +913,29 @@
       color: var(--text-muted);
     }
 
+    .cloud-arch-modal-actions {
+      display: flex;
+      align-items: center;
+      margin-left: auto;
+    }
+
+    .cloud-arch-modal-actions button {
+      padding: 7px 10px;
+      border: 2px solid var(--accent);
+      border-radius: 8px;
+      background: var(--bg-base);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .cloud-arch-modal-actions button:hover {
+      background: var(--accent-dim);
+      color: var(--accent);
+    }
+
     .cloud-arch-modal-close {
       flex-shrink: 0;
       width: 36px;
@@ -1237,6 +1260,7 @@
           <div class="cloud-arch-modal-title" id="modal-title"></div>
           <div class="cloud-arch-modal-subtitle" id="modal-subtitle"></div>
         </div>
+        <div id="modal-actions" class="cloud-arch-modal-actions"></div>
         <button class="cloud-arch-modal-close" id="modal-close-btn" aria-label="Close">×</button>
       </div>
       <div class="cloud-arch-modal-body" id="modal-body">
@@ -1375,7 +1399,7 @@
     // window.__triageCloudArchLoadMermaid is defined before ReactFlow mounts
     // and calls loadGraph.
     if (needsMermaid) {
-      await import('/static/js/cloud-architecture-mermaid.js?v=29');
+      await import('/static/js/cloud-architecture-mermaid.js?v=40');
       if (typeof window.__triageCloudArchLoadMermaid === 'function') {
         await window.__triageCloudArchLoadMermaid(config.initialSubscription || '');
         window.__triageCloudArchMermaidInitialLoaded = true;
