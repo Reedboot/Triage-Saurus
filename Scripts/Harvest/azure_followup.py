@@ -17,6 +17,8 @@ MAX_RESOURCES = 50
 ALLOWED_FIELDS = {
     "id", "name", "type", "location", "resourceGroup", "sku", "kind",
     "identity", "properties.publicNetworkAccess", "properties.networkAcls",
+    "properties.ipRules", "properties.virtualNetworkRules",
+    "properties.isVirtualNetworkFilterEnabled", "properties.networkAclBypass",
     "properties.privateEndpointConnections", "properties.minimumTlsVersion",
     "properties.allowBlobPublicAccess", "properties.publicAccess",
 }

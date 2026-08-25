@@ -5,7 +5,15 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
 
-from ._helpers import az, az_resource_show, build_endpoints, extract_ip_restrictions, infer_sku, safe_str
+from ._helpers import (
+    az,
+    az_resource_show,
+    build_endpoints,
+    classify_network_access,
+    extract_ip_restrictions,
+    infer_sku,
+    safe_str,
+)
 from ._staged import BackfillJob, StagedRows
 
 RESOURCE_TYPE = "Microsoft.Storage/storageAccounts"
@@ -230,21 +238,12 @@ def _get_primary_endpoint(props: dict[str, Any]) -> str | None:
 def _classify_exposure(props: dict[str, Any]) -> tuple[int, int, list[str]]:
     """Return (is_public, is_restricted, ip_cidrs)."""
     network_acls = props.get("networkAcls") or {}
-    default_action = network_acls.get("defaultAction", "Allow")
-
-    # If default action is Deny → allowlist mode (restricted)
-    if default_action == "Deny":
-        cidrs = extract_ip_restrictions(network_acls=network_acls)
-        return 0, 1, cidrs
-
-    # Check for specific rules even when default is Allow
-    ip_rules = network_acls.get("ipRules") or []
-    vnet_rules = network_acls.get("virtualNetworkRules") or []
-    if ip_rules or vnet_rules:
-        cidrs = extract_ip_restrictions(network_acls=network_acls)
-        return 0, 1, cidrs
-
-    return 1, 0, []
+    is_public, is_restricted, cidrs, _ = classify_network_access(
+        props,
+        endpoint_present=bool(_get_primary_endpoint(props)),
+        network_acls=network_acls,
+    )
+    return is_public, is_restricted, cidrs
 
 
 def _get_all_endpoint_entries(props: dict[str, Any]) -> list[tuple[str | None, int, str]]:

@@ -21933,7 +21933,7 @@ _SUBSCRIPTION_DIAGRAM_CACHE: dict[str, tuple[float, str, dict]] = {}
 _SUBSCRIPTION_DIAGRAM_CACHE_TTL = 600  # 10 minutes
 # Bump this whenever diagram rendering logic changes (listener icons, pool icons, edge labels, etc.)
 # so the DB cache is automatically invalidated for all subscriptions.
-_DIAGRAM_CODE_VERSION = "v51"  # Compact APIM overview while retaining API drill-downs
+_DIAGRAM_CODE_VERSION = "v53"  # Keep initial diagram rendering bounded while retaining storage accounts
 
 
 def _subscription_diagram_cache_signature(conn, sub_id: str) -> tuple[str | None, tuple[str, str] | None]:
@@ -22308,6 +22308,39 @@ def api_subscription_diagram(sub_id: str):
                    {endpoints_expr}
             FROM provisioned_assets pa
             WHERE subscription_id = ?
+              AND (
+                pa.id IN (
+                    SELECT candidate.id
+                    FROM provisioned_assets candidate
+                    WHERE candidate.subscription_id = pa.subscription_id
+                    ORDER BY
+                        CASE
+                            WHEN candidate.type LIKE '%applicationGateway%' THEN 1
+                            WHEN candidate.type LIKE '%frontDoor%' THEN 2
+                            WHEN candidate.type LIKE '%bastionHost%' THEN 3
+                            WHEN candidate.type LIKE '%trafficManager%' THEN 4
+                            WHEN candidate.type LIKE '%apiManagement%' THEN 5
+                            WHEN candidate.type LIKE '%Sql%' AND candidate.type NOT LIKE '%databases%' THEN 6
+                            WHEN candidate.type LIKE '%documentDB%' THEN 7
+                            WHEN candidate.type LIKE '%servicebus%' THEN 8
+                            WHEN candidate.type LIKE '%eventhub%' THEN 9
+                            WHEN candidate.type LIKE '%servicefabric%' THEN 10
+                            WHEN candidate.type LIKE '%hostingEnvironment%' THEN 11
+                            WHEN candidate.type LIKE '%serverFarms%' THEN 12
+                            WHEN candidate.type LIKE '%sites%' AND candidate.type NOT LIKE '%slots%' THEN 13
+                            WHEN candidate.type LIKE '%managedCluster%' THEN 14
+                            WHEN candidate.type LIKE '%Firewall%' AND candidate.type NOT LIKE '%policies%' THEN 15
+                            WHEN candidate.type LIKE '%publicIP%' THEN 16
+                            WHEN candidate.type LIKE '%loadBalancer%' THEN 17
+                            WHEN candidate.type LIKE '%KeyVault%' AND candidate.type NOT LIKE '%secrets%' THEN 18
+                            WHEN candidate.type LIKE '%storageAccounts%' AND candidate.type NOT LIKE '%blobServices%' THEN 19
+                            ELSE 99
+                        END,
+                        candidate.resource_group, candidate.name
+                    LIMIT 500
+                )
+                OR LOWER(pa.type) LIKE '%storageaccounts%'
+              )
             ORDER BY 
                 CASE 
                     WHEN pa.type LIKE '%applicationGateway%' THEN 1
@@ -22332,7 +22365,6 @@ def api_subscription_diagram(sub_id: str):
                     ELSE 99
                 END,
                 pa.resource_group, pa.name
-            LIMIT 500
             """,
             (sub_id,),
         ).fetchall()
@@ -25851,17 +25883,19 @@ def _build_ingress_diagram(
         def _data_store_base_label(item: dict, category: str) -> str:
             if category == "SQL":
                 return _short_name(str(item.get("name") or "resource"))
+            if category == "Storage":
+                return f"Storage Account: {_short_name(str(item.get('name') or 'resource'))}"
             return category
 
         def _data_store_group_label(category: str, items: list[dict]) -> str:
-            if category == "SQL":
+            if category in {"SQL", "Storage"}:
                 names = [_short_name(str(item.get("name") or "resource")) for item in items if item]
                 names = [name for name in names if name]
                 if not names:
                     return category
                 if len(names) <= 2:
-                    return ", ".join(names)
-                return ", ".join(names[:2]) + f" +{len(names) - 2}"
+                    return f"{category}: {', '.join(names)}"
+                return f"{category}: " + ", ".join(names[:2]) + f" +{len(names) - 2}"
             return category
 
         for item in store_items:
@@ -27605,6 +27639,43 @@ def _build_ingress_diagram(
                 apim_backend_workload_targets[parent_apim_name].add(target_node_id)
 
     apim_parent_edges: set[tuple[str, str]] = set()
+    # Synthetic API nodes are distinct routing boundaries, but their hosting
+    # APIM service is the parent of the backend target.
+    apim_service_node_ids_by_name: dict[str, str] = {}
+    for api in [*shown_api, *shown_entry]:
+        if str(api.get("type") or "").strip().lower() != "apim":
+            continue
+        service_names = {
+            str(api.get("name") or "").strip().lower(),
+            *{
+                str(resource.get("name") or "").strip().lower()
+                for resource in api.get("resources") or []
+                if isinstance(resource, dict)
+            },
+        }
+        for service_name in service_names:
+            if service_name:
+                apim_service_node_ids_by_name[service_name] = _get_node_id(api)
+
+    for api in [*shown_api, *shown_entry]:
+        if str(api.get("type") or "").strip().lower() != "apim api":
+            continue
+        api_nid = _get_node_id(api)
+        api_extra = api.get("_extra") if isinstance(api.get("_extra"), dict) else {}
+        apim_name = str(
+            api_extra.get("apim_name")
+            or api.get("apim_name")
+            or ""
+        ).strip().lower()
+        if not apim_name:
+            name_parts = str(api.get("name") or "").split("::", 1)
+            if len(name_parts) == 2:
+                apim_name = name_parts[0].strip().lower()
+        parent_nid = apim_service_node_ids_by_name.get(apim_name)
+        if api_nid and parent_nid and api_nid != parent_nid:
+            _add_link(f"    {api_nid} --> {parent_nid}", "orange")
+            apim_parent_edges.add((api_nid, parent_nid))
+
     for api in shown_api:
         api_nid = _get_node_id(api)
         targets = api_route_targets.get(api_nid) or []
@@ -27629,15 +27700,7 @@ def _build_ingress_diagram(
             else:
                 _add_link(f'    {api_nid} -->|"{_entry_route_label(api)}"| {target_nid}', "orange")
 
-    apim_node_ids_by_name: dict[str, str] = {}
-    for api in shown_api:
-        api_nid = _get_node_id(api)
-        for resource in (api.get("resources") or []):
-            if not isinstance(resource, dict):
-                continue
-            api_name = str(resource.get("name") or "").strip().lower()
-            if api_name and api_name not in apim_node_ids_by_name:
-                apim_node_ids_by_name[api_name] = api_nid
+    apim_node_ids_by_name = apim_service_node_ids_by_name
 
     for backend in shown_backend:
         backend_type_lc = str(backend.get("type") or backend.get("arm_type") or "").lower()

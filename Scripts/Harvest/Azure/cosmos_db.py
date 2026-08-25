@@ -67,6 +67,9 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "backup_policy": (props.get("backupPolicy") or {}).get("type"),
             "locations": [loc.get("locationName") for loc in (props.get("readLocations") or [])],
             "ip_rules_count": len(props.get("ipRules") or []),
+            "virtual_network_rules_count": len(props.get("virtualNetworkRules") or []),
+            "virtual_network_filter_enabled": props.get("isVirtualNetworkFilterEnabled"),
+            "network_acl_bypass": props.get("networkAclBypass"),
         }
 
         results.append({
