@@ -9,13 +9,12 @@
   const emptyEl = document.getElementById('subscriptions-empty');
   const previewPanel = document.getElementById('subscription-preview-panel');
   const previewRoot = document.getElementById('ingress-diagram-div');
-  const modeHost = document.getElementById('subscription-diagram-mode-host');
-  const targetFilter = document.getElementById('ingress-diagram-div-target-filter');
   const drilldownModal = document.getElementById('drilldown-modal');
   const drilldownModalBody = document.getElementById('drilldown-modal-body');
 
   let currentSubscriptionId = '';
   let currentNodeDrilldownMap = {};
+  const diagramZoomState = { scale: 1, x: 0, y: 0 };
 
   function renderBadge(env, badge) {
     const colours = { danger:'#dc2626', warning:'#d97706', info:'#2563eb', secondary:'#6b7280' };
@@ -51,6 +50,7 @@
       if (href) {
         return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`;
       }
+
       return escapeHtml(label);
     }
     const text = String(value);
@@ -61,6 +61,55 @@
       return `<a href="https://${escapeHtml(text)}" target="_blank" rel="noopener noreferrer">${escapeHtml(text)}</a>`;
     }
     return escapeHtml(text);
+  }
+
+  function initDiagramPanZoom() {
+    if (!previewRoot || previewRoot.dataset.panZoomBound === 'true') return;
+    previewRoot.dataset.panZoomBound = 'true';
+    previewRoot.style.transformOrigin = 'top left';
+    previewRoot.style.cursor = 'grab';
+    previewRoot.style.touchAction = 'none';
+
+    const applyTransform = () => {
+      previewRoot.style.transform =
+        `translate(${diagramZoomState.x}px, ${diagramZoomState.y}px) scale(${diagramZoomState.scale})`;
+    };
+    let dragging = false;
+    let startX = 0;
+    let startY = 0;
+    let originX = 0;
+    let originY = 0;
+
+    previewRoot.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0 || event.target.closest('a,button,g.node,g.cluster')) return;
+      dragging = true;
+      startX = event.clientX;
+      startY = event.clientY;
+      originX = diagramZoomState.x;
+      originY = diagramZoomState.y;
+      previewRoot.style.cursor = 'grabbing';
+      previewRoot.setPointerCapture?.(event.pointerId);
+    });
+    previewRoot.addEventListener('pointermove', (event) => {
+      if (!dragging) return;
+      diagramZoomState.x = originX + event.clientX - startX;
+      diagramZoomState.y = originY + event.clientY - startY;
+      applyTransform();
+    });
+    const stopDragging = (event) => {
+      if (!dragging) return;
+      dragging = false;
+      previewRoot.style.cursor = 'grab';
+      previewRoot.releasePointerCapture?.(event.pointerId);
+    };
+    previewRoot.addEventListener('pointerup', stopDragging);
+    previewRoot.addEventListener('pointercancel', stopDragging);
+    previewRoot.addEventListener('wheel', (event) => {
+      event.preventDefault();
+      const factor = event.deltaY < 0 ? 1.1 : 0.9;
+      diagramZoomState.scale = Math.max(0.2, Math.min(4, diagramZoomState.scale * factor));
+      applyTransform();
+    }, { passive: false });
   }
 
   function renderTreeCell(value) {
@@ -172,18 +221,6 @@
         `;
       })
       .join('');
-  }
-
-  function syncModeButtons(mode) {
-    if (!modeHost) return;
-    modeHost.querySelectorAll('[data-cloud-arch-view]').forEach((btn) => {
-      const isActive = (btn.getAttribute('data-cloud-arch-view') || '') === mode;
-      btn.classList.toggle('is-active', isActive);
-      btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
-    });
-    if (targetFilter) {
-      targetFilter.hidden = mode !== 'reactflow';
-    }
   }
 
   function hideModal() {
@@ -334,9 +371,11 @@
 
     if (!previewPanel || !previewRoot) return;
     previewPanel.hidden = false;
+    diagramZoomState.scale = 1;
+    diagramZoomState.x = 0;
+    diagramZoomState.y = 0;
+    previewRoot.style.transform = '';
     previewRoot.innerHTML = '';
-    syncModeButtons('mermaid');
-
     if (!window.TriageMermaid || typeof window.TriageMermaid.renderSource !== 'function') {
       previewRoot.textContent = 'Diagram renderer unavailable.';
       return;
@@ -352,6 +391,7 @@
         bindDrilldownHandlers(previewRoot);
       },
     });
+    initDiagramPanZoom();
   }
 
   async function loadPreview(subId) {
@@ -406,15 +446,6 @@
           await loadPreview(subId);
         });
       });
-
-      if (modeHost) {
-        modeHost.querySelectorAll('[data-cloud-arch-view]').forEach((btn) => {
-          btn.addEventListener('click', () => {
-            const mode = btn.getAttribute('data-cloud-arch-view') || 'mermaid';
-            syncModeButtons(mode);
-          });
-        });
-      }
 
       if (drilldownModal) {
         drilldownModal.addEventListener('click', (evt) => {

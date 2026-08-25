@@ -14,8 +14,6 @@ def normalize_architecture_view_mode(requested_view_mode: str) -> str:
         return "full"
     if view_mode == "overview":
         return "overview"
-    if view_mode in {"reactflow", "full"}:
-        return "full"
     return "overview"
 
 

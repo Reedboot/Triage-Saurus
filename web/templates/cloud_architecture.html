@@ -6,7 +6,6 @@
   <title>Cloud Architecture — Triage-Saurus</title>
   <link rel="stylesheet" href="/static/tailwind.css?v=1" />
   <link rel="stylesheet" href="/static/app.css?v=9" />
-  <link rel="stylesheet" href="/static/vendor/reactflow.css" />
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
   <script src="/static/js/mermaid-loader.js?v=3"></script>
   <script src="/static/js/mermaid-icon-injector.js?v=2" defer></script>
@@ -825,27 +824,6 @@
       border-radius: 15px 15px 0 0;
     }
 
-    .react-flow__attribution {
-      display: none;
-    }
-    
-    /* Edge label z-index fix - ensure labels are in front of edges */
-    .react-flow__edge-textbg,
-    .react-flow__edge-text {
-      z-index: 1000 !important;
-      pointer-events: all;
-      cursor: pointer;
-    }
-    
-    /* Make edges clickable */
-    .react-flow__edge-path {
-      cursor: pointer;
-    }
-    
-    .react-flow__edge-path:hover {
-      stroke-width: 4 !important;
-    }
-
     /* Component Detail Modal */
     .cloud-arch-modal-overlay {
       position: fixed;
@@ -1107,10 +1085,6 @@
         <span class="emoji">☁️</span>
         <span>Cloud Architecture</span>
       </div>
-      <div class="cloud-arch-view-toggle" id="subscription-diagram-mode-host" role="group" aria-label="Diagram view mode">
-        <button type="button" data-cloud-arch-view="mermaid" class="diagram-mode-btn is-active">Overview</button>
-        <button type="button" data-cloud-arch-view="reactflow" class="diagram-mode-btn">Attack paths</button>
-      </div>
       <form class="cloud-arch-form" id="cloud-arch-form">
         <div class="cloud-arch-combobox">
           <input class="cloud-arch-input" id="subscription-input" name="sub" value="{{ initial_subscription }}"
@@ -1210,11 +1184,11 @@
 
       <div class="cloud-arch-views">
         <div class="cloud-arch-view cloud-arch-mermaid-view" id="cloud-arch-mermaid-view" hidden>
-          <div class="cloud-arch-mermaid-controls react-flow__panel react-flow__controls bottom left">
-            <button type="button" class="cloud-arch-mermaid-btn react-flow__controls-button" data-diagram-zoom-in="cloud-arch-mermaid-root" title="Zoom in">+</button>
-            <button type="button" class="cloud-arch-mermaid-btn react-flow__controls-button" data-diagram-zoom-out="cloud-arch-mermaid-root" title="Zoom out">−</button>
-            <button type="button" class="cloud-arch-mermaid-btn react-flow__controls-button" data-diagram-fit="cloud-arch-mermaid-root" title="Fit view">⤢</button>
-            <button type="button" class="cloud-arch-mermaid-btn cloud-arch-mermaid-btn--export react-flow__controls-button" data-diagram-export="cloud-arch-mermaid-root" title="Export PNG">
+          <div class="cloud-arch-mermaid-controls">
+            <button type="button" class="cloud-arch-mermaid-btn" data-diagram-zoom-in="cloud-arch-mermaid-root" title="Zoom in">+</button>
+            <button type="button" class="cloud-arch-mermaid-btn" data-diagram-zoom-out="cloud-arch-mermaid-root" title="Zoom out">−</button>
+            <button type="button" class="cloud-arch-mermaid-btn" data-diagram-fit="cloud-arch-mermaid-root" title="Fit view">⤢</button>
+            <button type="button" class="cloud-arch-mermaid-btn cloud-arch-mermaid-btn--export" data-diagram-export="cloud-arch-mermaid-root" title="Export PNG">
               <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3"/>
               </svg>
@@ -1229,16 +1203,15 @@
             <div class="cloud-arch-trace-panel__header">
               <span id="cloud-arch-trace-title">Connection trace</span>
               <span class="cloud-arch-trace-panel__controls" aria-label="Trace diagram controls">
-                <button type="button" class="cloud-arch-mermaid-btn react-flow__controls-button" id="cloud-arch-trace-zoom-in" title="Zoom in">+</button>
-                <button type="button" class="cloud-arch-mermaid-btn react-flow__controls-button" id="cloud-arch-trace-zoom-out" title="Zoom out">−</button>
-                <button type="button" class="cloud-arch-mermaid-btn react-flow__controls-button" id="cloud-arch-trace-fit" title="Fit view">⤢</button>
+                <button type="button" class="cloud-arch-mermaid-btn" id="cloud-arch-trace-zoom-in" title="Zoom in">+</button>
+                <button type="button" class="cloud-arch-mermaid-btn" id="cloud-arch-trace-zoom-out" title="Zoom out">−</button>
+                <button type="button" class="cloud-arch-mermaid-btn" id="cloud-arch-trace-fit" title="Fit view">⤢</button>
               </span>
               <button class="cloud-arch-modal-close" type="button" id="cloud-arch-trace-close" aria-label="Close connection trace">×</button>
             </div>
             <div id="cloud-arch-trace-root" role="img" aria-label="Selected component connection trace"></div>
           </div>
         </div>
-        <div class="cloud-arch-view" id="cloud-arch-root" style="top: 0; left: 0; right: 0; bottom: 0;"></div>
       </div>
       <div class="cloud-arch-empty" id="cloud-arch-empty" hidden>
         <div>
@@ -1363,9 +1336,6 @@
       });
     })();
   </script>
-  <script src="/static/vendor/react.production.min.js"></script>
-  <script src="/static/vendor/react-dom.production.min.js"></script>
-  <script src="/static/vendor/reactflow.umd.js"></script>
   <script>
     // Status card collapse/expand functionality
     (function() {
@@ -1392,20 +1362,11 @@
   <script type="module">
     // Load Mermaid support if needed
     const config = window.__TRIAGE_CLOUD_ARCH__ || {};
-    const viewMode = String(config.initialViewMode || 'mermaid').toLowerCase();
-    const needsMermaid = viewMode === 'mermaid' || viewMode === 'overview';
-
-    // When starting in mermaid mode, load mermaid first so
-    // window.__triageCloudArchLoadMermaid is defined before ReactFlow mounts
-    // and calls loadGraph.
-    if (needsMermaid) {
-      await import('/static/js/cloud-architecture-mermaid.js?v=40');
-      if (typeof window.__triageCloudArchLoadMermaid === 'function') {
-        await window.__triageCloudArchLoadMermaid(config.initialSubscription || '');
-        window.__triageCloudArchMermaidInitialLoaded = true;
-      }
+    await import('/static/js/cloud-architecture-mermaid.js?v=41');
+    if (typeof window.__triageCloudArchLoadMermaid === 'function') {
+      await window.__triageCloudArchLoadMermaid(config.initialSubscription || '');
+      window.__triageCloudArchMermaidInitialLoaded = true;
     }
-    import('/static/js/cloud-architecture-reactflow.js?v=18');
   </script>
 </body>
 </html>

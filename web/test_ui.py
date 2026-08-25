@@ -571,20 +571,6 @@ class TestDiagramPanel:
                     asset_summary: { entry_points: 1, api_layer: 1, backends: 1, data_stores: 1, public_assets: 1 },
                     attack_paths: [{ title: 'Public ingress into architecture' }, { title: 'Secrets pivot from workloads' }]
                   },
-                  react_flow: {
-                    type: 'react_flow',
-                    title: 'React Flow view',
-                    description: 'Interactive architecture graph.',
-                    legend: [],
-                    asset_summary: { entry_points: 1, api_layer: 1, backends: 1, data_stores: 1, public_assets: 1 },
-                    nodes: [
-                      { id: 'Internet', position: { x: 20, y: 20 }, data: { label: 'Internet', typeLabel: 'External', tier: 'internet', public: true } },
-                      { id: 'gateway', position: { x: 320, y: 20 }, data: { label: 'Gateway', typeLabel: 'Application Gateway', tier: 'entry', public: true } },
-                    ],
-                    edges: [
-                      { id: 'e1', source: 'Internet', target: 'gateway', label: 'public', type: 'smoothstep', style: { stroke: '#ef4444' } },
-                    ]
-                  }
                 }
               }]);
             }
@@ -592,12 +578,10 @@ class TestDiagramPanel:
         )
         home.wait_for_selector("#diagram-views svg", state="attached", timeout=15000)
 
-        expect(home.locator("#diagram-mode-tabs button")).to_have_count(3)
+        expect(home.locator("#diagram-mode-tabs button")).to_have_count(2)
         home.locator("#diagram-mode-tabs button:has-text('Attack Paths')").click()
         expect(home.locator("#diagram-view-summary")).to_contain_text("Likely attack paths")
         expect(home.locator("#diagram-view-summary")).to_contain_text("Secrets pivot from workloads")
-        home.locator("#diagram-mode-tabs button:has-text('React Flow')").click()
-        expect(home.locator("#diagram-views .react-flow")).to_be_visible()
 
     def test_rendered_diagram_svg_fills_wrapper(self, home: Page):
         """Rendered Mermaid SVG should fill the active diagram wrapper."""
@@ -1084,8 +1068,8 @@ class TestCloudPage:
         self._load_diagram(page, live_server, self._MERMAID_DISTINCT_LABELS)
         expect(page.locator("#ingress-diagram-div svg")).to_be_visible()
 
-    def test_subscription_name_opens_react_flow_new_tab(self, page: Page, live_server: str):
-        """Clicking the subscription name should open the React Flow page in a new tab."""
+    def test_subscription_name_opens_architecture_page_new_tab(self, page: Page, live_server: str):
+        """Clicking the subscription name should open the Mermaid architecture page in a new tab."""
         self._setup_mocks(page, self._MERMAID_DISTINCT_LABELS)
         page.goto(live_server + "/cloud")
         page.wait_for_selector(".subscription-name-cell a", timeout=8000)
@@ -2878,22 +2862,28 @@ class TestIngressDiagramGeneration:
         mermaid = result.get("mermaid", "")
         node_map = result.get("node_drilldown_map", {})
         api_node = next(
-            value
-            for value in node_map.values()
+            (node_id, value)
+            for node_id, value in node_map.items()
             if value.get("arm_type") == "APIM API"
         )
         apim_node = next(
-            value
-            for value in node_map.values()
+            (node_id, value)
+            for node_id, value in node_map.items()
             if value.get("arm_type") == "Microsoft.ApiManagement/service"
         )
         assert "Catalog API" in mermaid, mermaid
         assert " --> grp_APIM_Public" in mermaid, mermaid
         assert "hosted in" not in mermaid, mermaid
         assert 'Catalog API -->|"Routing"| grp_APIM_Public' not in mermaid, mermaid
-        assert apim_node.get("title") == "APIM", apim_node
-        assert api_node.get("icon_path", "").endswith("api-center.svg"), api_node
-        assert api_node.get("icon_class") == "icon-azurerm-api-center", api_node
+        api_node_id, api_node_data = api_node
+        apim_node_id, apim_node_data = apim_node
+        assert not any(
+            api_node_id in line and apim_node_id in line and "-->" in line
+            for line in mermaid.splitlines()
+        ), mermaid
+        assert apim_node_data.get("title") == "APIM", apim_node_data
+        assert api_node_data.get("icon_path", "").endswith("api-center.svg"), api_node_data
+        assert api_node_data.get("icon_class") == "icon-azurerm-api-center", api_node_data
 
     def test_network_attached_services_render_inside_vnet_and_subnet_groups(self):
         """Network-aware services should be nested under VNet and subnet subgraphs."""
@@ -8934,7 +8924,7 @@ class TestCloudPosture:
         assert any(row[1] == "sharedz1" for row in result["rows"]), result["rows"]
         assert all(len(row) == 5 for row in result["rows"]), result["rows"]
 
-    def test_cloud_architecture_page_labels_tabs_mermaid_and_react_flow(self, monkeypatch):
+    def test_cloud_architecture_page_uses_mermaid(self, monkeypatch):
         import os
         import sqlite3
         import sys
@@ -8972,7 +8962,7 @@ class TestCloudPosture:
         assert "Test Subscription (production)" in html
         assert "ingress-diagram-div-target-filter" not in html
         assert "Overview" in html
-        assert "Attack paths" in html
+        assert "Attack paths" not in html
         assert "Miro" not in html
 
     def test_api_cloud_resource_details_handles_nsg_null_sku(self, monkeypatch):
@@ -9234,7 +9224,7 @@ class TestCloudPosture:
 
         monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
         client = app_module.app.test_client()
-        resp = client.get("/api/cloud/architecture?sub=sub-1&view=reactflow")
+        resp = client.get("/api/cloud/architecture?sub=sub-1&view=mermaid")
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["subscription_id"] == "sub-1"
@@ -9405,7 +9395,7 @@ class TestCloudPosture:
 
         monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
         client = app_module.app.test_client()
-        resp = client.get("/api/cloud/architecture?sub=sub-1&view=reactflow")
+        resp = client.get("/api/cloud/architecture?sub=sub-1&view=mermaid")
 
         assert resp.status_code == 200, resp.get_data(as_text=True)
         data = resp.get_json()
@@ -10051,7 +10041,7 @@ class TestCloudPosture:
 
         monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
         client = app_module.app.test_client()
-        resp = client.get("/api/cloud/architecture?sub=sub-1&view=reactflow")
+        resp = client.get("/api/cloud/architecture?sub=sub-1&view=mermaid")
         assert resp.status_code == 200
         data = resp.get_json()
         nodes = {node["id"]: node for node in data["nodes"]}
@@ -12148,7 +12138,7 @@ class TestCloudPosture:
         monkeypatch.setattr(app_module, "_get_db_with_schema", _db)
         client = app_module.app.test_client()
 
-        graph_resp = client.get("/api/cloud/architecture?sub=sub-1&view=reactflow")
+        graph_resp = client.get("/api/cloud/architecture?sub=sub-1&view=mermaid")
         assert graph_resp.status_code == 200, graph_resp.get_data(as_text=True)
         graph = graph_resp.get_json()
         assert not any("publicipaddresses" in str((n.get("data") or {}).get("resourceType", "")).lower() for n in graph["nodes"])
@@ -12339,7 +12329,7 @@ class TestCloudPosture:
         assert "20.30.40.50" in details["network"]["public_ips"]
         assert any(str(item.get("target") or "") == "power_bi_gateway" for item in details["network"]["routing_targets"])
 
-        rf_resp = client.get("/api/cloud/architecture?sub=sub-1&view=reactflow")
+        rf_resp = client.get("/api/cloud/architecture?sub=sub-1&view=mermaid")
         assert rf_resp.status_code == 200, rf_resp.get_data(as_text=True)
         rf_graph = rf_resp.get_json()
         assert any(
@@ -12349,7 +12339,7 @@ class TestCloudPosture:
 
         os.unlink(tmp.name)
 
-    def test_api_cloud_architecture_reactflow_ignores_synthetic_network_parent_cycles(self, monkeypatch):
+    def test_api_cloud_architecture_ignores_synthetic_network_parent_cycles(self, monkeypatch):
         import json
         import os
         import sqlite3
@@ -12458,7 +12448,7 @@ class TestCloudPosture:
         monkeypatch.setattr(app_module, "_get_db_with_schema", _db)
         client = app_module.app.test_client()
 
-        resp = client.get("/api/cloud/architecture?sub=sub-1&view=reactflow")
+        resp = client.get("/api/cloud/architecture?sub=sub-1&view=mermaid")
         assert resp.status_code == 200, resp.get_data(as_text=True)
         graph = resp.get_json()
         nodes = graph["nodes"]
@@ -13218,7 +13208,7 @@ class TestCloudPosture:
 
         monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
         client = app_module.app.test_client()
-        resp = client.get("/api/cloud/architecture?sub=sub-1&view=reactflow")
+        resp = client.get("/api/cloud/architecture?sub=sub-1&view=mermaid")
         assert resp.status_code == 200, resp.get_data(as_text=True)
         graph = resp.get_json()
         nodes = {n["id"]: n for n in graph["nodes"]}
@@ -13241,7 +13231,7 @@ class TestCloudPosture:
 
         os.unlink(tmp.name)
 
-    def test_api_cloud_architecture_surfaces_aks_ingress_routes_in_reactflow(self, monkeypatch):
+    def test_api_cloud_architecture_surfaces_aks_ingress_routes(self, monkeypatch):
         import json
         import os
         import sqlite3
@@ -13357,7 +13347,7 @@ class TestCloudPosture:
 
         monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
         client = app_module.app.test_client()
-        resp = client.get("/api/cloud/architecture", query_string={"sub": "sub-1", "view": "reactflow"})
+        resp = client.get("/api/cloud/architecture", query_string={"sub": "sub-1", "view": "mermaid"})
         assert resp.status_code == 200, resp.get_data(as_text=True)
         data = resp.get_json()
         labels = [str((node.get("data") or {}).get("label", "")) for node in data.get("nodes", [])]

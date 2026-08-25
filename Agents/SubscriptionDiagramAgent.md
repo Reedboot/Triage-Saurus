@@ -33,7 +33,7 @@
 # Cloud Subscription Diagram Validation Agent
 
 ## Role
-Validate that the subscription-level diagrams rendered in the Triage-Saurus web UI **accurately and completely represent** the harvested Azure cloud assets for a given subscription. Use Playwright to capture real browser-rendered evidence from the React Flow UI.
+Validate that the subscription-level Mermaid diagrams rendered in the Triage-Saurus web UI **accurately and completely represent** the harvested Azure cloud assets for a given subscription. Use Playwright to capture real browser-rendered evidence from the Mermaid UI.
 
 ## Core Principle
 Every rendered node must correspond to a real harvested asset. Every public asset that should appear in the ingress view must be represented. Every icon must load. Every drillable node must respond to its supported interaction. Gaps in any of these are findings.
@@ -66,7 +66,7 @@ bash Scripts/start_web.sh
 
 1. Use Playwright to open `{base_url}/cloud` in a headless Chromium browser.
 2. Find and click the row for `subscription_id` to load its diagrams.
-3. Wait for the main React Flow diagram container to become visible.
+3. Wait for the main Mermaid diagram container to become visible.
 4. Wait until nodes and edges are rendered and any loading indicators have cleared.
 5. Fit the ingress diagram into the viewport if needed and save a screenshot as `screenshots/ingress_diagram.png`.
 6. Expand the first 5 Resource Group sections and screenshot each rendered diagram as `screenshots/rg_<name>.png`.
@@ -75,7 +75,7 @@ bash Scripts/start_web.sh
 
 ### Phase 2 — Rendered Icon Audit
 
-9. Inspect rendered diagram nodes and identify icon elements used by the React Flow UI. This may include `<img>` elements, inline SVGs, background images, or icon wrapper containers.
+9. Inspect rendered diagram nodes and identify icon elements used by the Mermaid UI. This may include `<img>` elements, inline SVGs, background images, or icon wrapper containers.
 10. For every rendered icon source that resolves to a URL, attempt retrieval from within the page context and record HTTP failures and load errors.
 11. For icons that do not use URL-backed image tags, validate that the rendered icon is present and non-empty in the DOM.
 12. Record broken, missing, or visually empty icons in `icon_audit.json`.
@@ -201,7 +201,7 @@ Diagnostics assume no specific UI controls exist. If data is incorrect, re-run t
 | Finding | Likely Cause | Fix |
 |---|---|---|
 | Broken icons | Rendered icon path is wrong or the asset is missing | Check the icon resolution logic in the web app and verify the corresponding static icon assets exist at the expected paths |
-| Drilldown fails | Interaction handlers not attached or node drilldown metadata missing | Check the React Flow node interaction wiring and verify drilldown metadata is populated for drillable nodes |
+| Drilldown fails | Interaction handlers not attached or node drilldown metadata missing | Check the Mermaid node interaction wiring and verify drilldown metadata is populated for drillable nodes |
 | WAF node missing | `has_waf` is false or incomplete in harvested data despite policy existing | Re-run the routing/WAF harvest pipeline or regenerate App Gateway metadata; verify `appgw_waf_policies` and `appgw_routing_rules` tables |
 | HTTP listener missing | `listeners` field is null, incomplete, or not propagated to render logic | Re-run routing harvest logic or ingestion pipeline; verify `appgw_routing_rules` contains listener data |
 | Public asset not in diagram | Exposure classification mismatch between harvest and render logic | Verify `is_public` from harvest is preserved during diagram build and not overridden by DNS resolution or runtime checks |
@@ -214,7 +214,7 @@ Diagnostics assume no specific UI controls exist. If data is incorrect, re-run t
 
 ## Implementation Notes
 
-- Treat the browser-rendered React Flow UI as the source of truth.
+- Treat the browser-rendered Mermaid UI as the source of truth.
 - Do not mark a check as passed purely because backend data looks correct.
 - Correct backend data with incorrect UI rendering is a failure.
 - Screenshots are mandatory evidence for all diagram validation.

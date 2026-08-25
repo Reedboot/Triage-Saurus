@@ -16,15 +16,11 @@ export const PROVIDER_THEMES = {
 };
 
 export function normalizeViewMode(value) {
-  const mode = (value || "").trim().toLowerCase();
-  if (mode === "reactflow" || mode === "full") {
-    return "reactflow";
-  }
   return "mermaid";
 }
 
 export function viewModeLabel(mode) {
-  return normalizeViewMode(mode) === "reactflow" ? "React Flow" : "Mermaid";
+  return "Mermaid";
 }
 
 export function themeFor(key) {

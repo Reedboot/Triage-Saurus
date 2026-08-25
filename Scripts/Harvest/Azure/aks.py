@@ -150,7 +150,7 @@ def _get_cluster_portal_fqdn(cluster_id: str) -> str:
     fqdn = (body.get("properties") or {}).get("azurePortalFQDN")
     if not fqdn:
         raise RuntimeError(f"azurePortalFQDN missing for cluster {cluster_id}")
-    return fqdn
+    return str(fqdn).removeprefix("https://").removeprefix("http://").rstrip("/")
 
 
 def _get_kubernetes_resources(portal_fqdn: str, resource_type: str) -> list[dict]:

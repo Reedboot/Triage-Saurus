@@ -13721,7 +13721,66 @@ def _build_subscription_architecture_payload(
                 "source_repo": git_repository,
                 "source_labels": pod_template_labels,
             }
+            if service_name:
+                service_port_key = str(service_port or "svc").strip().replace("/", "_")
+                service_id = (
+                    f"aks-service::{cluster_asset.get('id')}::{namespace or 'default'}:"
+                    f":{service_name}::{service_port_key}"
+                )
+                route_asset["routing_targets"] = [{
+                    "target_resource_id": service_id,
+                    "target": service_name,
+                    "name": service_name,
+                }]
             assets.append(route_asset)
+            if service_name and not any(str(asset.get("id") or "") == service_id for asset in assets):
+                assets.append({
+                    "id": service_id,
+                    "name": service_name,
+                    "resource_name": service_name,
+                    "type": "microsoft.kubernetes/services",
+                    "type_label": "Kubernetes Service",
+                    "display_type_label": "Kubernetes Service",
+                    "resource_group": str(resource_group or cluster_asset.get("resource_group") or "").strip(),
+                    "location": cluster_asset.get("location"),
+                    "sku": str(service_port or ""),
+                    "fqdn": "",
+                    "is_public": False,
+                    "status": "active",
+                    "pipeline_tag": None,
+                    "first_detected": None,
+                    "last_synced": None,
+                    "sub_id": sub_id,
+                    "sub_name": sub_name,
+                    "environment": sub_env,
+                    "cloud_provider": "Kubernetes",
+                    "linked_repo": git_repository,
+                    "kind": "Service",
+                    "parent_id": cluster_asset.get("id"),
+                    "parent_name": cluster_asset.get("name"),
+                    "parent_resource_group": cluster_asset.get("resource_group"),
+                    "parent_type_label": cluster_asset.get("display_type_label") or cluster_asset.get("type_label"),
+                    "children_count": 0,
+                    "is_child": True,
+                    "depth": 1,
+                    "is_restricted": False,
+                    "waf_mode": None,
+                    "provider_key": "kubernetes",
+                    "provider_label": _cloud_provider_display("kubernetes"),
+                    "tier": "backend",
+                    "routing_targets": [],
+                    "vnet_name": cluster_asset.get("vnet_name"),
+                    "vnet_resource_group": cluster_asset.get("vnet_resource_group"),
+                    "subnet_name": cluster_asset.get("subnet_name"),
+                    "subnet_id": cluster_asset.get("subnet_id"),
+                    "network": dict(cluster_asset.get("network") or {}),
+                    "source_namespace": namespace,
+                    "source_service": service_name,
+                    "source_service_port": service_port,
+                    "source_deployment": deployment_name,
+                    "source_repo": git_repository,
+                    "source_labels": pod_template_labels,
+                })
 
     # Add WAF Policy nodes as separate visible nodes
     if _table_exists(conn, "appgw_waf_policies"):
@@ -16345,28 +16404,29 @@ def _build_cloud_architecture_payload(conn, experiment_id: str, repo_name: str |
                         "_synthetic": True,
                     }
                 )
-            if service_name and service_key not in seen_aks_nodes:
-                seen_aks_nodes.add(service_key)
-                graph_nodes.append(
-                    {
-                        "id": service_id,
-                        "resource_name": service_name,
-                        "resource_type": "kubernetes_service",
-                        "provider_key": "kubernetes",
-                        "provider_label": _cloud_provider_display("kubernetes"),
-                        "type_label": "Kubernetes Service",
-                        "repo_name": row["git_repository"] or "",
-                        "parent_resource_id": None,
-                        "source_file": "",
-                        "discovered_by": "aks_routes",
-                        "discovery_method": "harvest",
-                        "status": "active",
-                        "first_seen": None,
-                        "last_seen": None,
-                        "public": False,
-                        "_synthetic": True,
-                    }
-                )
+            if service_name:
+                if service_key not in seen_aks_nodes:
+                    seen_aks_nodes.add(service_key)
+                    graph_nodes.append(
+                        {
+                            "id": service_id,
+                            "resource_name": service_name,
+                            "resource_type": "kubernetes_service",
+                            "provider_key": "kubernetes",
+                            "provider_label": _cloud_provider_display("kubernetes"),
+                            "type_label": "Kubernetes Service",
+                            "repo_name": row["git_repository"] or "",
+                            "parent_resource_id": None,
+                            "source_file": "",
+                            "discovered_by": "aks_routes",
+                            "discovery_method": "harvest",
+                            "status": "active",
+                            "first_seen": None,
+                            "last_seen": None,
+                            "public": False,
+                            "_synthetic": True,
+                        }
+                    )
                 graph_edges.append(
                     {
                         "id": f"edge-aks-{cluster_name}-{namespace}-{ingress_name}",
@@ -16430,6 +16490,39 @@ def _build_cloud_architecture_payload(conn, experiment_id: str, repo_name: str |
                     },
                 }
             )
+
+    # Keep route-backed services visible even when a downstream node projection
+    # has filtered the synthetic Kubernetes service from the provider buckets.
+    node_ids = {str(node["id"]) for node in nodes_out}
+    for row in aks_rows:
+        service_name = str(row["service_name"] or row["deployment_name"] or "").strip()
+        if not service_name:
+            continue
+        service_id = f"aks-service::{row['cluster_name']}::{row['namespace'] or ''}::{service_name}"
+        if service_id in node_ids:
+            continue
+        nodes_out.append(
+            {
+                "id": service_id,
+                "type": "cloudNode",
+                "position": {"x": base_x + (column_width * len(ordered_providers)) + 110, "y": base_y},
+                "data": {
+                    "label": service_name,
+                    "providerKey": "kubernetes",
+                    "providerLabel": _cloud_provider_display("kubernetes"),
+                    "typeLabel": "Kubernetes Service",
+                    "repoName": row["git_repository"] or "",
+                    "sourceFile": "",
+                    "public": False,
+                    "synthetic": True,
+                    "resourceType": "kubernetes_service",
+                    "iconPath": _get_icon_path("kubernetes_service"),
+                    "iconClass": _get_icon_class("kubernetes_service"),
+                },
+                "style": {"width": 290},
+            }
+        )
+        node_ids.add(service_id)
 
     # Re-anchor APIM child nodes around their APIM parent so the API sits to the
     # left and backend targets sit to the right instead of being stacked in the
@@ -16500,7 +16593,7 @@ def _build_cloud_architecture_payload(conn, experiment_id: str, repo_name: str |
 
 @app.route("/api/cloud/architecture")
 def api_cloud_architecture():
-    """Return a React Flow graph for the cloud architecture stored in CozoDB."""
+    """Return the Mermaid cloud architecture payload stored in CozoDB."""
     conn = _get_db_with_schema()
     if conn is None:
         return jsonify({"error": "DB unavailable"}), 503
@@ -16543,7 +16636,7 @@ def api_cloud_architecture():
 
 
 def _compact_subscription_mermaid_payload(payload: dict) -> dict:
-    """Return a Mermaid-friendly payload with redundant React Flow metadata removed.
+    """Return a Mermaid-friendly payload with redundant graph metadata removed.
 
     NOTE: This is intentionally left available for future use, but the live
     architecture endpoint now returns the full payload so Mermaid styling data
@@ -20559,13 +20652,7 @@ def _build_apim_api_visual_rows(rows: list, apim_api_rows: list | None) -> list[
             None,
             False,
             None,
-            [
-                {
-                    "target": str(row["apim_name"] or "").strip(),
-                    "name": str(row["apim_name"] or "").strip(),
-                    "target_resource_id": apim_resource_id or None,
-                }
-            ],
+            [],  # Hosted under APIM; this is not an API -> APIM route.
             json.dumps({
                 "_extra": {
                     "display_label": api_label,
@@ -21237,8 +21324,6 @@ def cloud_architecture_page():
     initial_view_mode = (request.args.get("view") or request.args.get("mode") or "").strip().lower()
     if initial_view_mode in {"mermaid", "overview"}:
         initial_view_mode = "mermaid"
-    elif initial_view_mode in {"reactflow", "full"}:
-        initial_view_mode = "reactflow"
     else:
         initial_view_mode = "mermaid"
     subscription_options = []
@@ -21848,7 +21933,7 @@ _SUBSCRIPTION_DIAGRAM_CACHE: dict[str, tuple[float, str, dict]] = {}
 _SUBSCRIPTION_DIAGRAM_CACHE_TTL = 600  # 10 minutes
 # Bump this whenever diagram rendering logic changes (listener icons, pool icons, edge labels, etc.)
 # so the DB cache is automatically invalidated for all subscriptions.
-_DIAGRAM_CODE_VERSION = "v48"  # Distinguish APIM ingress exposure from egress-only public IPs
+_DIAGRAM_CODE_VERSION = "v51"  # Compact APIM overview while retaining API drill-downs
 
 
 def _subscription_diagram_cache_signature(conn, sub_id: str) -> tuple[str | None, tuple[str, str] | None]:
@@ -24833,6 +24918,13 @@ def _build_ingress_diagram(
     aks_ingress_entries: list[dict] = []          # public-facing → entry_points; private → backend hops
     aks_service_entries: list[dict] = []
     if aks_route_rows:
+        def _aks_route_port_key(value: object) -> str:
+            """Normalize Kubernetes service ports for stable node and edge joins."""
+            text = str(value or "").strip()
+            if text.endswith(".0") and text[:-2].isdigit():
+                return text[:-2]
+            return text
+
         aks_clusters = [
             item for item in backends
             if "managedcluster" in (item.get("arm_type") or item.get("type") or "").lower()
@@ -24871,6 +24963,7 @@ def _build_ingress_diagram(
             seen_aks_ingress.add(synthetic_key)
 
             ingress_display = host_str or ingress_label
+            normalized_service_port = _aks_route_port_key(service_port)
             route_asset = {
                 "name": synthetic_key,
                 "label": ingress_display,
@@ -24878,9 +24971,9 @@ def _build_ingress_diagram(
                 "type": "Kubernetes Ingress",
                 "arm_type": "microsoft.kubernetes/ingresses",
                 "is_group": False,
-                "platform_managed": bool(item.get("platform_managed")),
-                "compute_scope": item.get("compute_scope") or "",
-                "managed_service": item.get("managed_service") or "",
+                "platform_managed": bool(cluster_item.get("platform_managed")),
+                "compute_scope": cluster_item.get("compute_scope") or "",
+                "managed_service": cluster_item.get("managed_service") or "",
                 "resources": [{"rg": str(resource_group or cluster_item.get("rg") or "").strip(), "name": str(cluster_name or cluster_item.get("name") or "").strip()}],
                 "fqdns": [host_str] if host_str else [],
                 "public": _aks_ingress_is_public(exposure_level, host_str),
@@ -24920,7 +25013,7 @@ def _build_ingress_diagram(
             }
             aks_ingress_entries.append(route_asset)
             if service_name:
-                service_asset_id = f"aks-service::{cluster_item.get('id')}::{namespace or 'default'}::{service_name}::{service_port or 'svc'}"
+                service_asset_id = f"aks-service::{cluster_item.get('id')}::{namespace or 'default'}::{service_name}::{normalized_service_port or 'svc'}"
                 route_asset["routing_targets"] = [{
                     "target_resource_id": service_asset_id,
                     "target": service_name,
@@ -24933,7 +25026,7 @@ def _build_ingress_diagram(
             if service_name and str(ingress_name or "").strip():
                 aks_service_entries.append({
                     "id": service_asset_id,
-                    "name": f"{cluster_name}-{namespace}-{service_name}-{str(service_port or 'svc').replace('/', '_')}",
+                        "name": f"{cluster_name}-{namespace}-{service_name}-{_aks_route_port_key(service_port) or 'svc'}".replace("/", "_"),
                     "label": str(service_name).strip(),
                     "count": 1,
                     "type": "Kubernetes Service",
@@ -24959,7 +25052,7 @@ def _build_ingress_diagram(
                     "raw_json": None,
                     "source_namespace": namespace,
                     "source_service": service_name,
-                    "source_service_port": service_port,
+                    "source_service_port": normalized_service_port if service_name else _aks_route_port_key(service_port),
                     "source_deployment": deployment_name,
                     "source_repo": git_repository,
                     "source_labels": pod_template_labels,
@@ -25314,7 +25407,9 @@ def _build_ingress_diagram(
         for category, items in sorted(grouped.items()):
             # Load balancers are resource-specific entry points. Keep every
             # instance visible so AKS and Service Fabric frontends cannot be
-            # collapsed into one generic "Load Balancer" node.
+            # collapsed into one generic "Load Balancer" node. APIM APIs remain
+            # compact in the subscription overview; their full list is retained
+            # in the group's drill-down resources.
             force_individual = category in {"Load Balancer", "Kubernetes Ingress"}
             if force_individual or len(items) <= NAME_THRESHOLD:
                 for item in items:
@@ -27641,6 +27736,11 @@ def _build_ingress_diagram(
             if entry_nid in routed_entry_ids:
                 continue
             arm_type_low = (entry.get("arm_type") or entry.get("type") or "").lower()
+            # APIM API nodes are already the API boundary and are grouped
+            # under the APIM service. They must not be connected back to the
+            # service by the generic entry-point fallback.
+            if "apim api" in arm_type_low:
+                continue
             if "_waf_" in entry_nid or str(entry.get("name") or "").lower().startswith("waf-"):
                 continue
             if entry.get("_waf_policy") or "applicationgatewaywafpolicies" in arm_type_low:
@@ -27665,11 +27765,7 @@ def _build_ingress_diagram(
             else:
                 routing_label = '"Routing"'
             if entry_nid != api_nid:
-                entry_type_lc = str(entry.get("type") or entry.get("arm_type") or "").lower()
-                if "apim api" in entry_type_lc:
-                    _add_link(f"    {entry_nid} --> {api_nid}", "orange")
-                else:
-                    _add_link(f'    {entry_nid} -->|{routing_label}| {api_nid}', "orange")
+                _add_link(f'    {entry_nid} -->|{routing_label}| {api_nid}', "orange")
 
     # Entry Points → Backends (orange — fallback when no APIM; Traffic Manager, App Gateway, etc.)
     # Without APIM, entry points route directly to backend services. Traffic Manager specifically
@@ -29503,6 +29599,90 @@ def _build_ingress_diagram(
         )
         if _target_node_id not in _group["target_node_ids"]:
             _group["target_node_ids"].append(_target_node_id)
+
+    # AKS clusters can have many ingress routes. Keep those route nodes
+    # available for drill-down while allowing the cluster modal to collapse
+    # them as a single group, just like gateway backend targets.
+    _cluster_arm_types = ("managedclusters", "servicefabric/clusters")
+    _cluster_nodes_by_key = {}
+    for _item in shown_entry + shown_api + shown_backend + shown_data:
+        _arm_type = str(_item.get("arm_type") or _item.get("type") or "").lower()
+        if not any(token in _arm_type for token in _cluster_arm_types):
+            continue
+        _cluster_resources = _item.get("resources") or [
+            {"rg": _item.get("rg"), "name": _item.get("name")}
+        ]
+        for _resource in _cluster_resources:
+            _cluster_key = (
+                str(_resource.get("rg") or _item.get("rg") or "").strip().lower(),
+                str(_resource.get("name") or _item.get("name") or "").strip().lower(),
+            )
+            if _cluster_key[1]:
+                _cluster_nodes_by_key[_cluster_key] = _get_node_id(_item)
+
+    for _item in shown_entry + shown_api + shown_backend:
+        if (_item.get("node_variant") or "") != "aks_ingress":
+            continue
+        _cluster_key = (
+            str(_item.get("source_cluster_rg") or _item.get("rg") or "").strip().lower(),
+            str(_item.get("source_cluster_name") or "").strip().lower(),
+        )
+        _cluster_node_id = _cluster_nodes_by_key.get(_cluster_key)
+        _ingress_node_id = _get_node_id(_item)
+        if not _cluster_node_id or not _ingress_node_id:
+            continue
+        _collapsible_target_node_ids.add(_ingress_node_id)
+        _group = _collapsible_target_groups.setdefault(
+            _cluster_node_id,
+            {
+                "node_id": _cluster_node_id,
+                "label": _item.get("source_cluster_name") or "AKS cluster",
+                "target_node_ids": [],
+            },
+        )
+        if _ingress_node_id not in _group["target_node_ids"]:
+            _group["target_node_ids"].append(_ingress_node_id)
+
+    # The final Mermaid node map also contains synthetic ingress nodes that
+    # were compacted during grouping. Use their retained source metadata so
+    # those routes still receive a cluster-level collapse control.
+    _cluster_map_from_nodes = {}
+    for _node_id, _node_data in node_drilldown_map.items():
+        _node_arm_type = str(_node_data.get("arm_type") or "").lower()
+        if not any(token in _node_arm_type for token in _cluster_arm_types):
+            continue
+        for _resource in _node_data.get("resources") or []:
+            _cluster_key = (
+                str(_resource.get("rg") or "").strip().lower(),
+                str(_resource.get("name") or "").strip().lower(),
+            )
+            if _cluster_key[1]:
+                _cluster_map_from_nodes[_cluster_key] = _node_id
+    for _node_id, _node_data in node_drilldown_map.items():
+        _node_type = str(_node_data.get("arm_type") or "").lower()
+        if "kubernetes ingress" not in _node_type and "kubernetes service" not in _node_type:
+            continue
+        _cluster_key = (
+            str(_node_data.get("source_cluster_rg") or "").strip().lower(),
+            str(_node_data.get("source_cluster_name") or "").strip().lower(),
+        )
+        _cluster_node_id = _cluster_map_from_nodes.get(_cluster_key)
+        if not _cluster_node_id:
+            continue
+        _collapsible_target_node_ids.add(_node_id)
+        _group = _collapsible_target_groups.setdefault(
+            _cluster_node_id,
+            {
+                "node_id": _cluster_node_id,
+                "label": _node_data.get("source_cluster_name") or "AKS cluster",
+                "target_node_ids": [],
+            },
+        )
+        if _node_id not in _group["target_node_ids"]:
+            _group["target_node_ids"].append(_node_id)
+
+    result["collapsible_target_node_ids"] = sorted(_collapsible_target_node_ids)
+    result["collapsible_target_count"] = len(_collapsible_target_node_ids)
     result["collapsible_target_groups"] = [
         _group
         for _group in _collapsible_target_groups.values()

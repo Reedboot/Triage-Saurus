@@ -215,8 +215,12 @@ def _az_rest(url: str, resource: str | None = None) -> dict:
 
     Retries up to _AZ_RETRY_MAX times when the MSAL token cache is locked.
     """
-    if not url.startswith("https://management.azure.com/"):
-        raise ValueError("Azure REST URL must target management.azure.com")
+    if not (
+        url.startswith("https://management.azure.com/")
+        or url.startswith("https://")
+        and ".azmk8s.io/" in url
+    ):
+        raise ValueError("Azure REST URL must target management.azure.com or an AKS API endpoint")
     cmd = ["az", "rest", "--method", "GET", "--url", url, "--output", "json"]
     if resource:
         cmd += ["--resource", resource]

@@ -1,11 +1,11 @@
 ---
 name: subscription-diagram-check
-description: On-demand Playwright audit of a subscription's rendered React Flow diagrams - verifies the UI matches harvested Azure reality using screenshots, DOM checks, interaction tests, and diagram-to-asset comparison.
+description: On-demand Playwright audit of a subscription's rendered Mermaid diagrams - verifies the UI matches harvested Azure reality using screenshots, DOM checks, interaction tests, and diagram-to-asset comparison.
 ---
 
 Validate the subscription diagrams in the Triage-Saurus web UI following the workflow in `Agents/SubscriptionDiagramAgent.md`.
 
-This skill audits the **actual rendered React Flow diagrams in the browser**, not backend diagram generation. Every check must be validated using Playwright and visual evidence.
+This skill audits the **actual rendered Mermaid diagrams in the browser**, not backend diagram generation. Every check must be validated using Playwright and visual evidence.
 
 ## Prerequisites
 
@@ -35,7 +35,7 @@ If not running:
 
 1. Navigate & Screenshot
 - Load page /subscriptions/{subscription_id}
-- Wait for .react-flow
+- Wait for #ingress-diagram-div
 - Capture ingress, RG (5), assets table
 
 2. Icon Audit

@@ -3797,6 +3797,36 @@ async function loadMermaidView(subscriptionName) {
     const views = ingress?.views || {};
     const preferredMode = ingress?.default_view === "attack_paths" ? "attack_paths" : "connectivity";
     const chosen = views[preferredMode] || views.connectivity || ingress;
+    const nodeMap = chosen?.node_drilldown_map || ingress?.node_drilldown_map || {};
+    const groups = Array.isArray(chosen?.collapsible_target_groups)
+      ? chosen.collapsible_target_groups.map((group) => ({ ...group, target_node_ids: [...(group.target_node_ids || [])] }))
+      : Array.isArray(ingress?.collapsible_target_groups)
+        ? ingress.collapsible_target_groups.map((group) => ({ ...group, target_node_ids: [...(group.target_node_ids || [])] }))
+        : [];
+    const groupByNodeId = new Map(groups.map((group) => [String(group.node_id || ""), group]));
+    const clusterByKey = new Map();
+    for (const [nodeId, node] of Object.entries(nodeMap)) {
+      if (!String(node?.arm_type || "").toLowerCase().includes("managedclusters")) continue;
+      for (const resource of node?.resources || []) {
+        const key = `${String(resource?.rg || "").trim().toLowerCase()}|${String(resource?.name || "").trim().toLowerCase()}`;
+        if (key.endsWith("|")) continue;
+        clusterByKey.set(key, nodeId);
+      }
+    }
+    for (const [nodeId, node] of Object.entries(nodeMap)) {
+      const nodeType = String(node?.arm_type || "").toLowerCase();
+      if (!nodeType.includes("kubernetes ingress") && !nodeType.includes("kubernetes service")) continue;
+      const key = `${String(node?.source_cluster_rg || "").trim().toLowerCase()}|${String(node?.source_cluster_name || "").trim().toLowerCase()}`;
+      const clusterNodeId = clusterByKey.get(key);
+      if (!clusterNodeId) continue;
+      let group = groupByNodeId.get(clusterNodeId);
+      if (!group) {
+        group = { node_id: clusterNodeId, label: node.source_cluster_name || "AKS cluster", target_node_ids: [] };
+        groups.push(group);
+        groupByNodeId.set(clusterNodeId, group);
+      }
+      if (!group.target_node_ids.includes(nodeId)) group.target_node_ids.push(nodeId);
+    }
     return {
       mermaid: chosen?.mermaid || ingress?.mermaid || "",
       css_code: chosen?.css_code || ingress?.css_code || "",
@@ -3805,8 +3835,7 @@ async function loadMermaidView(subscriptionName) {
         chosen?.collapsible_target_node_ids || ingress?.collapsible_target_node_ids || [],
       collapsible_target_count:
         chosen?.collapsible_target_count || ingress?.collapsible_target_count || 0,
-      collapsible_target_groups:
-        chosen?.collapsible_target_groups || ingress?.collapsible_target_groups || [],
+      collapsible_target_groups: groups,
     };
   };
 
@@ -3969,6 +3998,13 @@ document.addEventListener("click", (event) => {
 
 traceClearEl?.addEventListener("click", closeComponentTrace);
 document.getElementById("cloud-arch-trace-close")?.addEventListener("click", closeComponentTrace);
+document.getElementById("modal-close-btn")?.addEventListener("click", closeModal);
+modalOverlay?.addEventListener("click", (event) => {
+  if (event.target === modalOverlay) closeModal();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && modalOverlay && !modalOverlay.hidden) closeModal();
+});
 bindTraceDiagramInteractions();
 bindMermaidRootClickFallback();
 
