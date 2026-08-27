@@ -1167,6 +1167,10 @@
                   <span style="display: inline-block; width: 24px; height: 3px; background: #94a3b8; border-radius: 2px;"></span>
                   <span style="color: var(--text-muted);">Internal data flows (backend → data stores)</span>
                 </span>
+                <span style="display: flex; align-items: center; gap: 6px;">
+                  <span style="display: inline-block; width: 24px; height: 3px; background: #06b6d4; border-radius: 2px;"></span>
+                  <span style="color: var(--text-muted);">Private endpoint connectivity (Private Link)</span>
+                </span>
               </div>
               <div class="cloud-arch-connection-legend__metadata" style="border-top: 1px solid var(--border); padding-top: 8px; font-size: 0.82rem;">
                 <span style="color: var(--text-muted);">🔑 = Managed Identity</span>
@@ -1362,7 +1366,7 @@
   <script type="module">
     // Load Mermaid support if needed
     const config = window.__TRIAGE_CLOUD_ARCH__ || {};
-    await import('/static/js/cloud-architecture-mermaid.js?v=41');
+    await import('/static/js/cloud-architecture-mermaid.js?v=43');
     if (typeof window.__triageCloudArchLoadMermaid === 'function') {
       await window.__triageCloudArchLoadMermaid(config.initialSubscription || '');
       window.__triageCloudArchMermaidInitialLoaded = true;

@@ -1007,6 +1007,7 @@ const ARM_TO_ICON_CLASS = {
   "microsoft.network/azurefirewalls": "azurerm_firewall",
   "microsoft.network/firewallpolicies": "azurerm_firewall_policy",
   "microsoft.network/virtualnetworks": "azurerm_virtual_network",
+  "microsoft.network/privateendpoints": "azurerm_private_endpoint",
   "microsoft.network/networksecuritygroups": "azurerm_network_security_group",
   "microsoft.network/routetables": "azurerm_route_table",
   "microsoft.network/publicipaddresses": "azurerm_public_ip",
@@ -1224,6 +1225,30 @@ function buildMermaidGraph(payload, subscriptionName) {
     return Boolean(collectNodeVnet(node) || collectNodeSubnet(node) || isNetworkAssetNode(node));
   }
 
+  function isProductServiceNode(node) {
+    const data = node?.data || {};
+    const resourceType = String(data.resourceType || data.arm_type || data.type || "").toLowerCase();
+    if (String(data.providerKey || "").toLowerCase() !== "azure" || isNetworkScopedNode(node)) {
+      return false;
+    }
+    return [
+      "appconfiguration/",
+      "cache/redis",
+      "cdn/",
+      "cognitiveservices/",
+      "containerregistry/",
+      "datafactory/",
+      "documentdb/",
+      "eventhub/",
+      "eventgrid/",
+      "keyvault/",
+      "kusto/",
+      "search/",
+      "servicebus/",
+      "storage/storageaccounts",
+    ].some((token) => resourceType.includes(token));
+  }
+
   function isAppGatewayNode(node) {
     const data = node?.data || {};
     const resourceType = String(data.resourceType || data.type || "").toLowerCase();
@@ -1307,13 +1332,20 @@ function buildMermaidGraph(payload, subscriptionName) {
         node?.data?.resourceType || node?.data?.arm_type || node?.data?.type || ""
       );
       const isConnectionEndpointNode =
-        /kubernetes\/ingresses|applicationgatewaylisteners|applicationgateways|apimanagement\/service|container(?:service|registry)\/managedclusters/i.test(
+        /kubernetes\/ingresses|applicationgatewaylisteners|applicationgateways|apimanagement\/service|container(?:service|registry)\/managedclusters|network\/privateendpoints/i.test(
           resourceType
         );
       if (node?.hidden && !isVmssNode && !isConnectionEndpointNode) return false;
       const parentId = node?.data?.parentNodeId ? String(node.data.parentNodeId) : "";
       if (!parentId) return true;
       const parent = hierarchy.nodeById.get(parentId);
+      if (
+        /network\/privateendpoints/i.test(resourceType) &&
+        parent &&
+        isSubnetNode(parent)
+      ) {
+        return false;
+      }
       return (
         !parent ||
         parent?.hidden ||
@@ -1323,9 +1355,12 @@ function buildMermaidGraph(payload, subscriptionName) {
 
     const networkRootNodes = [];
     const otherRootNodes = [];
+    const productServiceNodes = [];
     for (const node of rootNodes) {
       if (isNetworkScopedNode(node)) {
         networkRootNodes.push(node);
+      } else if (isProductServiceNode(node)) {
+        productServiceNodes.push(node);
       } else {
         otherRootNodes.push(node);
       }
@@ -1333,6 +1368,27 @@ function buildMermaidGraph(payload, subscriptionName) {
 
     for (const node of otherRootNodes) {
       renderNode(node, "    ");
+    }
+
+    if (productServiceNodes.length) {
+      const productGroupId = `${groupId}_product_services`;
+      const publicGroupId = `${productGroupId}_public`;
+      const privateGroupId = `${productGroupId}_private`;
+      lines.push(`    subgraph ${productGroupId}["Product Services"]`);
+      lines.push(`      subgraph ${publicGroupId}["Public endpoint services"]`);
+      for (const node of productServiceNodes.filter((candidate) => candidate?.data?.public !== false)) {
+        renderNode(node, "        ");
+      }
+      lines.push("      end");
+      lines.push(`      subgraph ${privateGroupId}["Private endpoint services"]`);
+      for (const node of productServiceNodes.filter((candidate) => candidate?.data?.public === false)) {
+        renderNode(node, "        ");
+      }
+      lines.push("      end");
+      lines.push("    end");
+      subgraphStyleAssignments.push(`  style ${productGroupId} stroke:#06b6d4,stroke-width:2px,fill:none;`);
+      subgraphStyleAssignments.push(`  style ${publicGroupId} stroke:#f59e0b,stroke-width:1px,fill:none;`);
+      subgraphStyleAssignments.push(`  style ${privateGroupId} stroke:#06b6d4,stroke-width:1px,fill:none;`);
     }
 
     if (networkRootNodes.length) {
@@ -1421,16 +1477,50 @@ function buildMermaidGraph(payload, subscriptionName) {
   }
 
   const seenEdges = new Set();
+  const edgeStyleAssignments = [];
+  let mermaidEdgeIndex = 0;
+  const appendEdge = (sourceId, targetId, label, style = null) => {
+    const edgeLabel = label ? `|${escapeMermaidText(label)}|` : "";
+    const edgeKey = `${sourceId}->${targetId}->${edgeLabel}`;
+    if (seenEdges.has(edgeKey)) return;
+    seenEdges.add(edgeKey);
+    lines.push(`  ${sourceId} -->${edgeLabel} ${targetId}`);
+    const stroke = String(style?.stroke || "").trim();
+    if (stroke) {
+      const width = Number(style?.strokeWidth || 2);
+      const dasharray = String(style?.strokeDasharray || "").trim().replace(/,/g, " ");
+      edgeStyleAssignments.push(
+        `  linkStyle ${mermaidEdgeIndex} stroke:${stroke},stroke-width:${width}px${dasharray ? `,stroke-dasharray:${dasharray}` : ""};`
+      );
+    }
+    mermaidEdgeIndex += 1;
+  };
+
+  for (const node of nodes) {
+    const resourceType = String(node?.data?.resourceType || node?.data?.arm_type || node?.data?.type || "").toLowerCase();
+    if (!resourceType.includes("virtualmachinescalesets")) continue;
+    const sourceId = nodeIdMap.get(String(node?.data?.parentNodeId || ""));
+    const targetId = nodeIdMap.get(String(node?.id || ""));
+    if (sourceId && targetId) {
+      appendEdge(sourceId, targetId, "AKS node pool", { stroke: "#94a3b8", strokeWidth: 1 });
+    }
+  }
+
   for (const edge of edges) {
     const sourceId = nodeIdMap.get(String(edge?.source));
     const targetId = nodeIdMap.get(String(edge?.target));
     if (!sourceId || !targetId) continue;
     const rawLabel = String(edge?.label || "").trim();
-    const label = rawLabel ? `|${escapeMermaidText(rawLabel)}|` : "";
-    const edgeKey = `${sourceId}->${targetId}->${label}`;
-    if (seenEdges.has(edgeKey)) continue;
-    seenEdges.add(edgeKey);
-    lines.push(`  ${sourceId} -->${label} ${targetId}`);
+    const edgeStyle = edge?.style ? { ...edge.style } : null;
+    if (edgeStyle && String(edgeStyle.stroke || "").toLowerCase() === "#38bdf8") {
+      edgeStyle.stroke = "#06b6d4";
+    }
+    appendEdge(sourceId, targetId, rawLabel, edgeStyle);
+  }
+
+  if (edgeStyleAssignments.length) {
+    lines.push("");
+    lines.push(...edgeStyleAssignments);
   }
 
   return lines.join("\n");

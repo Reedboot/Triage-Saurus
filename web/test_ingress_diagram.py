@@ -236,6 +236,90 @@ def test_aks_node_resource_group_load_balancer_routes_to_service():
     ), mermaid
 
 
+def test_aks_vmss_ownership_and_private_link_are_rendered():
+    cluster_rg = "rg-aks"
+    node_rg = "rg-aks-nodes"
+    cluster_name = "aks-external"
+    vmss_name = "aks-system-vmss"
+    redis_name = "redis-prod"
+    redis_rg = "rg-data"
+    endpoint_name = "redis-private-endpoint"
+    rows = [
+        (
+            cluster_name,
+            "microsoft.containerservice/managedclusters",
+            cluster_rg,
+            "",
+            False,
+            "",
+            f"/subscriptions/000/resourceGroups/{cluster_rg}/providers/Microsoft.ContainerService/managedClusters/{cluster_name}",
+            False,
+            None,
+            False,
+            None,
+            None,
+            json.dumps({"properties": {"nodeResourceGroup": node_rg}}),
+            None,
+            None,
+        ),
+        (
+            vmss_name,
+            "microsoft.compute/virtualmachinescalesets",
+            node_rg,
+            "",
+            False,
+            "",
+            f"/subscriptions/000/resourceGroups/{node_rg}/providers/Microsoft.Compute/virtualMachineScaleSets/{vmss_name}",
+            False,
+            None,
+            False,
+            None,
+            None,
+            json.dumps({"tags": {"aks-managed-poolName": "system"}}),
+            None,
+            None,
+        ),
+        (
+            redis_name,
+            "microsoft.cache/redis",
+            redis_rg,
+            "",
+            False,
+            "",
+            f"/subscriptions/000/resourceGroups/{redis_rg}/providers/Microsoft.Cache/Redis/{redis_name}",
+            False,
+            None,
+            False,
+            None,
+            None,
+            json.dumps(
+                {
+                    "properties": {
+                        "privateEndpointConnections": [
+                            {
+                                "id": f"/subscriptions/000/resourceGroups/{redis_rg}/providers/Microsoft.Network/privateEndpoints/{endpoint_name}",
+                                "name": endpoint_name,
+                            }
+                        ]
+                    }
+                }
+            ),
+            None,
+            None,
+        ),
+    ]
+
+    mermaid = _build_ingress_diagram(rows)["mermaid"]
+
+    cluster_node = _sanitise_node_id(f"{cluster_rg}_{cluster_name}")
+    vmss_node = _sanitise_node_id(f"{node_rg}_{vmss_name}")
+    endpoint_node = _sanitise_node_id(f"{redis_rg}_{endpoint_name}")
+    redis_node = _sanitise_node_id(f"{redis_rg}_{redis_name}")
+    assert f'{cluster_node} -->|"system node pool"| {vmss_node}' in mermaid
+    assert f'{endpoint_node} -->|"redis-private-endpoint"| {redis_node}' in mermaid
+    assert '#38bdf8' in mermaid
+
+
 def test_service_fabric_management_load_balancer_routes_to_each_sf_load_balancer():
     rg = "rg-sf"
     rows = [
@@ -410,6 +494,64 @@ def test_subnet_subgraph_contains_network_resources():
     assert 'style sub_' in mermaid
     assert 'stroke:#94a3b8' in mermaid
     assert mermaid.index('Subnet: app') < mermaid.index('app-vmss-01')
+
+
+def test_duplicate_network_placement_does_not_create_empty_vnet_subgraph():
+    rows = [
+        (
+            "worker",
+            "microsoft.compute/virtualmachinescalesets",
+            "rg-worker",
+            "",
+            False,
+            "",
+            1,
+            False,
+            None,
+            False,
+            None,
+            None,
+            json.dumps(
+                {
+                    "_extra": {
+                        "subnet_id": "/subscriptions/000/resourceGroups/rg-network/providers/Microsoft.Network/virtualNetworks/prodgreen/subnets/app",
+                        "vnet_resource_group": "rg-network",
+                    }
+                }
+            ),
+            None,
+            None,
+        ),
+        (
+            "worker",
+            "microsoft.compute/virtualmachinescalesets",
+            "rg-worker",
+            "",
+            False,
+            "",
+            1,
+            False,
+            None,
+            False,
+            None,
+            None,
+            json.dumps(
+                {
+                    "_extra": {
+                        "subnet_id": "/subscriptions/000/resourceGroups/rg-other/providers/Microsoft.Network/virtualNetworks/prodgreen/subnets/app",
+                        "vnet_resource_group": "rg-other",
+                    }
+                }
+            ),
+            None,
+            None,
+        ),
+    ]
+
+    mermaid = _build_ingress_diagram(rows)["mermaid"]
+
+    assert mermaid.count('["Network: prodgreen"]') == 1
+    assert 'subgraph sub_rg_other__prodgreen__' not in mermaid
 
 
 def test_restricted_assets_are_not_classified_as_public():
