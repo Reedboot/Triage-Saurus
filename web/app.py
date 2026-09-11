@@ -18171,6 +18171,7 @@ def api_cloud_resource_details():
             },
             "network": {
                 "private_endpoints": _extract_private_endpoints(raw_json),
+                "private_endpoint_connections": _extract_private_endpoint_connections(raw_json, conn),
                 "managed_private_endpoints": _extract_managed_private_endpoints(raw_json),
                 "vnet": associated_vnet,
                 "subnet": associated_subnet,
@@ -18874,12 +18875,54 @@ def _extract_private_endpoints(raw_json: dict) -> list[str]:
     if not isinstance(raw_json, dict):
         return []
     props = raw_json.get("properties")
-    if not isinstance(props, dict):
-        return []
-    pe_connections = props.get("privateEndpointConnections")
+    pe_connections = raw_json.get("privateEndpointConnections")
+    if not isinstance(pe_connections, list) and isinstance(props, dict):
+        pe_connections = props.get("privateEndpointConnections")
     if not isinstance(pe_connections, list):
         return []
     return [pe.get("name") or pe.get("id") for pe in pe_connections if isinstance(pe, dict)]
+
+
+def _extract_private_endpoint_connections(raw_json: dict, conn) -> list[dict]:
+    """Return private endpoint connection details for a PaaS resource."""
+    if not isinstance(raw_json, dict):
+        return []
+    props = raw_json.get("properties")
+    connections = raw_json.get("privateEndpointConnections")
+    if not isinstance(connections, list) and isinstance(props, dict):
+        connections = props.get("privateEndpointConnections")
+    if not isinstance(connections, list):
+        return []
+
+    results: list[dict] = []
+    for connection in connections:
+        if not isinstance(connection, dict):
+            continue
+        connection_props = connection.get("properties")
+        if not isinstance(connection_props, dict):
+            connection_props = {}
+        endpoint = connection_props.get("privateEndpoint")
+        endpoint_id = str(endpoint.get("id") or "").strip() if isinstance(endpoint, dict) else ""
+        resolved = _resolve_private_endpoint_network(conn, endpoint_id)
+        state = connection_props.get("privateLinkServiceConnectionState")
+        state = state if isinstance(state, dict) else {}
+        results.append({
+            "name": connection.get("name") or endpoint_id or "Private endpoint",
+            "id": endpoint_id or None,
+            "resource_group": (
+                endpoint.get("resourceGroup")
+                if isinstance(endpoint, dict) else None
+            ) or resolved.get("resource_group"),
+            "subscription_id": resolved.get("subscription_id"),
+            "vnet": resolved.get("vnet_name"),
+            "subnet": resolved.get("subnet_name"),
+            "subnet_id": resolved.get("subnet_id"),
+            "group_ids": connection_props.get("groupIds") or [],
+            "status": state.get("status"),
+            "description": state.get("description"),
+            "harvested": bool(resolved.get("harvested")),
+        })
+    return results
 
 
 def _extract_managed_private_endpoints(raw_json: dict) -> list[dict]:
