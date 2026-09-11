@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import sqlite3
+import time
 from urllib.parse import urlencode
 from pathlib import Path
 
@@ -21,6 +22,7 @@ def precompute_subscription_diagram(
     from web.app import api_subscription_diagram, app
     from web.core.db import configure_db_path
 
+    started = time.perf_counter()
     configure_db_path(Path(db_path))
     with app.test_request_context(f"/api/subscriptions/{sub_id}/diagram"):
         response = api_subscription_diagram(sub_id)
@@ -32,6 +34,11 @@ def precompute_subscription_diagram(
         raise RuntimeError(
             f"diagram endpoint returned HTTP {response.status_code}: {detail}"
         )
+    print(
+        f"  [Mermaid Diagram] subscription payload generated in "
+        f"{time.perf_counter() - started:.2f}s",
+        flush=True,
+    )
     if warm_traces:
         precompute_subscription_traces(db_path, sub_id)
 
@@ -41,6 +48,7 @@ def precompute_cloud_architecture(db_path: Path | str, sub_id: str) -> None:
     from web.app import api_cloud_architecture, app
     from web.core.db import configure_db_path
 
+    started = time.perf_counter()
     configure_db_path(Path(db_path))
     with app.test_request_context(f"/api/cloud/architecture?sub={sub_id}&view=mermaid"):
         response = api_cloud_architecture()
@@ -52,6 +60,11 @@ def precompute_cloud_architecture(db_path: Path | str, sub_id: str) -> None:
         raise RuntimeError(
             f"cloud architecture endpoint returned HTTP {response.status_code}: {detail}"
         )
+    print(
+        f"  [Mermaid Diagram] cloud architecture payload generated in "
+        f"{time.perf_counter() - started:.2f}s",
+        flush=True,
+    )
 
 
 def precompute_subscription_traces(db_path: Path | str, sub_id: str) -> None:

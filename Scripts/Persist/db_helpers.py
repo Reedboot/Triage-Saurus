@@ -598,6 +598,8 @@ _BASE_TABLES_SQL = """
         ON provisioned_assets(type);
     CREATE INDEX IF NOT EXISTS idx_provisioned_assets_fqdn
         ON provisioned_assets(fqdn);
+    CREATE INDEX IF NOT EXISTS idx_provisioned_assets_subscription_order
+        ON provisioned_assets(subscription_id, resource_group, type, name);
 
     -- Scripted Azure harvest coverage and evidence gaps.
     CREATE TABLE IF NOT EXISTS azure_harvest_coverage (
