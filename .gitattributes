@@ -1,2 +1,6 @@
 # Ensure shell scripts use LF line endings in the repository
 *.sh text eol=lf
+
+# Python files must use WSL-compatible LF line endings; executable scripts may
+# use a portable #!/usr/bin/env python3 shebang.
+*.py text eol=lf

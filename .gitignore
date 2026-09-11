@@ -2,6 +2,7 @@
 Intake/
 
 Output/Audit/*
+Output/Logs/*
 Output/Findings/*
 Output/Findings/Cloud/*
 Output/Findings/Code/*
