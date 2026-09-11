@@ -470,6 +470,8 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
     public_ip_assets_by_name_rg: dict[tuple[str, str], list[dict]] = {}
     for row in rows:
         name, rtype, rg, fqdn, is_public, sku = row[:6]
+        if "/slots" in str(rtype or "").lower():
+            continue
         asset_id = row[6] if len(row) > 6 else None
         has_waf = bool(row[7]) if len(row) > 7 else False
         listeners = row[8] if len(row) > 8 else None
@@ -521,6 +523,12 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
                 asset["platform_managed"] = True
                 asset["compute_scope"] = str(extra.get("compute_scope") or "managed")
                 asset["managed_service"] = str(extra.get("managed_service") or "").strip()
+            if isinstance(extra, dict) and isinstance(extra.get("managed_private_endpoints"), list):
+                asset["managed_private_endpoints"] = [
+                    endpoint
+                    for endpoint in extra["managed_private_endpoints"]
+                    if isinstance(endpoint, dict)
+                ]
         if isinstance(parsed_raw, dict) and (
             "apim backend target" in str(rtype or "").lower()
             or "apimbackendtarget" in str(rtype or "").lower()
@@ -873,6 +881,56 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
             if name_key:
                 public_ip_assets_by_name_rg.setdefault((rg_key, name_key), []).append(asset)
         assets.append(asset)
+
+    # Data Factory managed-VNet private endpoints are represented in the
+    # factory's harvested metadata rather than as Microsoft.Network resources.
+    # Materialize them so the diagram shows the factory's private-link path.
+    managed_private_endpoint_keys: set[str] = set()
+    for factory in list(assets):
+        if "datafactory/factories" not in (factory.get("arm_type") or "").lower():
+            continue
+        factory_id = str(factory.get("id") or "").strip()
+        factory_name = str(factory.get("name") or "").strip()
+        for endpoint in factory.get("managed_private_endpoints") or []:
+            endpoint_name = str(endpoint.get("name") or "").strip()
+            if not endpoint_name:
+                continue
+            endpoint_id = str(
+                endpoint.get("endpoint_resource_id")
+                or endpoint.get("id")
+                or f"{factory_id}/managedPrivateEndpoints/{endpoint_name}"
+            ).strip()
+            endpoint_key = endpoint_id.lower()
+            if endpoint_key in managed_private_endpoint_keys:
+                continue
+            managed_private_endpoint_keys.add(endpoint_key)
+            assets.append({
+                "name": f"{factory_name}::{endpoint_name}",
+                "arm_type": "Microsoft.Network/privateEndpoints",
+                "rg": factory.get("rg") or "default",
+                "fqdn": "",
+                "public": False,
+                "sku": None,
+                "id": endpoint_id,
+                "has_waf": False,
+                "waf_mode": None,
+                "listeners": None,
+                "routing_targets": None,
+                "is_restricted": False,
+                "tier": "network",
+                "friendly_type": friendly_type("Microsoft.Network/privateEndpoints"),
+                "short_name": endpoint_name,
+                "resources": [
+                    {"rg": factory.get("rg") or "default", "name": endpoint_name},
+                ],
+                "auth_methods": [],
+                "_managed_private_endpoint": True,
+                "_managed_private_endpoint_factory_id": factory_id,
+                "_managed_private_endpoint_target_id": str(
+                    endpoint.get("target_resource_id") or ""
+                ).strip(),
+                "_managed_private_endpoint_status": endpoint.get("connection_state"),
+            })
 
     def _is_apim_public_ip_asset(asset: dict) -> bool:
         type_key = (asset.get("arm_type") or "").lower()
@@ -1874,7 +1932,7 @@ def build_subscription_diagrams_by_rg(
         rg_assets = subscription_apply_plan_hierarchy(
             rg_assets,
             plan_links,
-            hide_hosted_sites=True,
+            hide_hosted_sites=False,
         )
         diagram_assets = [
             asset for asset in rg_assets
@@ -2070,6 +2128,37 @@ def build_subscription_diagrams_by_rg(
                 edge["dasharray"] = dasharray
             edges.append(edge)
 
+        # Data Factory managed-VNet endpoints are synthetic diagram nodes:
+        # the factory owns the endpoint, which then reaches its private-link
+        # target when that target is visible in this resource-group view.
+        for endpoint in visible_rg_assets:
+            if not endpoint.get("_managed_private_endpoint"):
+                continue
+            factory = asset_by_id.get(
+                str(endpoint.get("_managed_private_endpoint_factory_id") or "").lower()
+            )
+            if not factory:
+                continue
+            factory_nid = subscription_node_id(factory, sanitise_node_id)
+            endpoint_nid = subscription_node_id(endpoint, sanitise_node_id)
+            add_edge(
+                factory_nid,
+                endpoint_nid,
+                "managed private endpoint",
+                "#38bdf8",
+                dasharray="4,2",
+            )
+            target_id = str(endpoint.get("_managed_private_endpoint_target_id") or "").lower()
+            target = asset_by_id.get(target_id)
+            if target:
+                add_edge(
+                    endpoint_nid,
+                    subscription_node_id(target, sanitise_node_id),
+                    "private link",
+                    "#38bdf8",
+                    dasharray="4,2",
+                )
+
         # Explicit ARM parent links keep AI Foundry projects/deployments and
         # other child resources attached to the service that owns them.
         for asset in visible_rg_assets:
@@ -2214,6 +2303,28 @@ def build_subscription_diagrams_by_rg(
                         "#94a3b8",
                         dasharray="4,2",
                     )
+            assets_by_key = {
+                (
+                    (asset.get("rg") or "").strip().lower(),
+                    (asset.get("name") or "").strip().lower(),
+                ): asset
+                for asset in visible_rg_assets
+            }
+            for site_rg, site_name, plan_rg, plan_name in plan_links:
+                site = assets_by_key.get(
+                    (str(site_rg or "").strip().lower(), str(site_name or "").strip().lower())
+                )
+                plan = plan_by_key.get(
+                    (str(plan_rg or "").strip().lower(), str(plan_name or "").strip().lower())
+                )
+                if site and plan:
+                    add_edge(
+                        subscription_node_id(site, sanitise_node_id),
+                        subscription_node_id(plan, sanitise_node_id),
+                        "hosted on",
+                        "#94a3b8",
+                        dasharray="4,2",
+                    )
 
         for asset in visible_rg_assets:
             subnet_id = str(asset.get("subnet_id") or "").lower()
@@ -2252,8 +2363,8 @@ def build_subscription_diagrams_by_rg(
                 if vmss_nid not in seen_nodes:
                     continue
                 add_edge(
-                    vmss_nid,
                     cluster_nid,
+                    vmss_nid,
                     "contains",
                     "#64748b",
                     dasharray="6,3",

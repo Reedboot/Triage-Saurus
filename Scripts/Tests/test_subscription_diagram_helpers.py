@@ -788,8 +788,8 @@ def test_servicefabric_load_balancer_links_to_vmss_node_type():
     )
 
     mermaid = next(d["views"]["connectivity"]["mermaid"] for d in diagrams if d["rg"] == "rg-sf")
-    assert "rg_sf_FPS -->|\"Load balancing\"| rg_sf_fpsz1" in mermaid
-    assert "rg_sf_FPS -->|\"Load balancing\"| rg_sf_fpsz2" in mermaid
+    assert "rg_sf_stock -->|\"Load balancing\"| rg_sf_fpsz1" in mermaid
+    assert "rg_sf_stock -->|\"Load balancing\"| rg_sf_fpsz2" in mermaid
 
 
 def test_collapses_apim_public_ip_into_apim_asset():

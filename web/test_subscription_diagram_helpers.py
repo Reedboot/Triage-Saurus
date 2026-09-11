@@ -30,6 +30,67 @@ def test_subscription_asset_tier_keeps_monitoring_noise_hidden():
     assert subscription_asset_tier("Microsoft.Insights/activityLogAlerts") == "other"
 
 
+def test_data_factory_managed_private_endpoint_is_rendered_as_a_connection():
+    factory_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.DataFactory/factories/factory-one"
+    endpoint_id = f"{factory_id}/managedVirtualNetworks/default/managedPrivateEndpoints/storage-pe"
+    storage_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/dataone"
+    rows = [
+        (
+            "factory-one",
+            "Microsoft.DataFactory/factories",
+            "rg-data",
+            "factory-one.datafactory.azure.net",
+            0,
+            None,
+            factory_id,
+            0,
+            None,
+            0,
+            None,
+            None,
+            '{"_extra":{"managed_private_endpoints":[{"name":"storage-pe","endpoint_resource_id":"%s","target_resource_id":"%s","connection_state":"Approved"}]}}'
+            % (endpoint_id, storage_id),
+            None,
+            None,
+        ),
+        (
+            "dataone",
+            "Microsoft.Storage/storageAccounts",
+            "rg-data",
+            "dataone.blob.core.windows.net",
+            0,
+            None,
+            storage_id,
+            0,
+            None,
+            0,
+            None,
+            None,
+            "{}",
+            None,
+            None,
+        ),
+    ]
+
+    diagrams = build_subscription_diagrams_by_rg(
+        "Test Subscription",
+        "production",
+        rows,
+        sanitise_node_id=lambda value: value.replace("-", "_").replace("/", "_").replace(".", "_"),
+        friendly_type=lambda arm_type: arm_type.split("/")[-1],
+        get_icon_path=lambda arm_type: f"/icons/{arm_type}",
+        normalize_attack_paths=lambda raw_paths, reviewer=None: raw_paths,
+    )
+
+    mermaid = diagrams[0]["views"]["connectivity"]["mermaid"]
+    factory_nid = subscription_node_id({"name": "factory-one", "rg": "rg-data"}, lambda value: value.replace("-", "_"))
+    endpoint_nid = subscription_node_id({"name": "factory-one::storage-pe", "rg": "rg-data"}, lambda value: value.replace("-", "_"))
+    storage_nid = subscription_node_id({"name": "dataone", "rg": "rg-data"}, lambda value: value.replace("-", "_"))
+
+    assert f'{factory_nid} -->|"managed private endpoint"| {endpoint_nid}' in mermaid
+    assert f'{endpoint_nid} -->|"private link"| {storage_nid}' in mermaid
+
+
 def test_subscription_assets_exclude_deployment_slots_from_diagram_nodes():
     rows = [
         (

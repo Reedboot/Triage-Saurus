@@ -123,7 +123,7 @@ def _harvest_managed_private_endpoints(
                 "managed_virtual_network": managed_vnet_name,
                 "group_id": endpoint_props.get("groupId"),
                 "target_resource_id": endpoint_props.get("privateLinkResourceId"),
-                "endpoint_resource_id": endpoint_props.get("resourceId"),
+                "endpoint_resource_id": endpoint_props.get("resourceId") or endpoint.get("id"),
                 "connection_state": state.get("status"),
                 "connection_actions_required": state.get("actionsRequired"),
                 "provisioning_state": endpoint_props.get("provisioningState"),
