@@ -28,6 +28,7 @@ import json
 import sqlite3
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "Scripts" / "Persist"))
 
 from db_helpers import _ensure_schema  # type: ignore
+
+_PRIVATE_DNS_WORKERS = 6
 
 # ---------------------------------------------------------------------------
 # Schema
@@ -130,6 +133,19 @@ def list_vnet_links(zone_name: str, rg: str, subscription_id: str) -> list[dict]
         "--zone-name", zone_name, "-g", rg,
         subscription_id=subscription_id,
     ) or []
+
+
+def _collect_zone_data(
+    zone: dict,
+    subscription_id: str,
+) -> tuple[list[dict], list[dict]]:
+    """Collect a zone's independent Azure payloads without touching SQLite."""
+    zone_name = zone["name"]
+    resource_group = zone["resourceGroup"]
+    return (
+        list_records(zone_name, resource_group, subscription_id),
+        list_vnet_links(zone_name, resource_group, subscription_id),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +245,8 @@ def process_zone(
     apim_backend_fqdns: set[str],
     dry_run: bool,
     now: str,
+    records_raw: list[dict] | None = None,
+    links_raw: list[dict] | None = None,
 ) -> dict:
     zone_name = zone["name"]
     rg        = zone["resourceGroup"]
@@ -236,7 +254,8 @@ def process_zone(
     zone_type = _classify_zone(zone_name)
 
     # --- Records ---
-    records_raw = list_records(zone_name, rg, subscription_id)
+    if records_raw is None:
+        records_raw = list_records(zone_name, rg, subscription_id)
     records = [r for raw in records_raw if (r := _extract_records(raw, zone_name))]
 
     a_records     = [r for r in records if r["record_type"] == "A"]
@@ -244,7 +263,8 @@ def process_zone(
     externaldns   = any(r["managed_by"] == "externaldns" for r in records)
 
     # --- VNet links ---
-    links_raw = list_vnet_links(zone_name, rg, subscription_id)
+    if links_raw is None:
+        links_raw = list_vnet_links(zone_name, rg, subscription_id)
 
     stats = {
         "record_count": len(records),
@@ -484,9 +504,18 @@ def harvest_private_dns(
         # Table may not exist yet in older DBs or partial schema states.
         pass
 
+    zone_payloads: list[tuple[list[dict], list[dict]]] = []
+    if len(zones) > 1:
+        with ThreadPoolExecutor(max_workers=min(_PRIVATE_DNS_WORKERS, len(zones))) as pool:
+            futures = [pool.submit(_collect_zone_data, zone, subscription_id) for zone in zones]
+            for future in futures:
+                zone_payloads.append(future.result())
+    else:
+        zone_payloads = [_collect_zone_data(zones[0], subscription_id)]
+
     total_records = 0
     zone_types: dict[str, int] = {}
-    for zone in zones:
+    for zone, (records_raw, links_raw) in zip(zones, zone_payloads):
         zone_type = _classify_zone(zone["name"])
         zone_types[zone_type] = zone_types.get(zone_type, 0) + 1
         stats = process_zone(
@@ -497,6 +526,8 @@ def harvest_private_dns(
             apim_backend_fqdns=apim_backend_fqdns,
             dry_run=dry_run,
             now=now,
+            records_raw=records_raw,
+            links_raw=links_raw,
         )
         total_records += int(stats.get("record_count", 0))
 
@@ -586,9 +617,18 @@ def main() -> None:
         except Exception:
             pass
 
+        zone_payloads: list[tuple[list[dict], list[dict]]] = []
+        if len(zones) > 1:
+            with ThreadPoolExecutor(max_workers=min(_PRIVATE_DNS_WORKERS, len(zones))) as pool:
+                futures = [pool.submit(_collect_zone_data, zone, sub_id) for zone in zones]
+                for future in futures:
+                    zone_payloads.append(future.result())
+        else:
+            zone_payloads = [_collect_zone_data(zones[0], sub_id)]
+
         total_records = 0
         zone_types: dict[str, int] = {}
-        for zone in zones:
+        for zone, (records_raw, links_raw) in zip(zones, zone_payloads):
             zone_name = zone["name"]
             zone_type = _classify_zone(zone_name)
             zone_types[zone_type] = zone_types.get(zone_type, 0) + 1
@@ -600,6 +640,8 @@ def main() -> None:
                 apim_backend_fqdns=apim_backend_fqdns,
                 dry_run=args.dry_run,
                 now=now,
+                records_raw=records_raw,
+                links_raw=links_raw,
             )
             total_records += stats["record_count"]
             if stats["record_count"] > 1:  # skip near-empty zones

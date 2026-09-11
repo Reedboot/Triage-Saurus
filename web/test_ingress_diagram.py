@@ -205,12 +205,12 @@ def test_aks_node_resource_group_load_balancer_routes_to_service():
     route_rows = [
         (
             cluster_name,
-            "prodyellow-ford",
+            "prod-network-2-ford",
             "car-ingress",
             "car.example.test",
             "/*",
             "private",
-            "car-ford-image-cb-prdgreen-service",
+            "car-ford-image-cb-prod-network-1-service",
             4000,
             "car-ford-image",
             None,
@@ -222,7 +222,7 @@ def test_aks_node_resource_group_load_balancer_routes_to_service():
     mermaid = _build_ingress_diagram(rows, aks_route_rows=route_rows)["mermaid"]
     lb_node = _sanitise_node_id(f"{lb_rg}_kubernetes-internal")
     service_node = _sanitise_node_id(
-        f"{cluster_rg}_aks_service_{cluster_name}_prodyellow-ford_car-ford-image-cb-prdgreen-service_4000"
+        f"{cluster_rg}_aks_service_{cluster_name}_prod-network-2-ford_car-ford-image-cb-prod-network-1-service_4000"
     )
     assert any(
         line.startswith(f"    {lb_node} --> ")
@@ -514,7 +514,7 @@ def test_duplicate_network_placement_does_not_create_empty_vnet_subgraph():
             json.dumps(
                 {
                     "_extra": {
-                        "subnet_id": "/subscriptions/000/resourceGroups/rg-network/providers/Microsoft.Network/virtualNetworks/prodgreen/subnets/app",
+                        "subnet_id": "/subscriptions/000/resourceGroups/rg-network/providers/Microsoft.Network/virtualNetworks/prod-network-1/subnets/app",
                         "vnet_resource_group": "rg-network",
                     }
                 }
@@ -538,7 +538,7 @@ def test_duplicate_network_placement_does_not_create_empty_vnet_subgraph():
             json.dumps(
                 {
                     "_extra": {
-                        "subnet_id": "/subscriptions/000/resourceGroups/rg-other/providers/Microsoft.Network/virtualNetworks/prodgreen/subnets/app",
+                        "subnet_id": "/subscriptions/000/resourceGroups/rg-other/providers/Microsoft.Network/virtualNetworks/prod-network-1/subnets/app",
                         "vnet_resource_group": "rg-other",
                     }
                 }
@@ -550,8 +550,8 @@ def test_duplicate_network_placement_does_not_create_empty_vnet_subgraph():
 
     mermaid = _build_ingress_diagram(rows)["mermaid"]
 
-    assert mermaid.count('["Network: prodgreen"]') == 1
-    assert 'subgraph sub_rg_other__prodgreen__' not in mermaid
+    assert mermaid.count('["Network: prod-network-1"]') == 1
+    assert 'subgraph sub_rg_other__prod_network_1__' not in mermaid
 
 
 def test_restricted_assets_are_not_classified_as_public():

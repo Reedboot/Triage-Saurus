@@ -6,6 +6,7 @@ import sqlite3
 import subprocess
 import time
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 
@@ -14,6 +15,7 @@ from ._helpers import az, build_endpoints, fetch_ase_ilb_map, infer_fqdn, infer_
 RESOURCE_TYPE = "Microsoft.Web/sites"  # function apps share the same ARM type
 
 _DEFAULT_ALLOW_ALL_PRIORITY = 65000
+_FUNCTION_TRIGGER_WORKERS = 6
 
 
 def harvest(subscription_id: str) -> list[dict[str, Any]]:
@@ -420,16 +422,47 @@ def harvest_http_triggers(
     total = 0
     servicebus_total = 0
 
+    app_jobs: list[tuple[dict[str, Any], str, str, str]] = []
     for app in apps:
         function_app_id = safe_str(app.get("id"))
         function_app_name = safe_str(app.get("name"))
         resource_group = safe_str(app.get("resourceGroup"))
         if not function_app_id or not function_app_name or not resource_group:
             continue
+        app_jobs.append((app, function_app_id, function_app_name, resource_group))
 
+    # Function metadata collection is read-only and independent per app. Keep
+    # all SQLite work below this phase on the caller's connection and in the
+    # original app order so deletes/upserts retain their existing semantics.
+    function_results: list[list[dict[str, Any]] | Exception] = []
+    if len(app_jobs) > 1:
+        with ThreadPoolExecutor(max_workers=min(_FUNCTION_TRIGGER_WORKERS, len(app_jobs))) as pool:
+            futures = [
+                pool.submit(_az_list_functions, app_name, resource_group, subscription_id)
+                for _, _, app_name, resource_group in app_jobs
+            ]
+            for future in futures:
+                try:
+                    function_results.append(future.result())
+                except Exception as exc:
+                    function_results.append(exc)
+    else:
+        for _, _, app_name, resource_group in app_jobs:
+            try:
+                function_results.append(
+                    _az_list_functions(app_name, resource_group, subscription_id)
+                )
+            except Exception as exc:
+                function_results.append(exc)
+
+    for (app, function_app_id, function_app_name, resource_group), functions_result in zip(
+        app_jobs, function_results
+    ):
         print(f"    [function-triggers] {function_app_name}...", end=" ", flush=True)
         try:
-            functions = _az_list_functions(function_app_name, resource_group, subscription_id)
+            if isinstance(functions_result, Exception):
+                raise functions_result
+            functions = functions_result
             triggers = _extract_http_triggers(functions)
             servicebus_triggers = _extract_servicebus_triggers(functions)
             trigger_auth_methods = _derive_trigger_auth_methods(triggers)

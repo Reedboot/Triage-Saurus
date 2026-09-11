@@ -37,6 +37,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from db_helpers import _ensure_schema  # type: ignore
 
+_APIM_FETCH_WORKERS = 8
+
 # ---------------------------------------------------------------------------
 # Schema extension — apim_api_routes table
 # ---------------------------------------------------------------------------
@@ -233,10 +235,15 @@ def process_apim(
 
     print(f"\n  [apim] {apim_name} (rg={resource_group})")
 
-    # --- Backends ---
+    # Backends and APIs are independent read-only collection calls. Fetch them
+    # together, then keep all SQLite work below serialized on this connection.
     backends_started = time.perf_counter()
-    print(f"    fetching backends...", end=" ", flush=True)
-    backends_raw = list_backends(apim_name, resource_group, subscription_id)
+    print(f"    fetching backends and APIs...", end=" ", flush=True)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        backends_future = pool.submit(list_backends, apim_name, resource_group, subscription_id)
+        apis_future = pool.submit(list_apis, apim_name, resource_group, subscription_id)
+        backends_raw = backends_future.result()
+        apis_raw = apis_future.result()
     # Build lookup: backend name → URL
     backend_map: dict[str, str] = {}
     for b in backends_raw:
@@ -244,7 +251,10 @@ def process_apim(
         b_url = b.get("url") or ""
         if b_url:
             backend_map[b_name] = b_url
-    print(f"{len(backends_raw)} backends in {time.perf_counter() - backends_started:.2f}s")
+    print(
+        f"{len(backends_raw)} backends and {len(apis_raw)} APIs in "
+        f"{time.perf_counter() - backends_started:.2f}s"
+    )
 
     # Persist full backend details
     if not dry_run:
@@ -281,12 +291,6 @@ def process_apim(
                     now,
                 ),
             )
-
-    # --- APIs ---
-    apis_started = time.perf_counter()
-    print(f"    fetching APIs...", end=" ", flush=True)
-    apis_raw = list_apis(apim_name, resource_group, subscription_id)
-    print(f"{len(apis_raw)} APIs in {time.perf_counter() - apis_started:.2f}s")
 
     # --- Load existing provisioned_assets FQDNs for cross-reference ---
     asset_fqdn_rows = conn.execute(
@@ -331,6 +335,7 @@ def process_apim(
             ).fetchone()
         return row[0] if row else None
 
+    api_specs: list[dict[str, Any]] = []
     for api in apis_raw:
         api_name = api.get("name") or ""
         api_path = api.get("path") or ""
@@ -349,16 +354,51 @@ def process_apim(
                 backend_id = bname
                 break
 
-        # APIM APIs commonly select a named backend through policy instead of
-        # exposing serviceUrl. Resolve that policy reference before persisting
-        # the route so downstream tracing can follow the actual target.
-        if not backend_id:
-            backend_id = _policy_backend_id(
-                get_api_policy(apim_name, resource_group, api_name, subscription_id)
-            )
-            if backend_id:
-                backend_url = backend_map.get(backend_id) or backend_url
+        api_specs.append({
+            "api_name": api_name,
+            "api_display": api_display,
+            "api_path": api_path,
+            "protocols": protocols,
+            "requires_sub": requires_sub,
+            "service_url": service_url,
+            "backend_id": backend_id,
+            "backend_url": backend_url,
+        })
 
+    # Policy calls are also read-only and independent. Resolve them before
+    # writing routes, while retaining deterministic API-order processing below.
+    policy_specs = [spec for spec in api_specs if not spec["backend_id"]]
+    policy_results: dict[str, str] = {}
+    if policy_specs:
+        with ThreadPoolExecutor(max_workers=min(_APIM_FETCH_WORKERS, len(policy_specs))) as pool:
+            futures = {
+                spec["api_name"]: pool.submit(
+                    get_api_policy,
+                    apim_name,
+                    resource_group,
+                    spec["api_name"],
+                    subscription_id,
+                )
+                for spec in policy_specs
+            }
+            for spec in policy_specs:
+                policy_results[spec["api_name"]] = futures[spec["api_name"]].result()
+
+        for spec in policy_specs:
+            backend_id = _policy_backend_id(policy_results[spec["api_name"]])
+            spec["backend_id"] = backend_id
+            if backend_id:
+                spec["backend_url"] = backend_map.get(backend_id) or spec["backend_url"]
+
+    for spec in api_specs:
+        api_name = spec["api_name"]
+        api_display = spec["api_display"]
+        api_path = spec["api_path"]
+        protocols = spec["protocols"]
+        requires_sub = spec["requires_sub"]
+        service_url = spec["service_url"]
+        backend_id = spec["backend_id"]
+        backend_url = spec["backend_url"]
         route_id = f"{apim_name}::{api_name}"
 
         if not dry_run:

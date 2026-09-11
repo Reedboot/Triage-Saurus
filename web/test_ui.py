@@ -2153,6 +2153,67 @@ class TestIngressDiagramGeneration:
         mermaid = result.get("mermaid", "")
         assert 'rg_app_worker_explicit -->|"HTTPS"| rg_data_explicitstore' in mermaid, mermaid
 
+    def test_backend_data_reference_suppressed_when_private_link_exists(self):
+        """When a data store is already reached via a private endpoint, the
+        generic explicit-reference protocol arrow (e.g. "HTTPS") should not
+        also be drawn — the Private Link arrow alone is sufficient."""
+        import json
+
+        rows = [
+            (
+                "worker-explicit",
+                "Microsoft.Web/sites",
+                "rg-app",
+                "",
+                0,
+                "Standard",
+                "worker-explicit-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({
+                    "properties": {
+                        "connectionString": "DefaultEndpointsProtocol=https;AccountName=explicitstore;EndpointSuffix=core.windows.net"
+                    }
+                }),
+                None,
+                None,
+            ),
+            (
+                "explicitstore",
+                "Microsoft.Storage/storageAccounts",
+                "rg-data",
+                "explicitstore.blob.core.windows.net",
+                0,
+                "Standard",
+                "storage-explicit-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                json.dumps({
+                    "properties": {
+                        "privateEndpointConnections": [
+                            {
+                                "id": "/subscriptions/000/resourceGroups/rg-data/providers/Microsoft.Network/privateEndpoints/explicitstore-pe",
+                                "name": "explicitstore-pe",
+                            }
+                        ]
+                    }
+                }),
+                None,
+                None,
+            ),
+        ]
+
+        result = self._call(rows=rows)
+        mermaid = result.get("mermaid", "")
+        assert 'rg_app_worker_explicit -->|"HTTPS"| rg_data_explicitstore' not in mermaid, mermaid
+        assert '-->|"explicitstore-pe"| rg_data_explicitstore' in mermaid, mermaid
+
     def test_listener_level_waf_overrides_disabled_gateway_waf(self):
         """Disabled gateway WAF policies should stay hidden when listeners carry their own WAFs."""
         rows = [
@@ -2428,9 +2489,9 @@ class TestIngressDiagramGeneration:
         aks_route_rows = [
             (
                 "production-shared-aks-uksouth",
-                "prodyellow-account-products",
+                "prod-network-2-account-products",
                 "account-identification-ingress",
-                "prodyellow-account-identification.internal.car.uk",
+                "prod-network-2-account-identification.internal.car.uk",
                 "/",
                 "Internal",
                 "account-identification-service",
@@ -2443,7 +2504,7 @@ class TestIngressDiagramGeneration:
         ]
 
         mermaid = self._call(rows=rows, aks_route_rows=aks_route_rows).get("mermaid", "")
-        service_nid = "rg_aks_aks_service_production_shared_aks_uksouth_prodgreen_account_products_account_identification_service_80"
+        service_nid = "rg_aks_aks_service_production_shared_aks_uksouth_prod_network_1_account_products_account_identification_service_80"
         assert service_nid in mermaid, mermaid
         assert any(
             "-->" in line and "aks_ingress" in line and service_nid in line
@@ -6338,6 +6399,218 @@ class TestCloudPosture:
         waf_nodes = [node for node in payload["nodes"] if node["data"].get("typeLabel") == "WAF Policy"]
         assert len(waf_nodes) == 1, payload
         assert waf_nodes[0]["data"].get("label") == "policy-one", waf_nodes[0]
+
+    def test_private_endpoint_resolves_real_vnet_subnet_across_subscriptions(self):
+        """A private endpoint whose target subscription HAS been harvested (even
+        though it differs from the one being viewed) should surface its real
+        VNet/Subnet and be nested inside a synthetic VNet/Subnet subgraph,
+        instead of being left unscoped or matched by the legacy prod-network-1
+        heuristic."""
+        import json
+        import sqlite3
+
+        from web.app import _build_subscription_architecture_payload
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE subscriptions (
+                    id TEXT PRIMARY KEY,
+                    display_name TEXT,
+                    environment TEXT,
+                    state TEXT,
+                    last_synced TEXT
+                );
+                CREATE TABLE provisioned_assets (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    resource_group TEXT,
+                    name TEXT,
+                    type TEXT,
+                    location TEXT,
+                    sku TEXT,
+                    fqdn TEXT,
+                    is_public INTEGER DEFAULT 0,
+                    status TEXT,
+                    pipeline_tag TEXT,
+                    first_detected TEXT,
+                    last_synced TEXT,
+                    raw_json TEXT,
+                    is_restricted INTEGER DEFAULT 0,
+                    waf_mode TEXT
+                );
+                """
+            )
+            conn.execute(
+                "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+                ("sub-1", "Test Subscription", "production", "Enabled", "2026-06-01T00:00:00Z"),
+            )
+
+            storage_account_id = (
+                "/subscriptions/sub-1/resourceGroups/rg-storage/providers/"
+                "Microsoft.Storage/storageAccounts/datalakestorageuksouth"
+            )
+            private_endpoint_id = (
+                "/subscriptions/sub-hub/resourceGroups/rg-hub-endpoints/providers/"
+                "Microsoft.Network/privateEndpoints/pendpoint-datalakestorageuksouth_blob"
+            )
+            subnet_id = (
+                "/subscriptions/sub-hub/resourceGroups/rg-hub-vnet/providers/"
+                "Microsoft.Network/virtualNetworks/HUB-ENDPOINTS-vnet/subnets/banking-endpoints-users"
+            )
+
+            storage_raw_json = {
+                "id": storage_account_id,
+                "privateEndpointConnections": [
+                    {
+                        "name": "datalakestorageuksouth.c5ec4008-8490-47a3-9cba-b64fa9a14da3",
+                        "privateEndpoint": {
+                            "id": private_endpoint_id,
+                            "resourceGroup": "rg-hub-endpoints",
+                        },
+                    }
+                ],
+            }
+            private_endpoint_raw_json = {
+                "id": private_endpoint_id,
+                "properties": {
+                    "subnet": {"id": subnet_id},
+                },
+                "_extra": {
+                    "subnet_id": subnet_id,
+                    "custom_dns_fqdns": ["datalakestorageuksouth.blob.core.windows.net"],
+                },
+            }
+
+            conn.execute(
+                """
+                INSERT INTO provisioned_assets (
+                    id, subscription_id, resource_group, name, type, location, sku,
+                    fqdn, is_public, status, pipeline_tag, first_detected, last_synced,
+                    raw_json, is_restricted, waf_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    storage_account_id,
+                    "sub-1",
+                    "rg-storage",
+                    "datalakestorageuksouth",
+                    "Microsoft.Storage/storageAccounts",
+                    "uksouth",
+                    "Standard_LRS",
+                    "datalakestorageuksouth.blob.core.windows.net",
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps(storage_raw_json),
+                    1,
+                    None,
+                ),
+            )
+            # The private endpoint's own subscription ("sub-hub") HAS been
+            # harvested into the same database, even though the diagram being
+            # rendered here is scoped to "sub-1".
+            conn.execute(
+                """
+                INSERT INTO provisioned_assets (
+                    id, subscription_id, resource_group, name, type, location, sku,
+                    fqdn, is_public, status, pipeline_tag, first_detected, last_synced,
+                    raw_json, is_restricted, waf_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    private_endpoint_id,
+                    "sub-hub",
+                    "rg-hub-endpoints",
+                    "pendpoint-datalakestorageuksouth_blob",
+                    "Microsoft.Network/privateEndpoints",
+                    "uksouth",
+                    None,
+                    "datalakestorageuksouth.blob.core.windows.net",
+                    0,
+                    "active",
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    json.dumps(private_endpoint_raw_json),
+                    0,
+                    None,
+                ),
+            )
+
+            payload = _build_subscription_architecture_payload(conn, "sub-1", view_mode="full")
+        finally:
+            conn.close()
+
+        pe_nodes = [
+            node for node in payload["nodes"]
+            if node["data"].get("typeLabel") == "Private Endpoint"
+        ]
+        assert len(pe_nodes) == 1, payload["nodes"]
+        pe_node = pe_nodes[0]
+        assert pe_node["data"].get("network", {}).get("vnet") == "HUB-ENDPOINTS-vnet", pe_node
+        assert pe_node["data"].get("network", {}).get("subnet") == "banking-endpoints-users", pe_node
+        assert pe_node["data"].get("vnetName") == "HUB-ENDPOINTS-vnet", pe_node
+        assert pe_node["data"].get("subnetName") == "banking-endpoints-users", pe_node
+
+        vnet_nodes = [
+            node for node in payload["nodes"]
+            if node["data"].get("typeLabel") == "Virtual Network"
+            and node["data"].get("label") == "HUB-ENDPOINTS-vnet"
+        ]
+        subnet_nodes = [
+            node for node in payload["nodes"]
+            if node["data"].get("typeLabel") == "Subnet"
+            and node["data"].get("label") == "banking-endpoints-users"
+        ]
+        assert len(vnet_nodes) == 1, payload["nodes"]
+        assert len(subnet_nodes) == 1, payload["nodes"]
+
+        # The private endpoint should be nested under the real subnet, not a
+        # generic fallback subnet.
+        assert pe_node["data"].get("parentNodeId") == subnet_nodes[0]["id"], (pe_node, subnet_nodes[0])
+
+    def test_private_endpoint_falls_back_to_arm_id_when_not_harvested(self):
+        """When the private endpoint's own subscription was never harvested,
+        we should not silently show nulls: fall back to parsing subscription
+        id/resource group straight from the ARM resource ID."""
+        import json
+        import sqlite3
+
+        from web.app import _resolve_private_endpoint_network
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE provisioned_assets (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    resource_group TEXT,
+                    raw_json TEXT,
+                    fqdn TEXT
+                );
+                """
+            )
+            endpoint_id = (
+                "/subscriptions/53b98ff0-8967-4ecc-bfed-966cd3cbe122/resourceGroups/"
+                "shared-infra-production-HUBNET-ENDPOINTS-banking-uksouth/providers/"
+                "Microsoft.Network/privateEndpoints/pendpoint-financedatalake6j85r_blob"
+            )
+            result = _resolve_private_endpoint_network(conn, endpoint_id)
+        finally:
+            conn.close()
+
+        assert result["harvested"] is False
+        assert result["subscription_id"] == "53b98ff0-8967-4ecc-bfed-966cd3cbe122"
+        assert result["resource_group"] == "shared-infra-production-HUBNET-ENDPOINTS-banking-uksouth"
+        assert result["vnet_name"] is None
+        assert result["subnet_name"] is None
 
     def test_subscription_architecture_payload_places_waf_before_gateway(self):
         import json
@@ -10537,6 +10810,20 @@ class TestCloudPosture:
         assert friendly_icon_path and friendly_icon_path.endswith("azure/containers/ingress.svg"), friendly_icon_path
         assert friendly_icon_class == "icon-azurerm-kubernetes-service", friendly_icon_class
 
+    def test_private_endpoint_uses_private_endpoint_icon(self):
+        import os
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        icon_path = app_module._get_icon_path("Microsoft.Network/privateEndpoints")
+        icon_class = app_module._get_icon_class("Microsoft.Network/privateEndpoints")
+
+        assert icon_path and icon_path.endswith("azure/other/private-endpoints.svg"), icon_path
+        assert icon_class == "icon-azurerm-private-endpoint", icon_class
+
     def test_api_cloud_resource_details_treats_internal_apim_as_private(self, monkeypatch):
         import json
         import os
@@ -11901,6 +12188,123 @@ class TestCloudPosture:
         assert data["name"] == "sa-one"
         assert data["type_label"] == "Storage Account"
         assert data["network"]["dns_names"][0] == "sa-one.blob.core.windows.net"
+
+    def test_api_cloud_resource_details_surfaces_private_endpoint_connections(self, monkeypatch):
+        """A standalone harvested Private Endpoint should surface who it
+        connects to (the linked PaaS service) and known consumers sharing
+        its subnet (e.g. a VM reaching a storage account privately)."""
+        import json
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                fqdn TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                pipeline_tag TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                raw_json TEXT,
+                is_restricted INTEGER DEFAULT 0,
+                waf_mode TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state) VALUES (?, ?, ?, ?)",
+            ("sub-1", "Test Subscription", "production", "Enabled"),
+        )
+
+        storage_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one"
+        subnet_id = (
+            "/subscriptions/sub-1/resourceGroups/rg-network/providers/"
+            "Microsoft.Network/virtualNetworks/vnet-one/subnets/apps"
+        )
+        pe_id = "/subscriptions/sub-1/resourceGroups/rg-network/providers/Microsoft.Network/privateEndpoints/pe-sa-one"
+        vm_id = "/subscriptions/sub-1/resourceGroups/rg-apps/providers/Microsoft.Compute/virtualMachines/vm-app-01"
+        nic_id = "/subscriptions/sub-1/resourceGroups/rg-apps/providers/Microsoft.Network/networkInterfaces/nic-vm-app-01"
+
+        def _insert_asset(resource_id, rg, name, rtype, raw_json, fqdn=None):
+            conn.execute(
+                """
+                INSERT INTO provisioned_assets (
+                    id, subscription_id, resource_group, name, type, location, sku, fqdn,
+                    is_public, status, pipeline_tag, first_detected, last_synced, raw_json,
+                    is_restricted, waf_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    resource_id, "sub-1", rg, name, rtype, "westus", None, fqdn,
+                    0, "active", None, "2026-06-01T00:00:00Z", "2026-06-01T00:00:00Z",
+                    json.dumps(raw_json), 0, None,
+                ),
+            )
+
+        _insert_asset(
+            storage_id, "rg-data", "sa-one", "Microsoft.Storage/storageAccounts",
+            {"kind": "StorageV2", "properties": {}},
+            fqdn="sa-one.blob.core.windows.net",
+        )
+        _insert_asset(
+            vm_id, "rg-apps", "vm-app-01", "Microsoft.Compute/virtualMachines",
+            {"properties": {"networkProfile": {"networkInterfaces": [{"id": nic_id}]}}},
+        )
+        _insert_asset(
+            nic_id, "rg-apps", "nic-vm-app-01", "Microsoft.Network/networkInterfaces",
+            {"_extra": {"parent_resource_id": vm_id, "subnet_ids": [subnet_id]}, "properties": {
+                "ipConfigurations": [{"properties": {"subnet": {"id": subnet_id}}}]
+            }},
+        )
+        _insert_asset(
+            pe_id, "rg-network", "pe-sa-one", "Microsoft.Network/privateEndpoints",
+            {
+                "properties": {"subnet": {"id": subnet_id}},
+                "_extra": {
+                    "linked_resource_id": storage_id,
+                    "linked_resource_type": "Microsoft.Storage/storageAccounts",
+                    "subnet_id": subnet_id,
+                    "custom_dns_fqdns": ["sa-one.blob.core.windows.net"],
+                },
+            },
+            fqdn="sa-one.blob.core.windows.net",
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud/resource-details", query_string={"id": pe_id})
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        assert data["type_label"] == "Private Endpoint"
+        assert data["connects_to"]["name"] == "sa-one"
+        assert data["connects_to"]["type"] == "Microsoft.Storage/storageAccounts"
+        assert data["connects_from"]["vnet"] == "vnet-one"
+        assert data["connects_from"]["subnet"] == "apps"
+        consumer_names = [c["name"] for c in data["known_consumers"]]
+        assert "vm-app-01" in consumer_names
 
     def test_api_cloud_resource_details_resolves_node_id_via_name_rg_type(self, monkeypatch):
         import json
