@@ -19,7 +19,7 @@ from ._staged import BackfillJob, StagedRows
 
 RESOURCE_TYPE = "Microsoft.ApiManagement/service"
 _APIM_SERVICE_WORKERS = 4
-_APIM_API_WORKERS = 4
+_APIM_API_WORKERS = 8
 _APIM_OPERATION_WORKERS = 4
 _BACKFILL_WORKERS = 8
 _BACKFILL_EXECUTOR: ThreadPoolExecutor | None = None

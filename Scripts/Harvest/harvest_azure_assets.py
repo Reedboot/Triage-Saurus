@@ -710,6 +710,7 @@ def _run_provider_task(
     sub_id: str,
     progress: HarvestProgress,
 ) -> tuple[HarvestOutput, dict[str, Any] | None]:
+    started = time.perf_counter()
     progress.mark_running(label)
     progress_cb: ProgressCallback | None = (
         (lambda detail, _label=label: progress.update(_label, detail))
@@ -722,7 +723,13 @@ def _run_provider_task(
         progress_cb,
         stage_backfill=(label == "Storage"),
     )
-    return result, get_last_azure_call_status()
+    status = get_last_azure_call_status()
+    print(
+        f"  [provider-timing] {label} completed in "
+        f"{time.perf_counter() - started:.2f}s",
+        flush=True,
+    )
+    return result, status
 
 
 def _coverage_status(
