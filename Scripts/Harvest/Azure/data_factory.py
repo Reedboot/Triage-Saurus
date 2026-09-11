@@ -35,6 +35,11 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             factory = {**factory, **detailed}
         props = factory.get("properties") or factory
         is_public, is_restricted, ip_restrictions, exposure_class = _classify_exposure(props)
+        managed_private_endpoints = _harvest_managed_private_endpoints(
+            subscription_id,
+            factory.get("resourceGroup"),
+            factory.get("name"),
+        )
 
         extra = {
             "provisioning_state": props.get("provisioningState"),
@@ -45,6 +50,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
                 (props.get("managedVirtualNetwork") or {}).get("type")
             ),
             "git_config_type": (props.get("repoConfiguration") or {}).get("type"),
+            "managed_private_endpoints": managed_private_endpoints,
         }
 
         results.append({
@@ -67,6 +73,63 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
         })
 
     return results
+
+
+def _harvest_managed_private_endpoints(
+    subscription_id: str,
+    resource_group: str | None,
+    factory_name: str | None,
+) -> list[dict[str, Any]]:
+    """Harvest Data Factory managed-VNet private endpoints and their targets."""
+    if not resource_group or not factory_name:
+        return []
+
+    managed_vnets = az(
+        [
+            "datafactory",
+            "managed-virtual-network",
+            "list",
+            "--factory-name",
+            factory_name,
+            "--resource-group",
+            resource_group,
+        ],
+        subscription_id,
+    )
+    endpoints: list[dict[str, Any]] = []
+    for managed_vnet in managed_vnets:
+        managed_vnet_name = managed_vnet.get("name")
+        if not managed_vnet_name:
+            continue
+        managed_endpoints = az(
+            [
+                "datafactory",
+                "managed-private-endpoint",
+                "list",
+                "--factory-name",
+                factory_name,
+                "--managed-virtual-network-name",
+                managed_vnet_name,
+                "--resource-group",
+                resource_group,
+            ],
+            subscription_id,
+        )
+        for endpoint in managed_endpoints:
+            endpoint_props = endpoint.get("properties") or {}
+            state = endpoint_props.get("connectionState") or {}
+            endpoints.append({
+                "name": endpoint.get("name"),
+                "managed_virtual_network": managed_vnet_name,
+                "group_id": endpoint_props.get("groupId"),
+                "target_resource_id": endpoint_props.get("privateLinkResourceId"),
+                "endpoint_resource_id": endpoint_props.get("resourceId"),
+                "connection_state": state.get("status"),
+                "connection_actions_required": state.get("actionsRequired"),
+                "provisioning_state": endpoint_props.get("provisioningState"),
+                "fqdns": endpoint_props.get("fqdns") or [],
+            })
+    return endpoints
 
 
 def _classify_exposure(props: dict[str, Any]) -> tuple[int, int, list[str], str]:

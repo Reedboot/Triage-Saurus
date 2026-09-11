@@ -14725,7 +14725,13 @@ def _build_subscription_architecture_payload(
             if not endpoint_id or endpoint_id.lower() in by_id or endpoint_id.lower() in synthetic_private_endpoint_ids:
                 continue
             endpoint_name = endpoint_id.rstrip("/").rsplit("/", 1)[-1] or "Private Endpoint"
-            endpoint_rg = str(endpoint.get("resourceGroup") or asset.get("resource_group") or "").strip()
+            resolved_network = _resolve_private_endpoint_network(conn, endpoint_id)
+            endpoint_rg = str(
+                endpoint.get("resourceGroup")
+                or resolved_network.get("resource_group")
+                or asset.get("resource_group")
+                or ""
+            ).strip()
             endpoint_asset = {
                 "id": endpoint_id,
                 "name": endpoint_name,
@@ -14760,84 +14766,139 @@ def _build_subscription_architecture_payload(
                 "provider_key": "azure",
                 "provider_label": "Azure",
                 "tier": "backend",
-                "vnet_name": None,
-                "vnet_resource_group": None,
-                "subnet_name": None,
-                "subnet_id": None,
-                "network": {"vnet": None, "subnet": None, "vnet_resource_group": None, "subnet_id": None},
+                "vnet_name": resolved_network.get("vnet_name"),
+                "vnet_resource_group": resolved_network.get("vnet_resource_group"),
+                "subnet_name": resolved_network.get("subnet_name"),
+                "subnet_id": resolved_network.get("subnet_id"),
+                "network": {
+                    "vnet": resolved_network.get("vnet_name"),
+                    "subnet": resolved_network.get("subnet_name"),
+                    "vnet_resource_group": resolved_network.get("vnet_resource_group"),
+                    "subnet_id": resolved_network.get("subnet_id"),
+                },
                 "_synthetic_private_endpoint": True,
                 "_private_endpoint_service_id": str(asset.get("id") or ""),
+                "_private_endpoint_harvested_network": bool(resolved_network.get("harvested")),
+                "_private_endpoint_external_subscription_id": resolved_network.get("subscription_id")
+                if resolved_network.get("subscription_id") not in (None, sub_id) else None,
             }
             assets.append(endpoint_asset)
             by_id[endpoint_id.lower()] = endpoint_asset
             synthetic_private_endpoint_ids.add(endpoint_id.lower())
 
-    # Prefer the harvested destination subnet when one exists (for example,
-    # prodgreen/private_endpoints); otherwise leave the endpoint unscoped.
+    # Give each private endpoint its own VNet/Subnet subgraph so the diagram
+    # shows the network it actually sits in (its "connects from" side) next to
+    # the PaaS target it connects to. Real subnet placement is resolved above
+    # via _resolve_private_endpoint_network. When it can't be resolved (e.g.
+    # the endpoint's subscription was never harvested), the endpoint is left
+    # without a synthetic subnet parent rather than guessing a placement.
     for endpoint in [a for a in assets if a.get("_synthetic_private_endpoint")]:
         service_id = str(endpoint.get("_private_endpoint_service_id") or "").lower()
         service = next((a for a in assets if str(a.get("id") or "").lower() == service_id), None)
         if not service:
             continue
-        destination = next(
-            (
-                a for a in assets
-                if "subnet" in str(a.get("type") or "").lower()
-                and str(a.get("name") or "").lower() == "private_endpoints"
-                and str(a.get("vnet_name") or "").lower() == "prodgreen"
-            ),
-            None,
-        )
-        if not destination:
-            destination_vnet = next(
-                (
-                    a for a in assets
-                    if "virtualnetworks" in str(a.get("type") or "").lower()
-                    and str(a.get("name") or "").lower() == "prodgreen"
-                ),
-                None,
-            )
-            if destination_vnet:
-                destination = {
-                    "id": f"synthetic-subnet::{destination_vnet.get('resource_group', '').lower()}::prodgreen::private_endpoints",
-                    "name": "private_endpoints",
-                    "type": "Microsoft.Network/virtualNetworks/subnets",
-                    "type_label": "Subnet",
-                    "display_type_label": "Subnet",
-                    "resource_group": destination_vnet.get("resource_group"),
-                    "sub_id": sub_id,
-                    "sub_name": sub_name,
-                    "environment": sub_env,
-                    "location": destination_vnet.get("location"),
+
+        destination = None
+        vnet_name = str(endpoint.get("vnet_name") or "").strip()
+        subnet_name = str(endpoint.get("subnet_name") or "").strip()
+        if vnet_name and subnet_name:
+            vnet_rg = str(endpoint.get("vnet_resource_group") or endpoint.get("resource_group") or "").strip()
+            vnet_node_id, subnet_node_id = _network_container_ids(vnet_rg, vnet_name, subnet_name)
+            if (vnet_rg.lower(), vnet_name.lower()) not in synthetic_vnet_assets:
+                synthetic_vnet_assets[(vnet_rg.lower(), vnet_name.lower())] = {
+                    "id": vnet_node_id,
+                    "name": vnet_name,
+                    "type": "Microsoft.Network/virtualNetworks",
+                    "display_type_label": "Virtual Network",
+                    "type_label": "Virtual Network",
+                    "resource_group": vnet_rg,
+                    "location": None,
                     "sku": None,
                     "fqdn": "",
+                    "is_public": False,
+                    "is_restricted": False,
                     "status": "active",
                     "pipeline_tag": None,
                     "first_detected": None,
                     "last_synced": None,
+                    "sub_id": endpoint.get("_private_endpoint_external_subscription_id") or sub_id,
+                    "sub_name": sub_name,
+                    "environment": sub_env,
+                    "cloud_provider": "Azure",
                     "linked_repo": None,
                     "kind": None,
-                    "parent_name": destination_vnet.get("name"),
-                    "parent_resource_group": destination_vnet.get("resource_group"),
-                    "parent_type_label": "Virtual Network",
+                    "parent_id": None,
+                    "parent_name": None,
+                    "parent_resource_group": None,
+                    "parent_type_label": None,
+                    "children_count": 0,
+                    "is_child": False,
+                    "depth": 0,
                     "waf_mode": None,
                     "provider_key": "azure",
                     "provider_label": "Azure",
                     "tier": "other",
-                    "is_public": False,
-                    "is_restricted": False,
-                    "is_child": True,
-                    "depth": 1,
-                    "parent_id": destination_vnet.get("id"),
-                    "vnet_name": "prodgreen",
-                    "vnet_resource_group": destination_vnet.get("resource_group"),
-                    "subnet_name": "private_endpoints",
+                    "vnet_name": vnet_name,
+                    "vnet_resource_group": vnet_rg,
+                    "subnet_name": None,
                     "subnet_id": None,
-                    "network": {"vnet": "prodgreen", "subnet": "private_endpoints"},
+                    "network": {"vnet": vnet_name, "subnet": None, "vnet_resource_group": vnet_rg, "subnet_id": None},
                     "_synthetic_network": True,
                 }
-                assets.append(destination)
-                by_id[str(destination["id"]).lower()] = destination
+                assets.append(synthetic_vnet_assets[(vnet_rg.lower(), vnet_name.lower())])
+                by_id[vnet_node_id.lower()] = synthetic_vnet_assets[(vnet_rg.lower(), vnet_name.lower())]
+            vnet_asset = synthetic_vnet_assets[(vnet_rg.lower(), vnet_name.lower())]
+
+            if (vnet_rg.lower(), vnet_name.lower(), subnet_name.lower()) not in synthetic_subnet_assets:
+                subnet_asset = {
+                    "id": subnet_node_id,
+                    "name": subnet_name,
+                    "type": "Microsoft.Network/virtualNetworks/subnets",
+                    "type_label": "Subnet",
+                    "display_type_label": "Subnet",
+                    "resource_group": vnet_rg,
+                    "location": None,
+                    "sku": None,
+                    "fqdn": "",
+                    "is_public": False,
+                    "is_restricted": False,
+                    "status": "active",
+                    "pipeline_tag": None,
+                    "first_detected": None,
+                    "last_synced": None,
+                    "sub_id": endpoint.get("_private_endpoint_external_subscription_id") or sub_id,
+                    "sub_name": sub_name,
+                    "environment": sub_env,
+                    "cloud_provider": "Azure",
+                    "linked_repo": None,
+                    "kind": None,
+                    "parent_id": vnet_asset["id"],
+                    "parent_name": vnet_name,
+                    "parent_resource_group": vnet_rg,
+                    "parent_type_label": "Virtual Network",
+                    "children_count": 0,
+                    "is_child": True,
+                    "depth": 1,
+                    "waf_mode": None,
+                    "provider_key": "azure",
+                    "provider_label": "Azure",
+                    "tier": "other",
+                    "vnet_name": vnet_name,
+                    "vnet_resource_group": vnet_rg,
+                    "subnet_name": subnet_name,
+                    "subnet_id": endpoint.get("subnet_id"),
+                    "network": {
+                        "vnet": vnet_name,
+                        "subnet": subnet_name,
+                        "vnet_resource_group": vnet_rg,
+                        "subnet_id": endpoint.get("subnet_id"),
+                    },
+                    "_synthetic_network": True,
+                }
+                synthetic_subnet_assets[(vnet_rg.lower(), vnet_name.lower(), subnet_name.lower())] = subnet_asset
+                assets.append(subnet_asset)
+                by_id[subnet_node_id.lower()] = subnet_asset
+            destination = synthetic_subnet_assets[(vnet_rg.lower(), vnet_name.lower(), subnet_name.lower())]
         if destination:
             endpoint["parent_id"] = destination["id"]
             endpoint["vnet_name"] = destination.get("vnet_name")
@@ -15748,8 +15809,10 @@ def _build_subscription_architecture_payload(
             edges.append(
                 {
                     "id": f"edge-private-link-{asset['id']}-{asset['_private_endpoint_service_id']}",
-                    "source": str(asset["_private_endpoint_service_id"]),
-                    "target": str(asset["id"]),
+                    # The private endpoint is the client-side network interface;
+                    # point it at the Azure service it privately exposes.
+                    "source": str(asset["id"]),
+                    "target": str(asset["_private_endpoint_service_id"]),
                     "label": "Private Link",
                     "data": {
                         "connection_type": "private_endpoint",
@@ -17475,6 +17538,117 @@ def api_cloud_resource_details():
                     "parent_resource": parent_resource,
                 })
 
+        # Private endpoint connections are often embedded in the parent PaaS
+        # resource rather than stored as standalone provisioned assets. The
+        # architecture diagram gives these synthetic nodes an RG/name ID, so
+        # resolve them from the harvested connection metadata.
+        if lookup_name and "network/privateendpoints" in lookup_type_lc and _table_exists(conn, "provisioned_assets"):
+            candidate_rows = conn.execute(
+                """
+                SELECT id, name, type, resource_group, location, sku, fqdn, raw_json
+                FROM provisioned_assets
+                WHERE subscription_id = ?
+                  AND (? = '' OR LOWER(COALESCE(resource_group, '')) = LOWER(?))
+                """,
+                (resolved_sub_id or lookup_sub or "", lookup_rg, lookup_rg),
+            ).fetchall()
+            for parent_row in candidate_rows:
+                try:
+                    parent_raw = json.loads(parent_row["raw_json"] or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    parent_raw = {}
+                parent_props = parent_raw.get("properties") if isinstance(parent_raw, dict) else {}
+                connections = (
+                    parent_raw.get("privateEndpointConnections")
+                    or (parent_props or {}).get("privateEndpointConnections")
+                    or []
+                )
+                if not isinstance(connections, list):
+                    continue
+                connection = next(
+                    (
+                        item for item in connections
+                        if isinstance(item, dict)
+                        and str(item.get("name") or "").strip().lower() == lookup_name.lower()
+                    ),
+                    None,
+                )
+                if not connection:
+                    continue
+                connection_props = connection.get("properties") if isinstance(connection.get("properties"), dict) else {}
+                private_endpoint = connection_props.get("privateEndpoint")
+                if not isinstance(private_endpoint, dict):
+                    private_endpoint = {}
+                state = connection_props.get("privateLinkServiceConnectionState")
+                if not isinstance(state, dict):
+                    state = {}
+                actual_endpoint_id = str(private_endpoint.get("id") or "").strip()
+                resolved_network = _resolve_private_endpoint_network(conn, actual_endpoint_id)
+                consumers = _find_private_endpoint_consumers(
+                    conn,
+                    resolved_network.get("subscription_id") or resolved_sub_id or "",
+                    resolved_network.get("subnet_id") or "",
+                    exclude_ids={actual_endpoint_id, str(parent_row["id"] or "")},
+                )
+                parent_resource = {
+                    "id": parent_row["id"],
+                    "name": parent_row["name"],
+                    "type": parent_row["type"],
+                    "type_label": _friendly_type(parent_row["type"]),
+                    "resource_group": parent_row["resource_group"],
+                    "icon_path": _resource_icon_path(parent_row["type"] or ""),
+                }
+                return jsonify({
+                    "id": resource_id,
+                    "name": connection.get("name") or lookup_name,
+                    "type": "Microsoft.Network/privateEndpoints",
+                    "type_label": "Private Endpoint",
+                    "icon_path": _resource_icon_path("Microsoft.Network/privateEndpoints"),
+                    "resource_group": lookup_rg or resolved_network.get("resource_group") or parent_row["resource_group"],
+                    "location": parent_row["location"],
+                    "sku": None,
+                    "subscription": parent_row["subscription_id"] if "subscription_id" in parent_row.keys() else lookup_sub,
+                    "is_virtual": True,
+                    "configuration": {
+                        "private_endpoint_id": actual_endpoint_id or None,
+                        "group_ids": connection_props.get("groupIds") or [],
+                        "provisioning_state": connection_props.get("provisioningState"),
+                        "connection_status": state.get("status"),
+                        "actions_required": state.get("actionsRequired"),
+                        "description": state.get("description"),
+                    },
+                    "security": {
+                        "is_public": False,
+                        "waf_enabled": False,
+                        "is_restricted": True,
+                        "public_network_access": "Private",
+                    },
+                    "network": {
+                        "private_endpoint_id": actual_endpoint_id or None,
+                        "vnet": resolved_network.get("vnet_name"),
+                        "subnet": resolved_network.get("subnet_name"),
+                        "subnet_id": resolved_network.get("subnet_id"),
+                        "vnet_resource_group": resolved_network.get("vnet_resource_group"),
+                        "dns_names": resolved_network.get("dns_names") or [],
+                    },
+                    "connects_from": {
+                        "harvested": bool(resolved_network.get("harvested")),
+                        "subscription_id": resolved_network.get("subscription_id"),
+                        "resource_group": resolved_network.get("resource_group"),
+                        "vnet": resolved_network.get("vnet_name"),
+                        "subnet": resolved_network.get("subnet_name"),
+                        "consumers": consumers,
+                        "note": None if resolved_network.get("harvested") else (
+                            "Private endpoint's subscription has not been harvested; "
+                            "showing what can be inferred from its resource ID only."
+                        ),
+                    },
+                    "connects_to": parent_resource,
+                    "known_consumers": consumers,
+                    "parent_resource": parent_resource,
+                    "_synthetic_private_endpoint": True,
+                })
+
         # Regular provisioned asset
         asset_row = None
         if _table_exists(conn, "provisioned_assets"):
@@ -17997,6 +18171,7 @@ def api_cloud_resource_details():
             },
             "network": {
                 "private_endpoints": _extract_private_endpoints(raw_json),
+                "managed_private_endpoints": _extract_managed_private_endpoints(raw_json),
                 "vnet": associated_vnet,
                 "subnet": associated_subnet,
                 "virtual_network_type": _extract_virtual_network_type(raw_json),
@@ -18386,7 +18561,59 @@ def api_cloud_resource_details():
                 **({"fqdn": _row_get(parent_row, "fqdn")} if _row_get(parent_row, "fqdn") else {}),
                 **({"network": parent_network} if parent_network else {}),
             }
-        
+
+        if "network/privateendpoints" in asset_type_lc:
+            pe_extra = raw_json.get("_extra") if isinstance(raw_json.get("_extra"), dict) else {}
+            linked_resource_id = str(pe_extra.get("linked_resource_id") or "").strip()
+            pe_subnet_id = str(pe_extra.get("subnet_id") or "").strip()
+            connects_to_resource = None
+            if linked_resource_id:
+                target_row = conn.execute(
+                    "SELECT id, name, type, resource_group, location, sku, fqdn FROM provisioned_assets WHERE id = ? LIMIT 1",
+                    (linked_resource_id,),
+                ).fetchone()
+                if target_row:
+                    connects_to_resource = {
+                        "id": target_row["id"],
+                        "name": target_row["name"],
+                        "type": target_row["type"],
+                        "type_label": _friendly_type(target_row["type"]),
+                        "resource_group": target_row["resource_group"],
+                        "location": target_row["location"],
+                        "sku": target_row["sku"],
+                        "fqdn": target_row["fqdn"],
+                        "icon_path": _resource_icon_path(target_row["type"] or ""),
+                    }
+                else:
+                    linked_arm_parts = _parse_arm_id_parts(linked_resource_id)
+                    linked_type = str(pe_extra.get("linked_resource_type") or "")
+                    connects_to_resource = {
+                        "id": linked_resource_id,
+                        "name": linked_resource_id.rstrip("/").split("/")[-1],
+                        "type": linked_type,
+                        "type_label": _friendly_type(linked_type) if linked_type else "Unknown resource",
+                        "resource_group": linked_arm_parts.get("resource_group"),
+                        "harvested": False,
+                    }
+            consumers = _find_private_endpoint_consumers(
+                conn,
+                str(asset_row["subscription_id"] or ""),
+                pe_subnet_id,
+                exclude_ids={str(asset_row["id"] or ""), linked_resource_id},
+            )
+            details["connects_to"] = connects_to_resource
+            details["connects_from"] = {
+                "harvested": True,
+                "subscription_id": asset_row["subscription_id"],
+                "resource_group": asset_row["resource_group"],
+                "vnet": associated_vnet,
+                "subnet": associated_subnet,
+                "consumers": consumers,
+            }
+            details["known_consumers"] = consumers
+            if connects_to_resource and not details.get("parent_resource"):
+                details["parent_resource"] = connects_to_resource
+
         return jsonify(details)
     finally:
         conn.close()
@@ -18655,6 +18882,19 @@ def _extract_private_endpoints(raw_json: dict) -> list[str]:
     return [pe.get("name") or pe.get("id") for pe in pe_connections if isinstance(pe, dict)]
 
 
+def _extract_managed_private_endpoints(raw_json: dict) -> list[dict]:
+    """Extract Data Factory managed-VNet private endpoint metadata."""
+    if not isinstance(raw_json, dict):
+        return []
+    extra = raw_json.get("_extra")
+    if not isinstance(extra, dict):
+        return []
+    endpoints = extra.get("managed_private_endpoints")
+    if not isinstance(endpoints, list):
+        return []
+    return [endpoint for endpoint in endpoints if isinstance(endpoint, dict)]
+
+
 def _parse_json_list_field(value: object) -> list[object]:
     """Parse a stored JSON list or return a single-item list when needed."""
     parsed = parse_json_list(value)
@@ -18855,6 +19095,27 @@ def _collect_subnet_ids(raw_json: dict) -> list[str]:
             if isinstance(subnet_obj, dict):
                 _add(subnet_obj.get("id", ""))
 
+        # Databricks VNet injection stores the VNet resource ID and the
+        # public/private subnet names as parameter values rather than explicit
+        # subnet resource IDs.
+        databricks_parameters = props.get("parameters")
+        if isinstance(databricks_parameters, dict):
+            def _parameter_value(name: str) -> object:
+                parameter = databricks_parameters.get(name)
+                return parameter.get("value") if isinstance(parameter, dict) else parameter
+
+            custom_vnet_id = str(
+                _parameter_value("customVirtualNetworkId") or ""
+            ).strip().rstrip("/")
+            if custom_vnet_id and "/virtualNetworks/" in custom_vnet_id:
+                for subnet_parameter in (
+                    "customPrivateSubnetName",
+                    "customPublicSubnetName",
+                ):
+                    subnet_name = str(_parameter_value(subnet_parameter) or "").strip()
+                    if subnet_name:
+                        _add(f"{custom_vnet_id}/subnets/{subnet_name}")
+
         # Network profile (ACI, some AKS)
         net_profile = props.get("networkProfile")
         if isinstance(net_profile, dict):
@@ -19025,6 +19286,184 @@ def _extract_subnet(raw_json: dict) -> str | None:
         if subnet:
             return subnet
     return None
+
+
+def _parse_arm_id_parts(resource_id: str) -> dict[str, str | None]:
+    """Best-effort parse of subscription/resource group out of an ARM resource ID.
+
+    Works even when the resource was never harvested (e.g. it lives in a
+    subscription that hasn't been scanned), so callers can still show *where*
+    a cross-subscription private endpoint sits instead of leaving it blank.
+    """
+    text = str(resource_id or "").strip()
+    subscription_id = None
+    resource_group = None
+    if "/subscriptions/" in text:
+        subscription_id = text.split("/subscriptions/", 1)[1].split("/")[0] or None
+    if "/resourceGroups/" in text:
+        resource_group = text.split("/resourceGroups/", 1)[1].split("/")[0] or None
+    return {"subscription_id": subscription_id, "resource_group": resource_group}
+
+
+def _resolve_private_endpoint_network(conn, endpoint_id: str) -> dict:
+    """Resolve VNet/subnet placement for a private endpoint by its ARM ID.
+
+    Private endpoints are frequently harvested only as metadata embedded on the
+    PaaS resource's ``privateEndpointConnections`` block (no subnet/NIC info),
+    or they live entirely in a different subscription that was never scanned.
+    This looks the endpoint up as a standalone harvested asset (globally, not
+    scoped to the currently-viewed subscription, since ARM resource IDs are
+    unique across the whole tenant) and falls back to parsing the ARM ID
+    directly when no harvest data is available.
+    """
+    result: dict = {
+        "harvested": False,
+        "vnet_name": None,
+        "vnet_resource_group": None,
+        "subnet_name": None,
+        "subnet_id": None,
+        "subscription_id": None,
+        "resource_group": None,
+        "dns_names": [],
+    }
+    arm_parts = _parse_arm_id_parts(endpoint_id)
+    result["subscription_id"] = arm_parts.get("subscription_id")
+    result["resource_group"] = arm_parts.get("resource_group")
+
+    if not endpoint_id or conn is None:
+        return result
+
+    try:
+        row = conn.execute(
+            "SELECT raw_json, resource_group, subscription_id, fqdn FROM provisioned_assets WHERE id = ? LIMIT 1",
+            (endpoint_id,),
+        ).fetchone()
+    except Exception:
+        row = None
+    if not row:
+        return result
+
+    try:
+        raw_json = json.loads(row["raw_json"] or "{}")
+    except (json.JSONDecodeError, TypeError):
+        raw_json = {}
+    if not isinstance(raw_json, dict):
+        raw_json = {}
+
+    extra = raw_json.get("_extra") or {}
+    subnet_id = str((extra.get("subnet_id") if isinstance(extra, dict) else None) or "").strip()
+    if not subnet_id:
+        subnet_id = next(iter(_collect_subnet_ids(raw_json)), None) or ""
+
+    if subnet_id:
+        subnet_parts = _parse_arm_id_parts(subnet_id)
+        result["subnet_id"] = subnet_id
+        result["vnet_name"] = _parse_vnet_from_subnet_id(subnet_id)
+        result["subnet_name"] = _parse_subnet_from_subnet_id(subnet_id)
+        result["vnet_resource_group"] = subnet_parts.get("resource_group")
+
+    dns_names = []
+    if isinstance(extra, dict) and isinstance(extra.get("custom_dns_fqdns"), list):
+        dns_names = [str(v).strip() for v in extra.get("custom_dns_fqdns") if str(v or "").strip()]
+    try:
+        row_fqdn = row["fqdn"]
+    except (KeyError, IndexError):
+        row_fqdn = None
+    if row_fqdn and row_fqdn not in dns_names:
+        dns_names.insert(0, row_fqdn)
+    result["dns_names"] = dns_names
+
+    result["harvested"] = True
+    result["resource_group"] = row["resource_group"] or result["resource_group"]
+    result["subscription_id"] = row["subscription_id"] or result["subscription_id"]
+    return result
+
+
+def _find_private_endpoint_consumers(
+    conn,
+    subscription_id: str,
+    subnet_id: str,
+    exclude_ids: set[str] | None = None,
+    limit: int = 25,
+) -> list[dict]:
+    """Best-effort discovery of resources placed in a private endpoint's subnet.
+
+    Private endpoints are typically consumed by whatever else lives on the
+    same subnet (VMs, VM scale sets, App Service VNet integration, AKS node
+    pools, etc.), since that's what lets those resources resolve the private
+    DNS record and reach the linked PaaS service privately. This scans other
+    harvested assets in the subscription for a reference to the same subnet
+    ARM ID. Network interfaces are resolved back to their owning VM. Note:
+    NICs are only harvested when they carry a public IP or load-balancer
+    association, so purely internal VMs may not surface here.
+    """
+    if not conn or not subnet_id or not subscription_id:
+        return []
+    exclude = {str(x).strip().lower() for x in (exclude_ids or set()) if x}
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, name, type, resource_group, raw_json
+            FROM provisioned_assets
+            WHERE subscription_id = ?
+              AND raw_json LIKE '%' || ? || '%'
+            LIMIT ?
+            """,
+            (subscription_id, subnet_id, limit * 4),
+        ).fetchall()
+    except Exception:
+        return []
+
+    consumers: list[dict] = []
+    seen: set[str] = set(exclude)
+    for row in rows:
+        row_id = str(row["id"] or "")
+        if not row_id or row_id.lower() in seen:
+            continue
+        row_type = str(row["type"] or "")
+        row_type_lc = row_type.lower()
+        if "privateendpoints" in row_type_lc:
+            continue
+
+        if "networkinterfaces" in row_type_lc:
+            # Resolve NIC matches back to the VM that owns them; a bare NIC
+            # entry isn't useful for a "who's using this" list.
+            try:
+                nic_raw = json.loads(row["raw_json"] or "{}") if isinstance(row["raw_json"], str) else (row["raw_json"] or {})
+            except Exception:
+                nic_raw = {}
+            vm_id = str(((nic_raw.get("_extra") or {}) if isinstance(nic_raw, dict) else {}).get("parent_resource_id") or "").strip()
+            if not vm_id or vm_id.lower() in seen:
+                continue
+            vm_row = conn.execute(
+                "SELECT id, name, type, resource_group FROM provisioned_assets WHERE id = ? LIMIT 1",
+                (vm_id,),
+            ).fetchone()
+            if not vm_row:
+                continue
+            seen.add(vm_id.lower())
+            consumers.append({
+                "id": vm_row["id"],
+                "name": vm_row["name"],
+                "type": vm_row["type"],
+                "type_label": _friendly_type(vm_row["type"]),
+                "resource_group": vm_row["resource_group"],
+                "icon_path": _resource_icon_path(vm_row["type"] or ""),
+            })
+        else:
+            seen.add(row_id.lower())
+            consumers.append({
+                "id": row["id"],
+                "name": row["name"],
+                "type": row_type,
+                "type_label": _friendly_type(row_type),
+                "resource_group": row["resource_group"],
+                "icon_path": _resource_icon_path(row_type or ""),
+            })
+
+        if len(consumers) >= limit:
+            break
+    return consumers
 
 
 def _resolve_associated_vnet_subnet(
@@ -22110,7 +22549,7 @@ _SUBSCRIPTION_DIAGRAM_CACHE: dict[str, tuple[float, str, dict]] = {}
 _SUBSCRIPTION_DIAGRAM_CACHE_TTL = 600  # 10 minutes
 # Bump this whenever diagram rendering logic changes (listener icons, pool icons, edge labels, etc.)
 # so the DB cache is automatically invalidated for all subscriptions.
-_DIAGRAM_CODE_VERSION = "v60"  # Surface harvested private endpoints in subscription diagrams
+_DIAGRAM_CODE_VERSION = "v65"  # Label synthetic private-link associations explicitly
 
 
 def _subscription_diagram_cache_signature(conn, sub_id: str) -> tuple[str | None, tuple[str, str] | None]:
@@ -23395,8 +23834,10 @@ def _get_icon_path(resource_type: str) -> str | None:
             "microsoft.network/applicationgatewaylisteners/http": "azurerm_app_gateway_listener_http",
             "microsoft.network/applicationgatewaylisteners/https": "azurerm_app_gateway_listener_https",
             "microsoft.network/frontdoors": "azurerm_front_door_and_cdn_profiles",
-            "microsoft.cdn/profiles": "azurerm_cdn_profile",
+            "microsoft.cdn/profiles": "azurerm_cdn",
+            "microsoft.cdn/profiles/endpoints": "azurerm_cdn_frontdoor_endpoint",
             "microsoft.cdn/profiles/afdendpoints": "azurerm_cdn_frontdoor_endpoint",
+            "microsoft.kusto/clusters": "azurerm_kusto_cluster",
             "microsoft.network/trafficmanagerprofiles": "azurerm_traffic_manager",
             "microsoft.network/azurefirewalls": "azurerm_firewall",
             "microsoft.network/firewallpolicies": "azurerm_firewall_policy",
@@ -23422,6 +23863,7 @@ def _get_icon_path(resource_type: str) -> str | None:
             "microsoft.storage/storageaccounts/blobservices/containers": "azurerm_storage_container",
             "microsoft.sql/servers/databases": "azurerm_sql_database",
             "microsoft.network/virtualnetworks": "azurerm_virtual_network",
+            "microsoft.network/privateendpoints": "azurerm_private_endpoint",
             "microsoft.network/networksecuritygroups": "azurerm_network_security_group",
             "microsoft.network/routetables": "azurerm_route_table",
             "microsoft.network/publicipaddresses": "azurerm_public_ip",
@@ -23444,6 +23886,7 @@ def _get_icon_path(resource_type: str) -> str | None:
             "microsoft.appconfiguration/configurationstores": "azurerm_app_configuration",
             "microsoft.insights/components": "azurerm_app_insights",
             "microsoft.search/searchservices": "azurerm_search",
+            "microsoft.databricks/workspaces": "azurerm_databricks",
         }
         
         # Normalize resource type
@@ -23556,6 +23999,7 @@ def _get_icon_class(resource_type: str) -> str:
             "microsoft.certificateregistration/certificateorders": "azurerm_app_service_certificate_order",
             "microsoft.web/hostingenvironments": "azurerm_app_service_environment",
             "microsoft.network/virtualnetworks": "azurerm_virtual_network",
+            "microsoft.network/privateendpoints": "azurerm_private_endpoint",
             "microsoft.network/networksecuritygroups": "azurerm_network_security_group",
             "microsoft.network/publicipaddresses": "azurerm_public_ip",
             "microsoft.network/loadbalancers": "azurerm_load_balancer",
@@ -23577,6 +24021,7 @@ def _get_icon_class(resource_type: str) -> str:
             "microsoft.appconfiguration/configurationstores": "azurerm_app_configuration",
             "microsoft.insights/components": "azurerm_app_insights",
             "microsoft.search/searchservices": "azurerm_search",
+            "microsoft.databricks/workspaces": "azurerm_databricks",
         }
         
         rtype_lower = (resource_type or "").lower()
@@ -26399,8 +26844,8 @@ def _build_ingress_diagram(
             private_endpoint_keys.add(key)
             private_endpoint_items.append(
                 {
-                    "name": connection_name or _short_name(connection_id),
-                    "label": connection_name or _short_name(connection_id),
+                    "name": connection_name or _short_name(connection_id.rstrip("/").rsplit("/", 1)[-1]),
+                    "label": connection_name or _short_name(connection_id.rstrip("/").rsplit("/", 1)[-1]),
                     "type": "Microsoft.Network/privateEndpoints",
                     "arm_type": "microsoft.network/privateendpoints",
                     "rg": row[2] or "",
@@ -26410,6 +26855,7 @@ def _build_ingress_diagram(
                     "exposure_class": "private",
                     "raw_json": json.dumps(connection),
                     "routing_targets": [],
+                    "private_endpoint_label": "Private Link",
                     "private_endpoint_target_id": row[6] if len(row) > 6 else None,
                     "private_endpoint_target_name": row[0] if row else "",
                     "private_endpoint_target_rg": row[2] if len(row) > 2 else "",
@@ -26431,8 +26877,8 @@ def _build_ingress_diagram(
                 continue
             private_endpoint_keys.add(key)
             private_endpoint_items.append({
-                "name": connection_name or _short_name(connection_id),
-                "label": connection_name or _short_name(connection_id),
+                "name": connection_name or _short_name(connection_id.rstrip("/").rsplit("/", 1)[-1]),
+                "label": connection_name or _short_name(connection_id.rstrip("/").rsplit("/", 1)[-1]),
                 "type": "Microsoft.Network/privateEndpoints",
                 "arm_type": "microsoft.network/privateendpoints",
                 "rg": target.get("rg") or "",
@@ -26442,11 +26888,113 @@ def _build_ingress_diagram(
                 "exposure_class": "private",
                 "raw_json": json.dumps(connection),
                 "routing_targets": [],
+                "private_endpoint_label": "Private Link",
                 "private_endpoint_target_id": target.get("id"),
                 "private_endpoint_target_name": target.get("name"),
                 "private_endpoint_target_rg": target.get("rg"),
             })
     private_endpoint_relationships.extend(private_endpoint_items)
+
+    # A target can be hidden inside a type group (for example, a storage
+    # account grouped with hundreds of other accounts). Private Link edges
+    # must still terminate at a concrete resource, so add a relationship-only
+    # target node when the target is not already rendered individually.
+    rendered_resource_ids = {
+        str(item.get("id") or "").strip().lower()
+        for item in [*shown_entry, *shown_api, *shown_backend, *shown_data]
+        if item.get("id")
+    }
+    row_by_id = {
+        str(row[6] or "").strip().lower(): row
+        for row in rows
+        if len(row) > 6 and str(row[6] or "").strip()
+    }
+    private_target_ids = {
+        str(item.get("private_endpoint_target_id") or "").strip().lower()
+        for item in private_endpoint_relationships
+        if item.get("private_endpoint_target_id")
+    }
+    for target_id in private_target_ids:
+        if not target_id or target_id in rendered_resource_ids:
+            continue
+        target_row = row_by_id.get(target_id)
+        if not target_row:
+            continue
+        target_type = str(target_row[1] or "")
+        target_type_lower = target_type.lower()
+        target_name = str(target_row[0] or "").strip()
+        target_rg = str(target_row[2] or "").strip()
+        if not target_name:
+            continue
+        target_item = {
+            "name": target_name,
+            "label": target_name,
+            "type": target_type,
+            "arm_type": target_type,
+            "fqdn": target_row[3] if len(target_row) > 3 else None,
+            "public": _shared_render_exposure_class(
+                target_type,
+                target_row[4] if len(target_row) > 4 else 0,
+                target_row[9] if len(target_row) > 9 else 0,
+                target_row[12] if len(target_row) > 12 else None,
+            ) == "direct_public",
+            "exposure_class": _shared_render_exposure_class(
+                target_type,
+                target_row[4] if len(target_row) > 4 else 0,
+                target_row[9] if len(target_row) > 9 else 0,
+                target_row[12] if len(target_row) > 12 else None,
+            ),
+            "rg": target_rg,
+            "id": target_row[6],
+            "raw_json": target_row[12] if len(target_row) > 12 else None,
+            "is_restricted": bool(target_row[9]) if len(target_row) > 9 else False,
+            "routing_targets": [],
+            "private_endpoint_target": True,
+        }
+        if any(
+            marker in target_type_lower
+            for marker in (
+                "storage/",
+                "sql/",
+                "documentdb/",
+                "keyvault/",
+                "servicebus/",
+                "eventhub/",
+                "cache/redis",
+                "search/search",
+                "appconfiguration/",
+            )
+        ):
+            target_item["type"] = (
+                "Storage"
+                if "storage/" in target_type_lower
+                else "SQL"
+                if "sql/" in target_type_lower
+                else "Cosmos DB"
+                if "documentdb/" in target_type_lower
+                else "Key Vault"
+                if "keyvault/" in target_type_lower
+                else "Service Bus"
+                if "servicebus/" in target_type_lower
+                else "Event Hub"
+                if "eventhub/" in target_type_lower
+                else "Redis Cache"
+                if "cache/redis" in target_type_lower
+                else "AI Search"
+                if "search/search" in target_type_lower
+                else "App Config"
+            )
+            target_item["label"] = target_name
+            target_item["is_group"] = False
+            target_item["count"] = 1
+            target_item["resources"] = [{"rg": target_rg, "name": target_name}]
+            shown_data.append(target_item)
+        else:
+            target_item["is_group"] = False
+            target_item["count"] = 1
+            shown_backend.append(target_item)
+        rendered_resource_ids.add(target_id)
+
     # Standalone Private Endpoint assets carry the authoritative destination
     # in _extra.linked_resource_id. Materialise that relationship as well,
     # since the destination service may not expose the reverse connection list.
@@ -27414,6 +27962,11 @@ def _build_ingress_diagram(
 
     # Private Link is a network relationship, not application traffic. Keep it
     # cyan and dashed so it is visually distinct from ingress/data-flow edges.
+    # Track which data-store nodes are reached via a private endpoint so the
+    # explicit backend→data-store block below can skip the redundant generic
+    # protocol arrow (e.g. "HTTPS") into the same node — the Private Link
+    # arrow already conveys that the connection exists and is private.
+    private_link_target_node_ids: set[str] = set()
     for endpoint in private_endpoint_relationships:
         endpoint_nid = _get_node_id(endpoint)
         target_id = str(endpoint.get("private_endpoint_target_id") or "").strip().lower()
@@ -27422,7 +27975,7 @@ def _build_ingress_diagram(
         target_item = next(
             (
                 candidate
-                for candidate in [*shown_data, *shown_backend]
+                for candidate in [*shown_entry, *shown_api, *shown_backend, *shown_data]
                 if (
                     target_id
                     and str(candidate.get("id") or "").strip().lower() == target_id
@@ -27435,8 +27988,10 @@ def _build_ingress_diagram(
             None,
         )
         if target_item:
+            target_node_id = _get_node_id(target_item)
+            private_link_target_node_ids.add(target_node_id)
             _add_link(
-                f'    {endpoint_nid} -->|"{_short_name(endpoint.get("name") or "Private Link")}"| {_get_node_id(target_item)}',
+                f'    {endpoint_nid} -->|"{_short_name(endpoint.get("name") or endpoint.get("private_endpoint_label") or "Private Link")}"| {target_node_id}',
                 "#38bdf8",
                 dasharray="4,2",
             )
@@ -29260,6 +29815,11 @@ def _build_ingress_diagram(
     for source_item in shown_backend + shown_api:
         source_node_id = _get_node_id(source_item)
         for target_node_id in _explicit_data_reference_targets(source_item):
+            # A Private Link arrow already exists into this data store, so a
+            # second generic protocol arrow (e.g. "HTTPS") would just be a
+            # redundant duplicate of the same connection.
+            if target_node_id in private_link_target_node_ids:
+                continue
             edge = (source_node_id, target_node_id)
             if edge in explicit_data_edges:
                 continue

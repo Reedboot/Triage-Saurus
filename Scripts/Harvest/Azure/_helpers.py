@@ -356,6 +356,11 @@ def classify_network_access(
             ip_rules=effective_ip_rules,
             vnet_rules=effective_vnet_rules,
         ), "ip_restricted"
+    if default_action and default_action.lower() == "allow":
+        # When defaultAction is explicitly "Allow", any configured ipRules/
+        # virtualNetworkRules are vestigial and not enforced by Azure - all
+        # networks can reach the resource. Do not report this as restricted.
+        return (1 if endpoint_present else 1), 0, [], "direct_public"
     if effective_ip_rules or effective_vnet_rules:
         return 0, 1, extract_ip_restrictions(
             network_acls=acls,

@@ -33,12 +33,14 @@ from __future__ import annotations
 import argparse
 import inspect
 import json
+import shlex
 import shutil
 import sqlite3
 import subprocess
 import sys
 import threading
 import time
+import traceback
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -204,6 +206,10 @@ _PROVIDER_RESOURCE_NAMESPACE_HINTS = {
     "Search Services": ("microsoft.search/searchservices",),
     "Kusto Clusters": ("microsoft.kusto/clusters",),
 }
+# Resource Graph is an optimization, not the source of truth. Storage account
+# inventory is cheap and authoritative through `az storage account list`, so
+# always run it even when Graph has not indexed the provider yet.
+_PROVIDERS_REQUIRING_DIRECT_CHECK = {"Storage"}
 
 HarvestOutput = list[dict[str, Any]] | StagedRows
 ProviderFn = Callable[..., HarvestOutput]
@@ -222,6 +228,66 @@ _ANSI_RED = "\033[31m"
 _ANSI_CYAN = "\033[36m"
 _ANSI_BLUE = "\033[34m"
 _POST_HARVEST_CONNECTION_LOCK = threading.Lock()
+_POST_HARVEST_DB_LOCK = threading.Lock()
+
+
+class _TeeStream:
+    """Write harvest output to the terminal and a per-run log file."""
+
+    def __init__(self, console: Any, log_file: Any) -> None:
+        self._console = console
+        self._log_file = log_file
+        self._lock = threading.Lock()
+
+    def write(self, value: str) -> int:
+        with self._lock:
+            console_count = self._console.write(value)
+            self._log_file.write(value)
+            self._log_file.flush()
+        return console_count
+
+    def flush(self) -> None:
+        with self._lock:
+            self._console.flush()
+            self._log_file.flush()
+
+    def isatty(self) -> bool:
+        return self._console.isatty()
+
+    @property
+    def encoding(self) -> str:
+        return getattr(self._console, "encoding", "utf-8")
+
+
+def _start_harvest_log() -> tuple[Path, Any, Any, Any]:
+    log_dir = REPO_ROOT / "Output" / "Logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
+    log_path = log_dir / f"harvest_{timestamp}.log"
+    log_file = log_path.open("w", encoding="utf-8", buffering=1)
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    sys.stdout = _TeeStream(original_stdout, log_file)
+    sys.stderr = _TeeStream(original_stderr, log_file)
+    log_file.write(f"Harvest started: {datetime.now().astimezone().isoformat()}\n")
+    log_file.write(f"Command: {shlex.join(sys.argv)}\n")
+    log_file.flush()
+    print(f"[harvest] Log: {log_path}")
+    return log_path, log_file, original_stdout, original_stderr
+
+
+def _finish_harvest_log(
+    log_file: Any,
+    original_stdout: Any,
+    original_stderr: Any,
+) -> None:
+    try:
+        log_file.write(f"Harvest finished: {datetime.now().astimezone().isoformat()}\n")
+        log_file.flush()
+    finally:
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
+        log_file.close()
 
 
 def _color(text: str, color: str) -> str:
@@ -276,7 +342,12 @@ def _run_post_harvest_jobs(
             with _POST_HARVEST_CONNECTION_LOCK:
                 worker_conn = _open_harvest_connection(Path(db_path))
             try:
-                result = job(worker_conn, subscription_id, dry_run)
+                # Each enrichment owns its connection and performs schema DDL and
+                # multiple transactions, so SQLite cannot safely run these jobs'
+                # database phases concurrently. The Azure fetches inside each job
+                # remain parallel, while this lock prevents writer collisions.
+                with _POST_HARVEST_DB_LOCK:
+                    result = job(worker_conn, subscription_id, dry_run)
                 print(f"  [{label}] completed in {time.perf_counter() - started:.2f}s", flush=True)
                 return label, result
             finally:
@@ -383,7 +454,7 @@ def _gate_provider_specs_by_resource_graph(
     skipped: list[str] = []
     for label, provider_fn in provider_specs:
         hints = _PROVIDER_RESOURCE_NAMESPACE_HINTS.get(label)
-        if not hints or any(
+        if label in _PROVIDERS_REQUIRING_DIRECT_CHECK or not hints or any(
             resource_type == hint or resource_type.startswith(hint)
             for resource_type in resource_types
             for hint in hints
@@ -1181,8 +1252,8 @@ def harvest_subscription(
         print("  [post-harvest] skipped by request")
     else:
         print(
-            f"  [post-harvest] running independent routing enrichments in parallel "
-            f"({post_harvest_workers} workers)...",
+            f"  [post-harvest] running independent routing enrichments "
+            f"({post_harvest_workers} workers; SQLite writes serialized)...",
             flush=True,
         )
         post_jobs = [
@@ -1325,7 +1396,7 @@ def _harvest_subscription_task(
 # Entry point
 # ---------------------------------------------------------------------------
 
-def main() -> None:
+def _run_harvest() -> None:
     parser = argparse.ArgumentParser(
         description="Harvest live Azure cloud assets into Triage-Saurus cozo.db"
     )
@@ -1488,6 +1559,22 @@ def main() -> None:
     print(f"\n[harvest] Done. {grand_total} assets across {len(target_subs)} subscription(s).")
     if not args.dry_run:
         print(f"[harvest] Stored in: {db_path}")
+
+
+def main() -> None:
+    _, log_file, original_stdout, original_stderr = _start_harvest_log()
+    try:
+        _run_harvest()
+    except KeyboardInterrupt:
+        print("\n[harvest] Interrupted by user")
+        raise
+    except SystemExit:
+        raise
+    except BaseException:
+        traceback.print_exc()
+        raise
+    finally:
+        _finish_harvest_log(log_file, original_stdout, original_stderr)
 
 
 if __name__ == "__main__":

@@ -18,6 +18,12 @@ Keep triage outputs consistent across findings, knowledge, summaries, and rules.
 - Rules must be portable across repositories of the same technology.
 - If a finding cannot be expressed as a reusable rule, document it directly in the finding instead of forcing it into `Rules/`.
 
+## Cross-platform Python and WSL
+- Python files must use LF line endings so executable scripts run correctly under WSL.
+- Use `#!/usr/bin/env python3` only for Python files intended to be executed directly; importable modules should not receive a shebang unnecessarily.
+- Do not create Python files with CRLF line endings. A CRLF shebang can produce `/usr/bin/env: 'python3\r': No such file or directory` under WSL.
+- Preserve the repository `.gitattributes` rule `*.py text eol=lf` when adding or editing Python files.
+
 ## Rule creation checks
 - Use generic metavariables or constrained regex.
 - Avoid project-specific names, tenants, hostnames, or subscription IDs.

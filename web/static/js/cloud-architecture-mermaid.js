@@ -997,9 +997,11 @@ const ARM_TO_ICON_CLASS = {
   "microsoft.network/applicationgatewaylisteners/http": "azurerm_app_gateway_listener_http",
   "microsoft.network/applicationgatewaylisteners/https": "azurerm_app_gateway_listener_https",
   "microsoft.network/frontdoors": "azurerm_front_door_and_cdn_profiles",
-  "microsoft.cdn/profiles": "azurerm_cdn_profile",
+  "microsoft.cdn/profiles": "azurerm_cdn",
+  "microsoft.cdn/profiles/endpoints": "azurerm_cdn_frontdoor_endpoint",
   "microsoft.cdn/profiles/afdendpoints": "azurerm_front_door_and_cdn_profiles",
   "microsoft.cdn/profiles/cdndeliveryrules": "azurerm_front_door_and_cdn_profiles",
+  "microsoft.kusto/clusters": "azurerm_kusto_cluster",
   "microsoft.compute/virtualmachinescalesets": "azurerm_vm_scale_sets",
   "microsoft.managedidentity/userassignedidentities": "azurerm_identity_governance",
   "microsoft.operationalinsights/workspaces": "azurerm_log_analytics",
@@ -2961,6 +2963,113 @@ function isApimBackendTargetDetails(data) {
   return typeText.includes("apim backend target") || typeText.includes("apim backend pool");
 }
 
+function isPrivateEndpointDetails(data) {
+  const typeText = String(firstNonEmpty(data?.type_label, data?.type, data?.resourceType, "")).toLowerCase();
+  return typeText.includes("private endpoint") || typeText.includes("privateendpoints") ||
+    Array.isArray(data?.network?.managed_private_endpoints) && data.network.managed_private_endpoints.length > 0;
+}
+
+function _renderConnectionEndpointCard(resource) {
+  if (!resource || typeof resource !== "object") {
+    return '<div class="cloud-arch-modal-empty" style="margin:0;">Unknown — not enough harvested data to resolve this side of the connection.</div>';
+  }
+  const name = escapeHtml(normalizeModalText(firstNonEmpty(resource.name, resource.label, "Unknown")));
+  const type = firstNonEmpty(resource.type_label, resource.type);
+  const rg = firstNonEmpty(resource.resource_group, resource.resourceGroup);
+  const details = [
+    type ? `<span style="color:var(--text-muted);">${escapeHtml(normalizeModalText(type))}</span>` : "",
+    rg ? `<span style="color:var(--text-muted);">RG: ${escapeHtml(normalizeModalText(rg))}</span>` : "",
+  ].filter(Boolean).join(" • ");
+  const unharvestedNote = resource.harvested === false
+    ? '<div style="color:var(--text-muted);font-size:0.78rem;margin-top:4px;">⚠ Not harvested — inferred from resource ID only.</div>'
+    : "";
+  return `<div><strong>${name}</strong>${details ? `<div style="font-size:0.82rem;">${details}</div>` : ""}${unharvestedNote}</div>`;
+}
+
+function buildPrivateEndpointConnectionsSection(data) {
+  const managedEndpoints = Array.isArray(data?.network?.managed_private_endpoints)
+    ? data.network.managed_private_endpoints.filter(Boolean)
+    : [];
+  const connectsFrom = data?.connects_from && typeof data.connects_from === "object" ? data.connects_from : null;
+  const connectsTo = data?.connects_to && typeof data.connects_to === "object" ? data.connects_to : null;
+  const consumers = Array.isArray(data?.known_consumers)
+    ? data.known_consumers.filter(Boolean)
+    : Array.isArray(connectsFrom?.consumers)
+      ? connectsFrom.consumers.filter(Boolean)
+      : [];
+
+  if (!connectsFrom && !connectsTo && !consumers.length && !managedEndpoints.length) return "";
+  if (managedEndpoints.length && !connectsFrom && !connectsTo && !consumers.length) {
+    return `
+      <div class="cloud-arch-modal-section">
+        <div class="cloud-arch-modal-section-title">
+          <span class="cloud-arch-modal-section-icon">🔗</span>
+          Managed Private Link Connections
+        </div>
+        <div class="cloud-arch-modal-subtitle" style="margin-bottom:10px;">
+          Private endpoints used by this Data Factory managed VNet.
+        </div>
+        <div class="cloud-arch-modal-grid">
+          ${managedEndpoints.map((endpoint) => {
+            const target = firstNonEmpty(endpoint.target_resource_id, "Unknown target");
+            const status = firstNonEmpty(endpoint.connection_state, "Unknown");
+            const vnet = firstNonEmpty(endpoint.managed_virtual_network, "Unknown");
+            const groupId = firstNonEmpty(endpoint.group_id, "Unknown");
+            const fqdn = Array.isArray(endpoint.fqdns) ? endpoint.fqdns.filter(Boolean).join(", ") : "";
+            return `
+              <div class="cloud-arch-modal-field cloud-arch-modal-field--full">
+                <div class="cloud-arch-modal-field-label">${escapeHtml(normalizeModalText(firstNonEmpty(endpoint.name, "Managed private endpoint")))}</div>
+                <div class="cloud-arch-modal-field-value">
+                  <strong>Target:</strong> <code>${escapeHtml(normalizeModalText(target))}</code><br/>
+                  <strong>Managed VNet:</strong> ${escapeHtml(normalizeModalText(vnet))}<br/>
+                  <strong>Group ID:</strong> ${escapeHtml(normalizeModalText(groupId))}<br/>
+                  <strong>Connection:</strong> ${escapeHtml(normalizeModalText(status))}
+                  ${fqdn ? `<br/><strong>FQDN:</strong> ${escapeHtml(normalizeModalText(fqdn))}` : ""}
+                </div>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </div>
+    `;
+  }
+
+  const fromVnetSubnet = [connectsFrom?.vnet, connectsFrom?.subnet].filter(Boolean).join(" / ");
+  const fromCard = `
+    <div>
+      ${fromVnetSubnet ? `<div style="margin-bottom:6px;"><strong>${escapeHtml(fromVnetSubnet)}</strong></div>` : ""}
+      ${consumers.length
+        ? `<ul class="cloud-arch-modal-list" style="margin:0;">${consumers
+          .map((consumer) => `<li class="cloud-arch-modal-list-item"><strong>${escapeHtml(normalizeModalText(firstNonEmpty(consumer.name, consumer.label, "—")))}</strong>${consumer.type_label || consumer.type ? ` • <span style="color:var(--text-muted);">${escapeHtml(normalizeModalText(consumer.type_label || consumer.type))}</span>` : ""}${consumer.resource_group ? ` • <span style="color:var(--text-muted);">${escapeHtml(normalizeModalText(consumer.resource_group))}</span>` : ""}</li>`)
+          .join("")}</ul>`
+        : `<div class="cloud-arch-modal-empty" style="margin:0;">${fromVnetSubnet ? "No known resources were found consuming this endpoint in that subnet." : "No connecting subnet could be resolved for this endpoint."}</div>`}
+      ${connectsFrom?.note ? `<div style="color:var(--text-muted);font-size:0.78rem;margin-top:6px;">ℹ ${escapeHtml(connectsFrom.note)}</div>` : ""}
+    </div>
+  `;
+
+  return `
+    <div class="cloud-arch-modal-section">
+      <div class="cloud-arch-modal-section-title">
+        <span class="cloud-arch-modal-section-icon">🔗</span>
+        Private Link Connection
+      </div>
+      <div class="cloud-arch-modal-subtitle" style="margin-bottom:10px;">
+        Which resources reach through this private endpoint, and what it connects to.
+      </div>
+      <div class="cloud-arch-modal-grid">
+        <div class="cloud-arch-modal-field cloud-arch-modal-field--full">
+          <div class="cloud-arch-modal-field-label">Connection From (known consumers)</div>
+          <div class="cloud-arch-modal-field-value">${fromCard}</div>
+        </div>
+        <div class="cloud-arch-modal-field cloud-arch-modal-field--full">
+          <div class="cloud-arch-modal-field-label">Connection To</div>
+          <div class="cloud-arch-modal-field-value">${_renderConnectionEndpointCard(connectsTo)}</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function isKubernetesServiceDetails(data) {
   const typeText = String(firstNonEmpty(data?.type_label, data?.type, data?.resourceType, "")).toLowerCase();
   return typeText.includes("kubernetes service") || typeText.includes("microsoft.kubernetes/services");
@@ -3563,6 +3672,16 @@ function renderModalContent(data) {
       icon: "",
       fields: [],
       __rawHtml: apimBackendUsageSection,
+    });
+  }
+
+  const privateEndpointConnectionsSection = isPrivateEndpointDetails(data) ? buildPrivateEndpointConnectionsSection(data) : "";
+  if (privateEndpointConnectionsSection) {
+    sections.push({
+      title: "",
+      icon: "",
+      fields: [],
+      __rawHtml: privateEndpointConnectionsSection,
     });
   }
 
