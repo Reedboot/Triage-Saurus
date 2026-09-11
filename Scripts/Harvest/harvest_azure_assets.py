@@ -333,8 +333,18 @@ def _run_post_harvest_jobs(
     def run(label: str, job: Callable[[sqlite3.Connection, str, bool], Any]) -> tuple[str, Any]:
         started = time.perf_counter()
         try:
+            split = getattr(job, "_post_harvest_split", None)
+            collected = None
+            if split:
+                collector, _persister = split
+                # Collection deliberately happens before acquiring the SQLite
+                # writer lock; Azure waits must not block other enrichments.
+                collected = collector(subscription_id, dry_run=dry_run)
             if db_path in ("", ":memory:"):
-                result = job(conn, subscription_id, dry_run)
+                if split:
+                    result = split[1](subscription_id, conn, collected, dry_run=dry_run)
+                else:
+                    result = job(conn, subscription_id, dry_run)
                 print(f"  [{label}] completed in {time.perf_counter() - started:.2f}s", flush=True)
                 return label, result
             # WAL mode initialization briefly needs an exclusive lock. Keep
@@ -343,11 +353,17 @@ def _run_post_harvest_jobs(
                 worker_conn = _open_harvest_connection(Path(db_path))
             try:
                 # Each enrichment owns its connection and performs schema DDL and
-                # multiple transactions, so SQLite cannot safely run these jobs'
-                # database phases concurrently. The Azure fetches inside each job
-                # remain parallel, while this lock prevents writer collisions.
+                # multiple transactions. Only the persistence phase is serialized.
                 with _POST_HARVEST_DB_LOCK:
-                    result = job(worker_conn, subscription_id, dry_run)
+                    if split:
+                        result = split[1](
+                            subscription_id,
+                            worker_conn,
+                            collected,
+                            dry_run=dry_run,
+                        )
+                    else:
+                        result = job(worker_conn, subscription_id, dry_run)
                 print(f"  [{label}] completed in {time.perf_counter() - started:.2f}s", flush=True)
                 return label, result
             finally:
@@ -1256,12 +1272,27 @@ def harvest_subscription(
             f"({post_harvest_workers} workers; SQLite writes serialized)...",
             flush=True,
         )
+        def _post_job(
+            fn: Callable[[str, sqlite3.Connection, bool], Any],
+        ) -> Callable[[sqlite3.Connection, str, bool], Any]:
+            def job(
+                worker_conn: sqlite3.Connection,
+                subscription_id: str,
+                dry_run: bool,
+            ) -> Any:
+                return fn(subscription_id, worker_conn, dry_run)
+
+            split = getattr(fn, "_post_harvest_split", None)
+            if split:
+                job._post_harvest_split = split  # type: ignore[attr-defined]
+            return job
+
         post_jobs = [
-            ("App Gateway Routing", lambda c, s, d: appgw_routing_map.harvest_routing(s, c, dry_run=d)),
-            ("Private DNS", lambda c, s, d: private_dns_map.harvest_private_dns(s, c, dry_run=d)),
-            ("AKS Routes", lambda c, s, d: aks.harvest_routes(s, c, dry_run=d)),
-            ("APIM Routes", lambda c, s, d: apim_routing_map.harvest_routes(s, c, dry_run=d)),
-            ("Function App Triggers", lambda c, s, d: function_apps.harvest_http_triggers(s, c, dry_run=d)),
+            ("App Gateway Routing", _post_job(appgw_routing_map.harvest_routing)),
+            ("Private DNS", _post_job(private_dns_map.harvest_private_dns)),
+            ("AKS Routes", _post_job(aks.harvest_routes)),
+            ("APIM Routes", _post_job(apim_routing_map.harvest_routes)),
+            ("Function App Triggers", _post_job(function_apps.harvest_http_triggers)),
         ]
         post_results = _run_post_harvest_jobs(
             conn, sub_id, dry_run, post_harvest_workers, post_jobs
@@ -1345,6 +1376,7 @@ def harvest_subscription(
 
     if not dry_run and not skip_post_harvest:
         print("  [Mermaid Diagram] precomputing subscription diagram payload...", flush=True)
+        diagram_started = time.perf_counter()
         try:
             conn.commit()
             # Component trace warming is intentionally deferred to the API. It
@@ -1352,9 +1384,15 @@ def harvest_subscription(
             # subscriptions, making harvest appear to hang after this message.
             _precompute_subscription_diagram(sub_id, warm_traces=False)
             precompute_cloud_architecture(REPO_ROOT / "Output" / "Data" / "cozo.db", sub_id)
-            print("  [Mermaid Diagram] payload cached (traces load on demand)")
+            print(
+                "  [Mermaid Diagram] payload cached (traces load on demand) "
+                f"in {time.perf_counter() - diagram_started:.2f}s"
+            )
         except Exception as exc:
-            print(f"  [Mermaid Diagram] FAILED ({exc})")
+            print(
+                f"  [Mermaid Diagram] FAILED ({exc}) "
+                f"after {time.perf_counter() - diagram_started:.2f}s"
+            )
     elif skip_post_harvest:
         print("  [Mermaid Diagram] skipped with post-harvest steps")
 

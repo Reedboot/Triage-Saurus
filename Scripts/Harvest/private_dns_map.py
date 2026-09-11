@@ -237,6 +237,31 @@ def _graph_resource_id(conn: sqlite3.Connection, asset_id: str | None) -> int | 
     return int(row[0]) if row else None
 
 
+def _build_graph_resource_index(conn: sqlite3.Connection) -> dict[str, int]:
+    """Build the resource graph lookup once for a serialized persistence pass."""
+    index: dict[str, int] = {}
+    try:
+        rows = conn.execute(
+            "SELECT id, resource_name, source_file FROM resources ORDER BY id"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return index
+    for row_id, resource_name, source_file in rows:
+        for key in (resource_name, source_file):
+            if key and key not in index:
+                index[str(key)] = int(row_id)
+    return index
+
+
+def _cached_graph_resource_id(
+    asset_id: str | None,
+    resource_index: dict[str, int],
+) -> int | None:
+    if not asset_id:
+        return None
+    return resource_index.get(asset_id) or resource_index.get(asset_id.rsplit("/", 1)[-1])
+
+
 def process_zone(
     zone: dict,
     subscription_id: str,
@@ -247,6 +272,7 @@ def process_zone(
     now: str,
     records_raw: list[dict] | None = None,
     links_raw: list[dict] | None = None,
+    graph_resource_index: dict[str, int] | None = None,
 ) -> dict:
     zone_name = zone["name"]
     rg        = zone["resourceGroup"]
@@ -347,8 +373,12 @@ def process_zone(
             is_apim_backend = rec["record_name"] in apim_backend_fqdns or rec["fqdn"] in apim_backend_fqdns
             # resource_connections is the IaC topology table and requires
             # numeric resources; provisioned_assets IDs are ARM strings.
-            source_graph_id = _graph_resource_id(conn, source_asset_id)
-            target_graph_id = _graph_resource_id(conn, target_asset_id)
+            if graph_resource_index is None:
+                source_graph_id = _graph_resource_id(conn, source_asset_id)
+                target_graph_id = _graph_resource_id(conn, target_asset_id)
+            else:
+                source_graph_id = _cached_graph_resource_id(source_asset_id, graph_resource_index)
+                target_graph_id = _cached_graph_resource_id(target_asset_id, graph_resource_index)
             if source_graph_id is None or target_graph_id is None:
                 skipped_connections += 1
             else:
@@ -463,18 +493,45 @@ def _check_issues(conn: sqlite3.Connection, subscription_id: str) -> None:
 # Reusable harvest entry point (for integration in main subscription harvest)
 # ---------------------------------------------------------------------------
 
-def harvest_private_dns(
+def collect_private_dns(
     subscription_id: str,
-    conn: sqlite3.Connection,
     *,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Harvest private DNS data for one subscription into an existing DB connection."""
+    """Collect private DNS zone payloads without touching SQLite."""
+    zones = list_zones(subscription_id)
+    if not zones:
+        return {
+            "zones": 0,
+            "records": 0,
+            "zone_types": {},
+            "issues_checked": False,
+            "payloads": [],
+        }
+
+    zone_payloads: list[tuple[list[dict], list[dict]]] = []
+    if len(zones) > 1:
+        with ThreadPoolExecutor(max_workers=min(_PRIVATE_DNS_WORKERS, len(zones))) as pool:
+            futures = [pool.submit(_collect_zone_data, zone, subscription_id) for zone in zones]
+            for future in futures:
+                zone_payloads.append(future.result())
+    else:
+        zone_payloads = [_collect_zone_data(zones[0], subscription_id)]
+    return {"zones_data": zones, "payloads": zone_payloads}
+
+
+def persist_private_dns(
+    subscription_id: str,
+    conn: sqlite3.Connection,
+    collected: dict[str, Any],
+    *,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Persist a previously collected private DNS payload."""
     _ensure_schema(conn)
     _ensure_dns_schema(conn)
 
-    now = datetime.now(timezone.utc).isoformat()
-    zones = list_zones(subscription_id)
+    zones = collected.get("zones_data") or []
     if not zones:
         return {
             "zones": 0,
@@ -483,6 +540,7 @@ def harvest_private_dns(
             "issues_checked": False,
         }
 
+    now = datetime.now(timezone.utc).isoformat()
     fqdn_to_asset: dict[str, tuple[str, str]] = {
         row[2]: (row[0], row[1])
         for row in conn.execute(
@@ -504,15 +562,8 @@ def harvest_private_dns(
         # Table may not exist yet in older DBs or partial schema states.
         pass
 
-    zone_payloads: list[tuple[list[dict], list[dict]]] = []
-    if len(zones) > 1:
-        with ThreadPoolExecutor(max_workers=min(_PRIVATE_DNS_WORKERS, len(zones))) as pool:
-            futures = [pool.submit(_collect_zone_data, zone, subscription_id) for zone in zones]
-            for future in futures:
-                zone_payloads.append(future.result())
-    else:
-        zone_payloads = [_collect_zone_data(zones[0], subscription_id)]
-
+    graph_resource_index = _build_graph_resource_index(conn)
+    zone_payloads = collected.get("payloads") or []
     total_records = 0
     zone_types: dict[str, int] = {}
     for zone, (records_raw, links_raw) in zip(zones, zone_payloads):
@@ -528,6 +579,7 @@ def harvest_private_dns(
             now=now,
             records_raw=records_raw,
             links_raw=links_raw,
+            graph_resource_index=graph_resource_index,
         )
         total_records += int(stats.get("record_count", 0))
 
@@ -540,6 +592,23 @@ def harvest_private_dns(
         "zone_types": zone_types,
         "issues_checked": not dry_run,
     }
+
+
+def harvest_private_dns(
+    subscription_id: str,
+    conn: sqlite3.Connection,
+    *,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Harvest private DNS data for one subscription into an existing DB connection."""
+    collected = collect_private_dns(subscription_id)
+    return persist_private_dns(subscription_id, conn, collected, dry_run=dry_run)
+
+
+harvest_private_dns._post_harvest_split = (  # type: ignore[attr-defined]
+    collect_private_dns,
+    persist_private_dns,
+)
 
 
 # ---------------------------------------------------------------------------

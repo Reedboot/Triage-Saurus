@@ -408,22 +408,16 @@ def _az_list_functions(app_name: str, resource_group: str, subscription_id: str)
     raise RuntimeError(last_line[:200])
 
 
-def harvest_http_triggers(
+def collect_http_triggers(
     subscription_id: str,
-    conn: sqlite3.Connection,
+    *,
     dry_run: bool = False,
-) -> int:
-    """Harvest HTTP and Service Bus trigger bindings from Function Apps."""
+) -> dict[str, Any]:
+    """Collect Function App trigger metadata without touching SQLite."""
     apps = az(["functionapp", "list"], subscription_id)
-    if not apps:
-        return 0
-
     now = datetime.now(timezone.utc).isoformat()
-    total = 0
-    servicebus_total = 0
-
     app_jobs: list[tuple[dict[str, Any], str, str, str]] = []
-    for app in apps:
+    for app in apps or []:
         function_app_id = safe_str(app.get("id"))
         function_app_name = safe_str(app.get("name"))
         resource_group = safe_str(app.get("resourceGroup"))
@@ -431,9 +425,6 @@ def harvest_http_triggers(
             continue
         app_jobs.append((app, function_app_id, function_app_name, resource_group))
 
-    # Function metadata collection is read-only and independent per app. Keep
-    # all SQLite work below this phase on the caller's connection and in the
-    # original app order so deletes/upserts retain their existing semantics.
     function_results: list[list[dict[str, Any]] | Exception] = []
     if len(app_jobs) > 1:
         with ThreadPoolExecutor(max_workers=min(_FUNCTION_TRIGGER_WORKERS, len(app_jobs))) as pool:
@@ -454,6 +445,26 @@ def harvest_http_triggers(
                 )
             except Exception as exc:
                 function_results.append(exc)
+
+    return {
+        "apps": app_jobs,
+        "function_results": function_results,
+        "now": now,
+    }
+
+
+def persist_http_triggers(
+    subscription_id: str,
+    conn: sqlite3.Connection,
+    collected: dict[str, Any],
+    dry_run: bool = False,
+) -> int:
+    """Persist previously collected Function App trigger metadata."""
+    total = 0
+    servicebus_total = 0
+    app_jobs = collected.get("apps") or []
+    function_results = collected.get("function_results") or []
+    now = collected.get("now") or datetime.now(timezone.utc).isoformat()
 
     for (app, function_app_id, function_app_name, resource_group), functions_result in zip(
         app_jobs, function_results
@@ -603,3 +614,19 @@ def harvest_http_triggers(
             print(f"SKIPPED ({exc})")
 
     return total + servicebus_total
+
+
+def harvest_http_triggers(
+    subscription_id: str,
+    conn: sqlite3.Connection,
+    dry_run: bool = False,
+) -> int:
+    """Harvest HTTP and Service Bus trigger bindings from Function Apps."""
+    collected = collect_http_triggers(subscription_id)
+    return persist_http_triggers(subscription_id, conn, collected, dry_run=dry_run)
+
+
+harvest_http_triggers._post_harvest_split = (  # type: ignore[attr-defined]
+    collect_http_triggers,
+    persist_http_triggers,
+)

@@ -501,6 +501,7 @@ def process_gateway(
     dry_run: bool,
     now: str,
     gw: dict | None = None,
+    routes: list[dict[str, Any]] | None = None,
 ) -> tuple[int, int]:
     name = gw_stub["name"]
     rg   = gw_stub["resourceGroup"]
@@ -515,7 +516,8 @@ def process_gateway(
     else:
         print(f"    using cached full config...", end=" ", flush=True)
 
-    routes = extract_routes(gw, subscription_id, routing_rules=None)
+    if routes is None:
+        routes = extract_routes(gw, subscription_id, routing_rules=None)
     print(f"{len(routes)} route entries")
 
     experiment_id = f"harvest-{subscription_id}"
@@ -652,6 +654,7 @@ def process_rewrite_rule_sets(
     dry_run: bool,
     now: str,
     gw: dict | None = None,
+    rewrite_sets: list[dict[str, Any]] | None = None,
 ) -> tuple[int, int]:
     name = gw_stub["name"]
     rg   = gw_stub["resourceGroup"]
@@ -666,7 +669,8 @@ def process_rewrite_rule_sets(
     else:
         print(f"    using cached full config...", end=" ", flush=True)
 
-    rewrite_sets = extract_rewrite_rule_sets(gw)
+    if rewrite_sets is None:
+        rewrite_sets = extract_rewrite_rule_sets(gw)
     print(f"{len(rewrite_sets)} rewrite rule set entries")
 
     gw_resource_id = gw.get("id") or gw_stub.get("id")
@@ -729,6 +733,7 @@ def process_waf_policies(
     conn: sqlite3.Connection,
     dry_run: bool,
     now: str,
+    policy_results: list[tuple[dict, dict]] | None = None,
 ) -> int:
     print(f"\n  [waf] Harvesting WAF policies...")
 
@@ -741,13 +746,15 @@ def process_waf_policies(
         if pol_name:
             gw_waf_map.setdefault(pol_name, []).append(gw["name"])
 
-    policies = list_waf_policies(subscription_id)
-    print(f"    found {len(policies)} WAF policies", end=" ", flush=True)
-
     count = 0
     unconfigured = []
-    policy_results: list[tuple[dict, dict]] = []
-    if policies:
+    if policy_results is None:
+        policies = list_waf_policies(subscription_id)
+        print(f"    found {len(policies)} WAF policies", end=" ", flush=True)
+        policy_results = []
+    else:
+        print(f"    found {len(policy_results)} WAF policies", end=" ", flush=True)
+    if policy_results == [] and "policies" in locals() and policies:
         max_workers = min(_APPGW_FETCH_WORKERS, len(policies))
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {
@@ -834,39 +841,16 @@ def process_waf_policies(
 # Public harvest entry point
 # ---------------------------------------------------------------------------
 
-def harvest_routing(
+def collect_routing(
     subscription_id: str,
-    conn: sqlite3.Connection,
+    *,
     dry_run: bool = False,
-) -> tuple[int, int, int, int]:
-    """Harvest App Gateway listener→backend routing rules, rewrites, and WAF policies.
-
-    Returns (routing_rules, rewrite_rule_sets, rewrite_rules, waf_policies).
-    """
-    started = time.perf_counter()
-    _ensure_appgw_schema(conn)
-
+) -> dict[str, Any]:
+    """Collect App Gateway routing, rewrite, and WAF payloads without SQLite."""
     gateways = list_appgw(subscription_id)
     if not gateways:
-        print("  No Application Gateways found — skipping (0.00s)")
-        return 0, 0, 0, 0
+        return {"gateways": [], "gateway_results": [], "policies": []}
 
-    total_rules = 0
-    total_rewrite_sets = 0
-    total_rewrite_rules = 0
-    total_waf = 0
-    now = datetime.now(timezone.utc).isoformat()
-
-    # Build FQDN → asset map for cross-referencing backend pools.
-    fqdn_to_asset: dict[str, tuple[str, str, str | None]] = {
-        (normalize_host_key(row[3]) or row[3].lower().rstrip(".")): (row[0], row[1], row[2])
-        for row in conn.execute(
-            "SELECT id, name, type, fqdn FROM provisioned_assets WHERE subscription_id = ? AND fqdn IS NOT NULL",
-            (subscription_id,),
-        ).fetchall()
-    }
-
-    full_gateways = []
     gateway_results: list[tuple[dict, dict, float]] = []
     max_workers = min(_APPGW_FETCH_WORKERS, len(gateways))
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -892,34 +876,111 @@ def harvest_routing(
                 continue
             gateway_results.append((gw_stub, gw, gateway_started))
 
+    full_gateways = [gw for _, gw, _ in gateway_results]
+    gateway_payloads = []
     for gw_stub, gw, gateway_started in gateway_results:
-        full_gateways.append(gw)
-        rules, _connections = process_gateway(
-            gw_stub, subscription_id, conn, fqdn_to_asset, dry_run, now, gw=gw
-        )
-        total_rules += rules
-        rewrite_sets, rewrite_rules = process_rewrite_rule_sets(
-            gw_stub, subscription_id, conn, dry_run, now, gw=gw
-        )
-        total_rewrite_sets += rewrite_sets
-        total_rewrite_rules += rewrite_rules
+        gateway_payloads.append({
+            "stub": gw_stub,
+            "gateway": gw,
+            "routes": extract_routes(gw, subscription_id, routing_rules=None),
+            "rewrite_sets": extract_rewrite_rule_sets(gw),
+        })
         print(
             f"    [appgw-routing] {gw_stub['name']} gathered in "
             f"{time.perf_counter() - gateway_started:.2f}s "
-            f"({rules} routes, {rewrite_sets} rewrite set(s), {rewrite_rules} rewrite rule(s))",
+            f"({len(gateway_payloads[-1]['routes'])} routes, "
+            f"{len(gateway_payloads[-1]['rewrite_sets'])} rewrite set(s))",
             flush=True,
         )
 
+    policies = list_waf_policies(subscription_id)
+    policy_results: list[tuple[dict, dict]] = []
+    if policies:
+        with ThreadPoolExecutor(max_workers=min(_APPGW_FETCH_WORKERS, len(policies))) as pool:
+            futures = {
+                pool.submit(show_waf_policy, p["name"], p["resourceGroup"], subscription_id): p
+                for p in policies
+            }
+            for future in as_completed(futures):
+                stub = futures[future]
+                try:
+                    policy_results.append((stub, future.result() or stub))
+                except Exception:
+                    policy_results.append((stub, stub))
+    return {
+        "gateways": full_gateways,
+        "gateway_payloads": gateway_payloads,
+        "policies": policy_results,
+    }
+
+
+def persist_routing(
+    subscription_id: str,
+    conn: sqlite3.Connection,
+    collected: dict[str, Any],
+    *,
+    dry_run: bool = False,
+) -> tuple[int, int, int, int]:
+    """Persist previously collected App Gateway routing payloads."""
+    started = time.perf_counter()
+    _ensure_appgw_schema(conn)
+    gateway_payloads = collected.get("gateway_payloads") or []
+    if not gateway_payloads:
+        print("  No Application Gateways found — skipping (0.00s)")
+        return 0, 0, 0, 0
+    fqdn_to_asset = {
+        (normalize_host_key(row[3]) or row[3].lower().rstrip(".")): (row[0], row[1], row[2])
+        for row in conn.execute(
+            "SELECT id, name, type, fqdn FROM provisioned_assets WHERE subscription_id = ? AND fqdn IS NOT NULL",
+            (subscription_id,),
+        ).fetchall()
+    }
+    now = datetime.now(timezone.utc).isoformat()
+    total_rules = total_rewrite_sets = total_rewrite_rules = 0
+    for payload in gateway_payloads:
+        rules, _connections = process_gateway(
+            payload["stub"], subscription_id, conn, fqdn_to_asset, dry_run, now,
+            gw=payload["gateway"], routes=payload["routes"],
+        )
+        total_rules += rules
+        rewrite_sets, rewrite_rules = process_rewrite_rule_sets(
+            payload["stub"], subscription_id, conn, dry_run, now,
+            gw=payload["gateway"], rewrite_sets=payload["rewrite_sets"],
+        )
+        total_rewrite_sets += rewrite_sets
+        total_rewrite_rules += rewrite_rules
     if total_rules == 0:
         print("  [warn] no App Gateway routing rows were harvested; check routingRules/requestRoutingRules coverage")
-
-    total_waf = process_waf_policies(subscription_id, full_gateways, conn, dry_run, now)
+    total_waf = process_waf_policies(
+        subscription_id, collected.get("gateways") or [], conn, dry_run, now,
+        policy_results=collected.get("policies"),
+    )
     print(
         f"    [appgw-routing] completed in {time.perf_counter() - started:.2f}s "
-        f"({len(gateway_results)} gateway(s), {total_waf} WAF polic{'y' if total_waf == 1 else 'ies'})",
+        f"({len(gateway_payloads)} gateway(s), {total_waf} WAF polic{'y' if total_waf == 1 else 'ies'})",
         flush=True,
     )
     return total_rules, total_rewrite_sets, total_rewrite_rules, total_waf
+
+
+def harvest_routing(
+    subscription_id: str,
+    conn: sqlite3.Connection,
+    dry_run: bool = False,
+) -> tuple[int, int, int, int]:
+    """Harvest App Gateway listener→backend routing rules, rewrites, and WAF policies."""
+    return persist_routing(
+        subscription_id,
+        conn,
+        collect_routing(subscription_id, dry_run=dry_run),
+        dry_run=dry_run,
+    )
+
+
+harvest_routing._post_harvest_split = (  # type: ignore[attr-defined]
+    collect_routing,
+    persist_routing,
+)
 
 
 # ---------------------------------------------------------------------------

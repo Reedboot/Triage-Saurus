@@ -220,23 +220,17 @@ def _is_fabric_url(url: str | None) -> bool:
 # Core processing
 # ---------------------------------------------------------------------------
 
-def process_apim(
+def collect_apim(
     apim: dict,
     subscription_id: str,
-    conn: sqlite3.Connection,
-    dry_run: bool,
-) -> int:
-    started = time.perf_counter()
+    *,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Collect an APIM routing bundle without touching SQLite."""
     apim_name = apim["name"]
     resource_group = apim["resourceGroup"]
-    apim_resource_id = apim.get("id")
-    now = datetime.now(timezone.utc).isoformat()
-    experiment_id = f"harvest-{subscription_id}"
-
     print(f"\n  [apim] {apim_name} (rg={resource_group})")
 
-    # Backends and APIs are independent read-only collection calls. Fetch them
-    # together, then keep all SQLite work below serialized on this connection.
     backends_started = time.perf_counter()
     print(f"    fetching backends and APIs...", end=" ", flush=True)
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -255,85 +249,6 @@ def process_apim(
         f"{len(backends_raw)} backends and {len(apis_raw)} APIs in "
         f"{time.perf_counter() - backends_started:.2f}s"
     )
-
-    # Persist full backend details
-    if not dry_run:
-        for b in backends_raw:
-            b_name = b.get("name") or ""
-            props = b.get("properties") or b
-            cb_raw = props.get("circuitBreaker") or b.get("circuitBreaker")
-            cred_raw = props.get("credentials") or b.get("credentials")
-            tls_raw = props.get("tls") or b.get("tls") or {}
-            conn.execute(
-                """
-                INSERT INTO apim_backends
-                    (id, subscription_id, apim_name, backend_id, title, description,
-                     url, protocol, circuit_breaker, credentials, tls_validate_cert, last_synced)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(id) DO UPDATE SET
-                    title=excluded.title, description=excluded.description,
-                    url=excluded.url, protocol=excluded.protocol,
-                    circuit_breaker=excluded.circuit_breaker,
-                    credentials=excluded.credentials,
-                    tls_validate_cert=excluded.tls_validate_cert,
-                    last_synced=excluded.last_synced
-                """,
-                (
-                    f"{apim_name}::{b_name}",
-                    subscription_id, apim_name, b_name,
-                    props.get("title") or b.get("title"),
-                    props.get("description") or b.get("description"),
-                    props.get("url") or b.get("url"),
-                    props.get("protocol") or b.get("protocol") or "http",
-                    json.dumps(cb_raw) if cb_raw else None,
-                    json.dumps(cred_raw) if cred_raw else None,
-                    1 if tls_raw.get("validateCertificateChain", True) else 0,
-                    now,
-                ),
-            )
-
-    # --- Load existing provisioned_assets FQDNs for cross-reference ---
-    asset_fqdn_rows = conn.execute(
-        "SELECT id, name, type, fqdn FROM provisioned_assets WHERE subscription_id = ? AND fqdn IS NOT NULL",
-        (subscription_id,),
-    ).fetchall()
-    fqdn_to_asset: dict[str, tuple[str, str, str | None]] = {
-        row[3]: (row[0], row[1], row[2]) for row in asset_fqdn_rows if row[3]
-    }
-
-    routes_upserted = 0
-    connections_created = 0
-    connections_skipped = 0
-    api_jobs: list[dict[str, Any]] = []
-
-    apim_asset_rows = conn.execute(
-        "SELECT type FROM provisioned_assets WHERE subscription_id = ? AND name = ?",
-        (subscription_id, apim_name),
-    ).fetchall()
-    apim_asset_type = apim_asset_rows[0][0] if apim_asset_rows else apim.get("type") or "Microsoft.ApiManagement/service"
-
-    def _lookup_resource_id(resource_name: str, resource_type: str | None = None) -> int | None:
-        if not resource_name:
-            return None
-        if resource_type:
-            row = conn.execute(
-                """
-                SELECT rowid FROM provisioned_assets
-                WHERE subscription_id = ? AND name = ? AND type = ?
-                LIMIT 1
-                """,
-                (subscription_id, resource_name, resource_type),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                """
-                SELECT rowid FROM provisioned_assets
-                WHERE subscription_id = ? AND name = ?
-                LIMIT 1
-                """,
-                (subscription_id, resource_name),
-            ).fetchone()
-        return row[0] if row else None
 
     api_specs: list[dict[str, Any]] = []
     for api in apis_raw:
@@ -365,42 +280,155 @@ def process_apim(
             "backend_url": backend_url,
         })
 
-    # Policy calls are also read-only and independent. Resolve them before
-    # writing routes, while retaining deterministic API-order processing below.
     policy_specs = [spec for spec in api_specs if not spec["backend_id"]]
     policy_results: dict[str, str] = {}
-    if policy_specs:
-        with ThreadPoolExecutor(max_workers=min(_APIM_FETCH_WORKERS, len(policy_specs))) as pool:
-            futures = {
-                spec["api_name"]: pool.submit(
+    api_operation_results: dict[str, list[dict[str, Any]]] = {}
+    operation_specs = api_specs if not dry_run else []
+    futures: dict[Any, tuple[str, str]] = {}
+    operations_started = time.perf_counter() if operation_specs else None
+    if policy_specs or operation_specs:
+        # Policies and operation lists are independent Azure reads. Start both
+        # kinds of request together so slow policy REST calls do not serialize
+        # the operation-list phase.
+        max_workers = min(
+            _APIM_FETCH_WORKERS,
+            max(len(policy_specs) + len(operation_specs), 1),
+        )
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            for spec in policy_specs:
+                futures[pool.submit(
                     get_api_policy,
                     apim_name,
                     resource_group,
                     spec["api_name"],
                     subscription_id,
-                )
-                for spec in policy_specs
-            }
-            for spec in policy_specs:
-                policy_results[spec["api_name"]] = futures[spec["api_name"]].result()
+                )] = ("policy", spec["api_name"])
+            for spec in operation_specs:
+                futures[pool.submit(
+                    list_operations,
+                    apim_name,
+                    resource_group,
+                    spec["api_name"],
+                    subscription_id,
+                )] = ("operations", spec["api_name"])
+            for future in as_completed(futures):
+                kind, api_name = futures[future]
+                try:
+                    value = future.result()
+                except Exception as exc:
+                    print(f"      {api_name}: FAILED ({exc})")
+                    value = [] if kind == "operations" else ""
+                if kind == "policy":
+                    policy_results[api_name] = value or ""
+                else:
+                    api_operation_results[api_name] = value or []
 
-        for spec in policy_specs:
-            backend_id = _policy_backend_id(policy_results[spec["api_name"]])
-            spec["backend_id"] = backend_id
-            if backend_id:
-                spec["backend_url"] = backend_map.get(backend_id) or spec["backend_url"]
+    for spec in policy_specs:
+        backend_id = _policy_backend_id(policy_results.get(spec["api_name"], ""))
+        spec["backend_id"] = backend_id
+        if backend_id:
+            spec["backend_url"] = backend_map.get(backend_id) or spec["backend_url"]
 
+    if operation_specs:
+        print(
+            f"    [apim] fetched API operation lists in parallel for "
+            f"{len(operation_specs)} APIs in "
+            f"{time.perf_counter() - (operations_started or time.perf_counter()):.2f}s",
+            flush=True,
+        )
+
+    return {
+        "apim": apim,
+        "backends": backends_raw,
+        "api_specs": api_specs,
+        "operations": api_operation_results,
+        "dry_run": dry_run,
+    }
+
+
+def persist_apim(
+    subscription_id: str,
+    conn: sqlite3.Connection,
+    collected: dict[str, Any],
+    *,
+    dry_run: bool = False,
+) -> int:
+    """Persist a previously collected APIM routing bundle."""
+    started = time.perf_counter()
+    apim = collected["apim"]
+    apim_name = apim["name"]
+    apim_resource_id = apim.get("id")
+    now = datetime.now(timezone.utc).isoformat()
+    experiment_id = f"harvest-{subscription_id}"
+    backends_raw = collected.get("backends") or []
+    api_specs = collected.get("api_specs") or []
+    api_operation_results = collected.get("operations") or {}
+
+    if not dry_run:
+        for b in backends_raw:
+            b_name = b.get("name") or ""
+            props = b.get("properties") or b
+            cb_raw = props.get("circuitBreaker") or b.get("circuitBreaker")
+            cred_raw = props.get("credentials") or b.get("credentials")
+            tls_raw = props.get("tls") or b.get("tls") or {}
+            conn.execute(
+                """
+                INSERT INTO apim_backends
+                    (id, subscription_id, apim_name, backend_id, title, description,
+                     url, protocol, circuit_breaker, credentials, tls_validate_cert, last_synced)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(id) DO UPDATE SET
+                    title=excluded.title, description=excluded.description,
+                    url=excluded.url, protocol=excluded.protocol,
+                    circuit_breaker=excluded.circuit_breaker,
+                    credentials=excluded.credentials,
+                    tls_validate_cert=excluded.tls_validate_cert,
+                    last_synced=excluded.last_synced
+                """,
+                (
+                    f"{apim_name}::{b_name}", subscription_id, apim_name, b_name,
+                    props.get("title") or b.get("title"),
+                    props.get("description") or b.get("description"),
+                    props.get("url") or b.get("url"),
+                    props.get("protocol") or b.get("protocol") or "http",
+                    json.dumps(cb_raw) if cb_raw else None,
+                    json.dumps(cred_raw) if cred_raw else None,
+                    1 if tls_raw.get("validateCertificateChain", True) else 0,
+                    now,
+                ),
+            )
+
+    asset_rows = conn.execute(
+        """
+        SELECT rowid, id, name, type, fqdn
+        FROM provisioned_assets
+        WHERE subscription_id = ?
+        """,
+        (subscription_id,),
+    ).fetchall()
+    fqdn_to_asset = {
+        row[4]: (row[1], row[2], row[3]) for row in asset_rows if row[4]
+    }
+    resource_ids: dict[tuple[str, str | None], int] = {}
+    for row in asset_rows:
+        resource_ids.setdefault((row[2], row[3]), int(row[0]))
+        resource_ids.setdefault((row[2], None), int(row[0]))
+
+    apim_asset_type = next(
+        (row[3] for row in asset_rows if row[2] == apim_name),
+        apim.get("type") or "Microsoft.ApiManagement/service",
+    )
+
+    def _lookup_resource_id(resource_name: str, resource_type: str | None = None) -> int | None:
+        return resource_ids.get((resource_name, resource_type)) or resource_ids.get((resource_name, None))
+
+    routes_upserted = 0
+    connections_created = 0
+    connections_skipped = 0
+    api_jobs: list[dict[str, Any]] = []
     for spec in api_specs:
         api_name = spec["api_name"]
-        api_display = spec["api_display"]
-        api_path = spec["api_path"]
-        protocols = spec["protocols"]
-        requires_sub = spec["requires_sub"]
-        service_url = spec["service_url"]
-        backend_id = spec["backend_id"]
         backend_url = spec["backend_url"]
-        route_id = f"{apim_name}::{api_name}"
-
         if not dry_run:
             conn.execute(
                 """
@@ -411,49 +439,40 @@ def process_apim(
                      requires_subscription, last_synced)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(id) DO UPDATE SET
-                    api_display_name    = excluded.api_display_name,
-                    api_path            = excluded.api_path,
-                    api_protocols       = excluded.api_protocols,
-                    backend_id          = excluded.backend_id,
-                    backend_url         = excluded.backend_url,
-                    service_url         = excluded.service_url,
-                    requires_subscription = excluded.requires_subscription,
-                    last_synced         = excluded.last_synced
+                    api_display_name=excluded.api_display_name, api_path=excluded.api_path,
+                    api_protocols=excluded.api_protocols, backend_id=excluded.backend_id,
+                    backend_url=excluded.backend_url, service_url=excluded.service_url,
+                    requires_subscription=excluded.requires_subscription,
+                    last_synced=excluded.last_synced
                 """,
                 (
-                    route_id, subscription_id, apim_name, apim_resource_id,
-                    api_name, api_display, api_path, protocols,
-                    backend_id, backend_url, service_url,
-                    requires_sub, now,
+                    f"{apim_name}::{api_name}", subscription_id, apim_name, apim_resource_id,
+                    api_name, spec["api_display"], spec["api_path"], spec["protocols"],
+                    spec["backend_id"], backend_url, spec["service_url"],
+                    spec["requires_sub"], now,
                 ),
             )
             routes_upserted += 1
             api_jobs.append({
                 "api_name": api_name,
-                "api_display": api_display,
-                "api_path": api_path,
+                "api_display": spec["api_display"],
+                "api_path": spec["api_path"],
                 "backend_url": backend_url,
-                "requires_sub": requires_sub,
+                "requires_sub": spec["requires_sub"],
             })
 
-            # --- Create resource_connection: APIM → backend asset ---
             backend_fqdn = _url_to_fqdn(backend_url)
             if backend_fqdn and not _is_fabric_url(backend_url):
-                # Find asset by FQDN (exact or suffix match)
-                target_asset_name: str | None = None
-                target_asset_type: str | None = None
+                target_asset_name = target_asset_type = None
                 for fqdn, (_asset_id, asset_name, asset_type) in fqdn_to_asset.items():
                     if fqdn == backend_fqdn or backend_fqdn.endswith(f".{fqdn}") or fqdn.endswith(f".{backend_fqdn}"):
-                        target_asset_name = asset_name
-                        target_asset_type = asset_type
+                        target_asset_name, target_asset_type = asset_name, asset_type
                         break
-
                 source_resource_id = _lookup_resource_id(apim_name, apim_asset_type)
                 if source_resource_id is None:
                     connections_skipped += 1
                     continue
-
-                target_resource_id = _lookup_resource_id(target_asset_name or "", target_asset_type) if target_asset_name else None
+                target_resource_id = _lookup_resource_id(target_asset_name or "", target_asset_type)
                 conn.execute(
                     """
                     INSERT OR REPLACE INTO resource_connections
@@ -462,89 +481,47 @@ def process_apim(
                     VALUES (?, ?, ?, 'apim_routing', ?, ?)
                     """,
                     (
-                        experiment_id,
-                        source_resource_id,
-                        target_resource_id,
+                        experiment_id, source_resource_id, target_resource_id,
                         None if target_resource_id else backend_fqdn or backend_url,
                         json.dumps({
-                            "api_name": api_name,
-                            "api_path": api_path,
+                            "api_name": api_name, "api_path": spec["api_path"],
                             "backend_url": backend_url,
-                            "requires_subscription": bool(requires_sub),
+                            "requires_subscription": bool(spec["requires_sub"]),
                         }),
                     ),
                 )
                 connections_created += 1
 
-    api_operation_results: dict[str, list[dict[str, Any]]] = {}
-    if not dry_run and api_jobs:
-        ops_started = time.perf_counter()
-        print(f"    [apim] fetching API operation lists in parallel for {len(api_jobs)} APIs...", flush=True)
-        with ThreadPoolExecutor(max_workers=min(8, len(api_jobs))) as pool:
-            futures = {
-                pool.submit(list_operations, apim_name, resource_group, job["api_name"], subscription_id): job
-                for job in api_jobs
-            }
-            completed = 0
-            total_jobs = len(futures)
-            for future in as_completed(futures):
-                completed += 1
-                job = futures[future]
-                try:
-                    api_operation_results[job["api_name"]] = future.result() or []
-                except Exception as exc:
-                    print(f"      {job['api_display']}: FAILED ({exc})")
-                    api_operation_results[job["api_name"]] = []
-                if completed == 1 or completed % 5 == 0 or completed == total_jobs:
-                    print(f"    [apim] {apim_name}: {completed}/{total_jobs} API operation lists fetched", flush=True)
-        print(f"    [apim] API operation phase completed in {time.perf_counter() - ops_started:.2f}s", flush=True)
-
-        for job in api_jobs:
-            ops_raw = api_operation_results.get(job["api_name"], [])
-            ops_upserted = 0
-            for op in ops_raw:
-                op_id = op.get("name") or op.get("id", "").split("/")[-1] or ""
-                op_disp = op.get("displayName") or op_id
-                method = op.get("method") or ""
-                url_tpl = op.get("urlTemplate") or op.get("url") or ""
-                desc = op.get("description") or ""
-                conn.execute(
-                    """
-                    INSERT INTO apim_api_operations
-                        (id, subscription_id, apim_name, api_name, api_display_name,
-                         api_path, backend_url, operation_id, display_name,
-                         method, url_template, description, requires_subscription, last_synced)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    ON CONFLICT(id) DO UPDATE SET
-                        display_name=excluded.display_name,
-                        method=excluded.method,
-                        url_template=excluded.url_template,
-                        description=excluded.description,
-                        api_path=excluded.api_path,
-                        backend_url=excluded.backend_url,
-                        requires_subscription=excluded.requires_subscription,
-                        last_synced=excluded.last_synced
-                    """,
-                    (
-                        f"{apim_name}::{job['api_name']}::{op_id}",
-                        subscription_id,
-                        apim_name,
-                        job["api_name"],
-                        job["api_display"],
-                        job["api_path"],
-                        job["backend_url"],
-                        op_id,
-                        op_disp,
-                        method.upper(),
-                        url_tpl,
-                        desc,
-                        job["requires_sub"],
-                        now,
-                    ),
-                )
-                ops_upserted += 1
-            if ops_raw:
-                print(f"      {job['api_display']}: {ops_upserted} operations")
+    for job in api_jobs:
+        ops_raw = api_operation_results.get(job["api_name"], [])
+        ops_upserted = 0
+        for op in ops_raw:
+            op_id = op.get("name") or op.get("id", "").split("/")[-1] or ""
+            conn.execute(
+                """
+                INSERT INTO apim_api_operations
+                    (id, subscription_id, apim_name, api_name, api_display_name,
+                     api_path, backend_url, operation_id, display_name,
+                     method, url_template, description, requires_subscription, last_synced)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(id) DO UPDATE SET
+                    display_name=excluded.display_name, method=excluded.method,
+                    url_template=excluded.url_template, description=excluded.description,
+                    api_path=excluded.api_path, backend_url=excluded.backend_url,
+                    requires_subscription=excluded.requires_subscription,
+                    last_synced=excluded.last_synced
+                """,
+                (
+                    f"{apim_name}::{job['api_name']}::{op_id}", subscription_id, apim_name,
+                    job["api_name"], job["api_display"], job["api_path"], job["backend_url"],
+                    op_id, op.get("displayName") or op_id, (op.get("method") or "").upper(),
+                    op.get("urlTemplate") or op.get("url") or "", op.get("description") or "",
+                    job["requires_sub"], now,
+                ),
+            )
+            ops_upserted += 1
+        if ops_raw:
+            print(f"      {job['api_display']}: {ops_upserted} operations")
 
     if not dry_run:
         conn.commit()
@@ -554,6 +531,17 @@ def process_apim(
     print(f"    → {routes_upserted} routes upserted, {connections_created} connections created")
     print(f"    [apim-routing] {apim_name} finished in {time.perf_counter() - started:.2f}s", flush=True)
     return routes_upserted
+
+
+def process_apim(
+    apim: dict,
+    subscription_id: str,
+    conn: sqlite3.Connection,
+    dry_run: bool,
+) -> int:
+    """Collect and persist one APIM instance (legacy compatible entry point)."""
+    collected = collect_apim(apim, subscription_id, dry_run=dry_run)
+    return persist_apim(subscription_id, conn, collected, dry_run=dry_run)
 
 
 def harvest_backends(
@@ -683,23 +671,71 @@ def harvest_routes(
     dry_run: bool = False,
 ) -> int:
     """Harvest APIM API→backend routes for every APIM instance in a subscription."""
-    _ensure_schema(conn)
-    _ensure_apim_schema(conn)
+    collected = collect_routes(subscription_id, dry_run=dry_run)
+    return persist_routes(subscription_id, conn, collected, dry_run=dry_run)
+
+
+def collect_routes(
+    subscription_id: str,
+    *,
+    dry_run: bool = False,
+) -> list[dict[str, Any]]:
+    """Collect all APIM routing bundles without touching SQLite."""
     apim_instances = list_apim_instances(subscription_id)
     if not apim_instances:
+        return []
+
+    if len(apim_instances) == 1:
+        return [
+            collect_apim(apim_instances[0], subscription_id, dry_run=dry_run)
+        ]
+
+    bundles: list[dict[str, Any] | None] = [None] * len(apim_instances)
+    with ThreadPoolExecutor(max_workers=min(_APIM_FETCH_WORKERS, len(apim_instances))) as pool:
+        futures = {
+            pool.submit(collect_apim, instance, subscription_id, dry_run=dry_run): index
+            for index, instance in enumerate(apim_instances)
+        }
+        for future in as_completed(futures):
+            index = futures[future]
+            try:
+                bundles[index] = future.result()
+            except Exception as exc:
+                instance = apim_instances[index]
+                print(f"    [apim-routing] {instance.get('name', '<unknown>')} FAILED ({exc})")
+    return [bundle for bundle in bundles if bundle is not None]
+
+
+def persist_routes(
+    subscription_id: str,
+    conn: sqlite3.Connection,
+    collected: list[dict[str, Any]],
+    *,
+    dry_run: bool = False,
+) -> int:
+    """Persist previously collected APIM routing bundles."""
+    _ensure_schema(conn)
+    _ensure_apim_schema(conn)
+    if not collected:
         print("  No APIM instances found — skipping (0.00s)")
         return 0
 
     started = time.perf_counter()
     total = 0
-    for apim in apim_instances:
-        total += process_apim(apim, subscription_id, conn, dry_run)
+    for bundle in collected:
+        total += persist_apim(subscription_id, conn, bundle, dry_run=dry_run)
     print(
         f"    [apim-routing] route harvest completed in "
-        f"{time.perf_counter() - started:.2f}s ({len(apim_instances)} APIM instance(s))",
+        f"{time.perf_counter() - started:.2f}s ({len(collected)} APIM instance(s))",
         flush=True,
     )
     return total
+
+
+harvest_routes._post_harvest_split = (  # type: ignore[attr-defined]
+    collect_routes,
+    persist_routes,
+)
 
 
 # ---------------------------------------------------------------------------

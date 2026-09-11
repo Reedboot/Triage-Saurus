@@ -404,26 +404,21 @@ def _make_route_id(
     return f"{cluster_name}::{namespace}::{ingress_name}::{h}::{p}::{svc}::{port}::{deploy}::{default}"
 
 
-def harvest_routes(
+def collect_routes(
     subscription_id: str,
-    conn: sqlite3.Connection,
+    *,
     dry_run: bool = False,
-) -> int:
-    """Harvest K8s ingress→service→deployment route model for every AKS cluster.
-
-    Mirrors the BuildAksRouteModel logic from AksExposure.ps1 in Phoenix.
-    Tokens are acquired once per subscription; clusters are processed individually
-    so a single unreachable cluster does not abort the rest.
-
-    Returns the total number of routes harvested across all clusters.
-    """
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    """Collect K8s route models without touching SQLite."""
+    # Mirrors the BuildAksRouteModel logic from AksExposure.ps1 in Phoenix.
+    # Tokens are acquired once per subscription; clusters are processed
+    # individually so a single unreachable cluster does not abort the rest.
     clusters = az(["aks", "list"], subscription_id)
     if not clusters:
-        return 0
+        return []
 
-    now = datetime.now(timezone.utc).isoformat()
-    total = 0
     max_workers = min(_AKS_CLUSTER_WORKERS, len(clusters))
+    collected: list[tuple[str, list[dict[str, Any]]]] = []
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {
             pool.submit(_harvest_cluster_route_bundle, cluster): cluster.get("name") or cluster.get("id") or "<unknown>"
@@ -439,74 +434,108 @@ def harvest_routes(
 
             if not returned_cluster_name:
                 continue
+            collected.append((returned_cluster_name, routes))
+    return collected
 
-            if not dry_run and routes:
-                # Replace all existing routes for this cluster before inserting
-                conn.execute(
-                    "DELETE FROM aks_routes WHERE subscription_id = ? AND cluster_name = ?",
-                    (subscription_id, returned_cluster_name),
+
+def persist_routes(
+    subscription_id: str,
+    conn: sqlite3.Connection,
+    collected: list[tuple[str, list[dict[str, Any]]]],
+    dry_run: bool = False,
+) -> int:
+    """Persist previously collected AKS route models."""
+    now = datetime.now(timezone.utc).isoformat()
+    total = 0
+    for returned_cluster_name, routes in collected:
+
+        if not dry_run and routes:
+            # Replace all existing routes for this cluster before inserting
+            conn.execute(
+                "DELETE FROM aks_routes WHERE subscription_id = ? AND cluster_name = ?",
+                (subscription_id, returned_cluster_name),
+            )
+            for r in routes:
+                route_id = _make_route_id(
+                    returned_cluster_name,
+                    r["namespace"] or "",
+                    r["ingress_name"] or "",
+                    r["host"],
+                    r["path"],
+                    r["service_name"],
+                    r["service_port"],
+                    r["deployment_name"],
+                    r["is_default_backend"],
                 )
-                for r in routes:
-                    route_id = _make_route_id(
+                conn.execute(
+                    """
+                INSERT INTO aks_routes (
+                    id, subscription_id, cluster_name, cluster_resource_id,
+                    resource_group, namespace, ingress_name, host, host_aliases,
+                    path, is_default_backend, service_name, service_port,
+                    service_ports, deployment_name, deployment_namespace,
+                    pod_template_labels, git_repository, team, exposure_level, last_synced
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(id) DO UPDATE SET
+                    subscription_id      = excluded.subscription_id,
+                    cluster_resource_id  = excluded.cluster_resource_id,
+                    resource_group       = excluded.resource_group,
+                    host_aliases         = excluded.host_aliases,
+                    service_port         = excluded.service_port,
+                    service_ports        = excluded.service_ports,
+                    deployment_namespace = excluded.deployment_namespace,
+                    pod_template_labels  = excluded.pod_template_labels,
+                    git_repository       = excluded.git_repository,
+                    team                 = excluded.team,
+                    exposure_level       = excluded.exposure_level,
+                    last_synced          = excluded.last_synced
+                    """,
+                    (
+                        route_id,
+                        subscription_id,
                         returned_cluster_name,
-                        r["namespace"] or "",
-                        r["ingress_name"] or "",
+                        r["cluster_resource_id"],
+                        r["resource_group"],
+                        r["namespace"],
+                        r["ingress_name"],
                         r["host"],
+                        json.dumps(r["host_aliases"]),
                         r["path"],
-                        r["service_name"],
-                        r["service_port"],
-                        r["deployment_name"],
                         r["is_default_backend"],
-                    )
-                    conn.execute(
-                        """
-                        INSERT INTO aks_routes (
-                            id, subscription_id, cluster_name, cluster_resource_id,
-                            resource_group, namespace, ingress_name, host, host_aliases,
-                            path, is_default_backend, service_name, service_port,
-                            service_ports, deployment_name, deployment_namespace,
-                            pod_template_labels, git_repository, team, exposure_level, last_synced
-                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                        ON CONFLICT(id) DO UPDATE SET
-                            subscription_id      = excluded.subscription_id,
-                            cluster_resource_id  = excluded.cluster_resource_id,
-                            resource_group       = excluded.resource_group,
-                            host_aliases         = excluded.host_aliases,
-                            service_port         = excluded.service_port,
-                            service_ports        = excluded.service_ports,
-                            deployment_namespace = excluded.deployment_namespace,
-                            pod_template_labels  = excluded.pod_template_labels,
-                            git_repository       = excluded.git_repository,
-                            team                 = excluded.team,
-                            exposure_level       = excluded.exposure_level,
-                            last_synced          = excluded.last_synced
-                        """,
-                        (
-                            route_id,
-                            subscription_id,
-                            returned_cluster_name,
-                            r["cluster_resource_id"],
-                            r["resource_group"],
-                            r["namespace"],
-                            r["ingress_name"],
-                            r["host"],
-                            json.dumps(r["host_aliases"]),
-                            r["path"],
-                            r["is_default_backend"],
-                            r["service_name"],
-                            str(r["service_port"]) if r["service_port"] is not None else None,
-                            json.dumps(r["service_ports"]),
-                            r["deployment_name"],
-                            r["deployment_namespace"],
-                            json.dumps(r["pod_template_labels"]),
-                            r["git_repository"],
-                            r["team"],
-                            r["exposure_level"],
-                            now,
-                        ),
-                    )
-                conn.commit()
+                        r["service_name"],
+                        str(r["service_port"]) if r["service_port"] is not None else None,
+                        json.dumps(r["service_ports"]),
+                        r["deployment_name"],
+                        r["deployment_namespace"],
+                        json.dumps(r["pod_template_labels"]),
+                        r["git_repository"],
+                        r["team"],
+                        r["exposure_level"],
+                        now,
+                    ),
+                )
+            conn.commit()
 
-            total += len(routes)
+        total += len(routes)
 
     return total
+
+
+def harvest_routes(
+    subscription_id: str,
+    conn: sqlite3.Connection,
+    dry_run: bool = False,
+) -> int:
+    """Harvest K8s ingress→service→deployment route model for every AKS cluster."""
+    return persist_routes(
+        subscription_id,
+        conn,
+        collect_routes(subscription_id),
+        dry_run=dry_run,
+    )
+
+
+harvest_routes._post_harvest_split = (  # type: ignore[attr-defined]
+    collect_routes,
+    persist_routes,
+)
