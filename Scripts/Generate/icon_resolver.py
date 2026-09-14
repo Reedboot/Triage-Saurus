@@ -1109,6 +1109,7 @@ def _find_icon_file(category: str, icon_name: str, provider: str = 'azure') -> O
     return svg_files[0] if svg_files else None
 
 
+@lru_cache(maxsize=1024)
 def _discover_icon_by_name(icon_name: str, provider: str) -> Optional[Path]:
     """Smart icon discovery: search across all categories for matching icon.
     
@@ -1118,6 +1119,10 @@ def _discover_icon_by_name(icon_name: str, provider: str) -> Optional[Path]:
     Examples:
         _discover_icon_by_name('dynamodb', 'aws') → finds aws/Arch_*/dynamodb.svg
         _discover_icon_by_name('storage-account', 'azure') → finds azure/*/storage-account.svg
+
+    Cached: this recursively globs the icon directory tree, which is
+    expensive when called for every diagram node (O(files) per call).
+    The on-disk icon set doesn't change at runtime, so memoizing is safe.
     """
     provider_path = ICONS_ROOT / provider
     if not provider_path.exists():
@@ -1181,6 +1186,7 @@ def _synthetic_icon_target(resource_type: str, provider: str) -> Optional[tuple[
     return targets.get("alicloud")
 
 
+@lru_cache(maxsize=1024)
 def get_icon_path(resource_type: str, provider: str = 'azure') -> Optional[Path]:
     """Get the filesystem path to the icon for a given resource type.
     
@@ -1192,6 +1198,9 @@ def get_icon_path(resource_type: str, provider: str = 'azure') -> Optional[Path]
     
     Returns:
         Path to the icon SVG file, or None if not found.
+
+    Cached: called once per diagram node (up to thousands per subscription)
+    and the underlying icon mapping/filesystem is static at runtime.
     """
     # Normalize resource type
     rtype = (resource_type or '').lower().strip()
