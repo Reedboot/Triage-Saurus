@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from ._helpers import az, az_resource_show, build_endpoints, extract_ip_restrictions, safe_str
@@ -11,21 +12,55 @@ RESOURCE_TYPE = "Microsoft.AppConfiguration/configurationStores"
 
 def harvest(subscription_id: str) -> list[dict[str, Any]]:
     raw = az(["appconfig", "list"], subscription_id)
-    results = []
 
-    total = len(raw)
-    for idx, store in enumerate(raw, start=1):
-        resource_started = time.perf_counter()
+    def _fetch_detail(store: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
         list_props = store.get("properties") or {}
         needs_detail = "properties" not in store or (
             bool(list_props)
-            and ("networkAcls" not in list_props or "publicNetworkAccess" not in list_props)
+            and (
+                "networkAcls" not in list_props
+                or "publicNetworkAccess" not in list_props
+                or "privateEndpointConnections" not in list_props
+            )
         )
         detailed = (
             az_resource_show(store.get("id", ""), subscription_id, runner=az)
             if store.get("id") and needs_detail
             else None
         )
+        return store.get("id", ""), detailed
+
+    # Detail GETs are independent per-store `az resource show` calls; running
+    # them serially adds ~1 subprocess-startup's worth of latency per store.
+    # Parallelize them the same way the endpoint probes below already are.
+    detailed_by_id: dict[str, Any] = {}
+    if raw:
+        with ThreadPoolExecutor(max_workers=min(8, len(raw))) as pool:
+            for store_id, detailed in pool.map(_fetch_detail, raw):
+                if detailed:
+                    detailed_by_id[store_id] = detailed
+
+    results = []
+    endpoint_targets = []
+    for store in raw:
+        detailed = detailed_by_id.get(store.get("id", ""))
+        merged = {**store, **detailed} if detailed else store
+        props = merged.get("properties") or merged
+        endpoint = safe_str(props.get("endpoint", "").replace("https://", "").rstrip("/")) or None
+        endpoint_targets.append((merged.get("id", ""), endpoint))
+    with ThreadPoolExecutor(max_workers=min(8, len(endpoint_targets))) as pool:
+        endpoint_by_id = dict(pool.map(
+            lambda item: (
+                item[0],
+                build_endpoints([(item[1], 443, "https")] if item[1] else [], timeout=2),
+            ),
+            endpoint_targets,
+        ))
+
+    total = len(raw)
+    for idx, store in enumerate(raw, start=1):
+        resource_started = time.perf_counter()
+        detailed = detailed_by_id.get(store.get("id", ""))
         if detailed:
             store = {**store, **detailed}
         props = store.get("properties") or store
@@ -37,7 +72,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
         is_public, is_restricted, ip_restrictions = _classify_exposure(props)
         # App Configuration endpoints are useful for inventory, but probing them
         # during every harvest adds noticeable latency, so keep the timeout short.
-        endpoints = build_endpoints([(endpoint, 443, "https")] if endpoint else [], timeout=2)
+        endpoints = endpoint_by_id.get(store.get("id", ""), [])
         auth_methods = json.dumps(_get_auth_methods(props))
         rbac_check = _check_rbac(resource_id, props, store)
 

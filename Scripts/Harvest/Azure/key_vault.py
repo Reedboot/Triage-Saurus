@@ -21,7 +21,9 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             return "", None
         list_props = kv.get("properties") or {}
         needs_detail = "properties" not in kv or (bool(list_props) and (
-            "networkAcls" not in list_props or "publicNetworkAccess" not in list_props
+            "networkAcls" not in list_props
+            or "publicNetworkAccess" not in list_props
+            or "privateEndpointConnections" not in list_props
         ))
         if not needs_detail:
             return resource_id, None
@@ -32,6 +34,23 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
         with ThreadPoolExecutor(max_workers=min(_MAX_DETAIL_WORKERS, len(detail_targets))) as pool:
             for resource_id, detailed in pool.map(fetch_detail, detail_targets):
                 detailed_by_id[resource_id] = detailed
+
+    endpoint_targets = []
+    for kv in raw:
+        detailed = detailed_by_id.get(kv.get("id", ""))
+        merged = {**kv, **detailed} if detailed else kv
+        props = merged.get("properties") or merged
+        vault_uri = props.get("vaultUri")
+        fqdn = safe_str(vault_uri.replace("https://", "").rstrip("/")) if vault_uri else None
+        endpoint_targets.append((merged.get("id", ""), fqdn))
+    with ThreadPoolExecutor(max_workers=min(_MAX_DETAIL_WORKERS, len(endpoint_targets))) as pool:
+        endpoint_by_id = dict(pool.map(
+            lambda item: (
+                item[0],
+                build_endpoints([(item[1], 443, "https")] if item[1] else []),
+            ),
+            endpoint_targets,
+        ))
 
     results = []
 
@@ -45,7 +64,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
         fqdn = safe_str(vault_uri.replace("https://", "").rstrip("/")) if vault_uri else None
 
         is_public, is_restricted, ip_restrictions = _classify_exposure(props)
-        endpoints = build_endpoints([(fqdn, 443, "https")] if fqdn else [])
+        endpoints = endpoint_by_id.get(kv.get("id", ""), [])
         auth_methods = json.dumps(["azure_ad", "managed_identity"])
         public_network_access = _get_public_network_access(props)
         network_default_action = _get_network_default_action(props)

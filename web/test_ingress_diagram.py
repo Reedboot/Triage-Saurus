@@ -316,8 +316,11 @@ def test_aks_vmss_ownership_and_private_link_are_rendered():
     endpoint_node = _sanitise_node_id(f"{redis_rg}_{endpoint_name}")
     redis_node = _sanitise_node_id(f"{redis_rg}_{redis_name}")
     assert f'{cluster_node} -->|"system node pool"| {vmss_node}' in mermaid
-    assert f'{endpoint_node} -->|"redis-private-endpoint"| {redis_node}' in mermaid
-    assert '#38bdf8' in mermaid
+    # Unresolved private endpoints (no known VNet/subnet source) are collapsed
+    # into the owning resource's node as a badge rather than rendered as a
+    # standalone floating node/edge.
+    assert endpoint_node not in mermaid
+    assert 'Private Endpoint' in mermaid
 
 
 def test_service_fabric_management_load_balancer_routes_to_each_sf_load_balancer():

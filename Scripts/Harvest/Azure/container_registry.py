@@ -16,7 +16,8 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     for reg in raw:
         list_props = reg.get("properties") or {}
         needs_detail = not isinstance(list_props, dict) or any(
-            key not in list_props for key in ("publicNetworkAccess", "networkRuleSet", "loginServer")
+            key not in list_props
+            for key in ("publicNetworkAccess", "networkRuleSet", "loginServer", "privateEndpointConnections")
         )
         detailed = (
             az_resource_show(reg.get("id", ""), subscription_id, runner=az)

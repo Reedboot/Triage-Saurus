@@ -963,6 +963,53 @@
       font-size: 1.1rem;
     }
 
+    .cloud-arch-modal-collapsible {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+    }
+
+    .cloud-arch-modal-collapsible-summary {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
+    }
+
+    .cloud-arch-modal-collapsible-summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .cloud-arch-modal-collapsible-summary::before {
+      content: "▸";
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      transition: transform 0.15s ease;
+    }
+
+    .cloud-arch-modal-collapsible[open] > .cloud-arch-modal-collapsible-summary::before {
+      transform: rotate(90deg);
+    }
+
+    .cloud-arch-modal-collapsible-hint {
+      font-size: 0.78rem;
+      font-weight: 400;
+      color: var(--text-muted);
+    }
+
+    .cloud-arch-modal-collapsible-body {
+      margin-top: 12px;
+    }
+
+    .cloud-arch-modal-collapsible-body .cloud-arch-modal-section {
+      margin-bottom: 0;
+    }
+
     .cloud-arch-modal-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -1183,6 +1230,7 @@
       <div class="cloud-arch-views">
         <div class="cloud-arch-view cloud-arch-mermaid-view" id="cloud-arch-mermaid-view" hidden>
           <div class="cloud-arch-mermaid-controls">
+            <span class="cloud-arch-view-label" aria-label="Overview">Overview</span>
             <button type="button" class="cloud-arch-mermaid-btn" data-diagram-zoom-in="cloud-arch-mermaid-root" title="Zoom in">+</button>
             <button type="button" class="cloud-arch-mermaid-btn" data-diagram-zoom-out="cloud-arch-mermaid-root" title="Zoom out">−</button>
             <button type="button" class="cloud-arch-mermaid-btn" data-diagram-fit="cloud-arch-mermaid-root" title="Fit view">⤢</button>

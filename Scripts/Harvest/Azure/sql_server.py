@@ -16,7 +16,8 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     for server in raw:
         list_props = server.get("properties") or {}
         needs_detail = not isinstance(list_props, dict) or any(
-            key not in list_props for key in ("publicNetworkAccess", "fullyQualifiedDomainName")
+            key not in list_props
+            for key in ("publicNetworkAccess", "fullyQualifiedDomainName", "privateEndpointConnections")
         )
         detailed = (
             az_resource_show(server.get("id", ""), subscription_id, runner=az)

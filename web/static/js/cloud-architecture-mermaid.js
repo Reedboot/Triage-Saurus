@@ -2970,6 +2970,17 @@ function isPrivateEndpointDetails(data) {
     Array.isArray(data?.network?.managed_private_endpoints) && data.network.managed_private_endpoints.length > 0;
 }
 
+function _renderCrossSubscriptionBanner(fromName, fromId, toName, toId) {
+  const fromLabel = escapeHtml(normalizeModalText(fromName || fromId || "Unknown subscription"));
+  const toLabel = escapeHtml(normalizeModalText(toName || toId || "Unknown subscription"));
+  return `
+    <div class="cloud-arch-modal-field cloud-arch-modal-field--full" style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);border-radius:6px;padding:8px 10px;margin-bottom:10px;">
+      <div style="color:#f59e0b;font-weight:600;font-size:0.82rem;">⚠ Cross-Subscription Connection</div>
+      <div style="font-size:0.82rem;margin-top:2px;">This private link spans two subscriptions: <strong>${fromLabel}</strong> → <strong>${toLabel}</strong>.</div>
+    </div>
+  `;
+}
+
 function _renderConnectionEndpointCard(resource) {
   if (!resource || typeof resource !== "object") {
     return '<div class="cloud-arch-modal-empty" style="margin:0;">Unknown — not enough harvested data to resolve this side of the connection.</div>';
@@ -2977,12 +2988,16 @@ function _renderConnectionEndpointCard(resource) {
   const name = escapeHtml(normalizeModalText(firstNonEmpty(resource.name, resource.label, "Unknown")));
   const type = firstNonEmpty(resource.type_label, resource.type);
   const rg = firstNonEmpty(resource.resource_group, resource.resourceGroup);
+  const subName = firstNonEmpty(resource.subscription_name, resource.subscription_id);
   const details = [
     type ? `<span style="color:var(--text-muted);">${escapeHtml(normalizeModalText(type))}</span>` : "",
     rg ? `<span style="color:var(--text-muted);">RG: ${escapeHtml(normalizeModalText(rg))}</span>` : "",
+    subName ? `<span style="color:var(--text-muted);">Sub: ${escapeHtml(normalizeModalText(subName))}</span>` : "",
   ].filter(Boolean).join(" • ");
-  const unharvestedNote = resource.harvested === false
-    ? '<div style="color:var(--text-muted);font-size:0.78rem;margin-top:4px;">⚠ Not harvested — inferred from resource ID only.</div>'
+  const unharvestedNote = resource.network_harvested === false
+    ? '<div style="color:var(--text-muted);font-size:0.78rem;margin-top:4px;">⚠ Endpoint network placement was not harvested — inferred from the Private Link connection metadata.</div>'
+    : resource.harvested === false
+      ? '<div style="color:var(--text-muted);font-size:0.78rem;margin-top:4px;">⚠ Not harvested — inferred from resource ID only.</div>'
     : "";
   return `<div><strong>${name}</strong>${details ? `<div style="font-size:0.82rem;">${details}</div>` : ""}${unharvestedNote}</div>`;
 }
@@ -3001,13 +3016,39 @@ function buildPrivateEndpointConnectionsSection(data) {
     : Array.isArray(connectsFrom?.consumers)
       ? connectsFrom.consumers.filter(Boolean)
       : [];
+  const typeText = String(firstNonEmpty(data?.type_label, data?.type, data?.resourceType, "")).toLowerCase();
+  const isStandalonePrivateEndpoint = typeText.includes("private endpoint") || typeText.includes("privateendpoints");
 
-  if (connections.length && !connectsFrom && !connectsTo) {
+  if ((connections.length && !connectsFrom && !connectsTo) || (isStandalonePrivateEndpoint && connectsTo)) {
     const target = {
-      name: firstNonEmpty(data?.name, "Unknown"),
-      type_label: firstNonEmpty(data?.type_label, data?.type),
-      resource_group: data?.resource_group,
+      ...(connectsTo || {
+        name: firstNonEmpty(data?.name, "Unknown"),
+        type_label: firstNonEmpty(data?.type_label, data?.type),
+        resource_group: data?.resource_group,
+      }),
     };
+    const tableConnections = connections.length
+      ? connections
+      : [{
+          name: firstNonEmpty(data?.name, "Private endpoint"),
+          id: data?.network?.private_endpoint_id,
+          resource_group: firstNonEmpty(data?.resource_group, connectsFrom?.resource_group),
+          vnet: firstNonEmpty(connectsFrom?.vnet, data?.network?.vnet),
+          subnet: firstNonEmpty(connectsFrom?.subnet, data?.network?.subnet),
+          group_ids: data?.configuration?.group_ids,
+          status: firstNonEmpty(data?.configuration?.connection_status, data?.configuration?.provisioning_state),
+          subscription_id: connectsFrom?.subscription_id,
+          subscription_name: connectsFrom?.subscription_name,
+          target_subscription_id: target.subscription_id,
+          target_subscription_name: target.subscription_name,
+          is_cross_subscription: Boolean(data?.is_cross_subscription),
+          harvested: true,
+        }];
+    const hasCrossSub = tableConnections.some((connection) => connection.is_cross_subscription);
+    const hasConsumers = isStandalonePrivateEndpoint && consumers.length > 0;
+    const columns = ["Private Endpoint", "VNet / Subnet", "Group ID", "Status", "Connects To"];
+    if (hasConsumers) columns.push("Known Consumers");
+    if (hasCrossSub) columns.push("Subscriptions");
     return `
       <div class="cloud-arch-modal-section">
         <div class="cloud-arch-modal-section-title">
@@ -3017,30 +3058,49 @@ function buildPrivateEndpointConnectionsSection(data) {
         <div class="cloud-arch-modal-subtitle" style="margin-bottom:10px;">
           Private endpoints connecting this resource to a VNet.
         </div>
-        <div class="cloud-arch-modal-grid">
-          ${connections.map((connection) => {
-            const from = {
-              name: firstNonEmpty(connection.name, connection.id, "Private endpoint"),
-              type_label: "Private Endpoint",
-              resource_group: connection.resource_group,
-              harvested: connection.harvested,
-            };
-            const subnet = [connection.vnet, connection.subnet].filter(Boolean).join(" / ");
-            const groupIds = Array.isArray(connection.group_ids) ? connection.group_ids.filter(Boolean).join(", ") : "";
-            const status = firstNonEmpty(connection.status, "Unknown");
-            return `
-              <div class="cloud-arch-modal-field cloud-arch-modal-field--full">
-                <div class="cloud-arch-modal-field-label">${escapeHtml(normalizeModalText(firstNonEmpty(connection.name, "Private endpoint")))}</div>
-                <div class="cloud-arch-modal-field-value">
-                  <strong>Connection From:</strong> ${_renderConnectionEndpointCard(from)}
-                  ${subnet ? `<div style="margin-top:6px;"><strong>VNet / Subnet:</strong> ${escapeHtml(normalizeModalText(subnet))}</div>` : ""}
-                  ${groupIds ? `<div style="margin-top:4px;"><strong>Group ID:</strong> ${escapeHtml(normalizeModalText(groupIds))}</div>` : ""}
-                  <div style="margin-top:4px;"><strong>Status:</strong> ${escapeHtml(normalizeModalText(status))}</div>
-                  <div style="margin-top:6px;"><strong>Connection To:</strong> ${_renderConnectionEndpointCard(target)}</div>
-                </div>
-              </div>
-            `;
-          }).join("")}
+        <div style="overflow:auto;border:1px solid var(--border);border-radius:8px;">
+          <table style="width:100%;border-collapse:collapse;font-size:0.84rem;">
+            <thead>
+              <tr>
+                ${columns.map(
+                  (col) => `<th style="padding:8px 10px;text-align:left;background:var(--bg-base);border-bottom:1px solid var(--border);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.03em;color:var(--text-muted);">${escapeHtml(col)}</th>`
+                ).join("")}
+              </tr>
+            </thead>
+            <tbody>
+              ${tableConnections.map((connection) => {
+                const from = {
+                  name: firstNonEmpty(connection.name, connection.id, "Private endpoint"),
+                  type_label: "Private Endpoint",
+                  resource_group: connection.resource_group,
+                  harvested: connection.harvested,
+                  network_harvested: connection.harvested,
+                };
+                const subnet = [connection.vnet, connection.subnet].filter(Boolean).join(" / ") || "—";
+                const groupIds = Array.isArray(connection.group_ids) && connection.group_ids.filter(Boolean).length
+                  ? connection.group_ids.filter(Boolean).join(", ")
+                  : "—";
+                const status = firstNonEmpty(connection.status, "Unknown");
+                const subscriptionsCell = connection.is_cross_subscription
+                  ? `<span style="color:#f59e0b;font-weight:600;">⚠ ${escapeHtml(normalizeModalText(firstNonEmpty(connection.subscription_name, connection.subscription_id, "Unknown")))} → ${escapeHtml(normalizeModalText(firstNonEmpty(connection.target_subscription_name, connection.target_subscription_id, "Unknown")))}</span>`
+                  : "Same subscription";
+                const consumersCell = consumers.map((consumer) => (
+                  `<div><strong>${escapeHtml(normalizeModalText(firstNonEmpty(consumer.name, consumer.label, "—")))}</strong>${consumer.type_label || consumer.type ? ` <span style="color:var(--text-muted);">(${escapeHtml(normalizeModalText(consumer.type_label || consumer.type))})</span>` : ""}</div>`
+                )).join("");
+                return `
+                  <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:8px 10px;vertical-align:top;">${_renderConnectionEndpointCard(from)}</td>
+                    <td style="padding:8px 10px;vertical-align:top;">${escapeHtml(normalizeModalText(subnet))}</td>
+                    <td style="padding:8px 10px;vertical-align:top;">${escapeHtml(normalizeModalText(groupIds))}</td>
+                    <td style="padding:8px 10px;vertical-align:top;">${escapeHtml(normalizeModalText(status))}</td>
+                    <td style="padding:8px 10px;vertical-align:top;">${_renderConnectionEndpointCard(target)}</td>
+                    ${hasConsumers ? `<td style="padding:8px 10px;vertical-align:top;">${consumersCell}</td>` : ""}
+                    ${hasCrossSub ? `<td style="padding:8px 10px;vertical-align:top;">${subscriptionsCell}</td>` : ""}
+                  </tr>
+                `;
+              }).join("")}
+            </tbody>
+          </table>
         </div>
       </div>
     `;
@@ -3095,6 +3155,18 @@ function buildPrivateEndpointConnectionsSection(data) {
     </div>
   `;
 
+  const crossSubSummary = data?.cross_subscription_summary && typeof data.cross_subscription_summary === "object"
+    ? data.cross_subscription_summary
+    : null;
+  const crossSubBanner = data?.is_cross_subscription
+    ? _renderCrossSubscriptionBanner(
+        crossSubSummary?.from_subscription_name,
+        crossSubSummary?.from_subscription_id,
+        crossSubSummary?.to_subscription_name,
+        crossSubSummary?.to_subscription_id
+      )
+    : "";
+
   return `
     <div class="cloud-arch-modal-section">
       <div class="cloud-arch-modal-section-title">
@@ -3105,6 +3177,7 @@ function buildPrivateEndpointConnectionsSection(data) {
         Which resources reach through this private endpoint, and what it connects to.
       </div>
       <div class="cloud-arch-modal-grid">
+        ${crossSubBanner}
         <div class="cloud-arch-modal-field cloud-arch-modal-field--full">
           <div class="cloud-arch-modal-field-label">Connection From (known consumers)</div>
           <div class="cloud-arch-modal-field-value">${fromCard}</div>
@@ -3725,11 +3798,24 @@ function renderModalContent(data) {
 
   const privateEndpointConnectionsSection = isPrivateEndpointDetails(data) ? buildPrivateEndpointConnectionsSection(data) : "";
   if (privateEndpointConnectionsSection) {
+    // Collapsed by default: the diagram now folds unresolved private
+    // endpoints into the resource's own node (see the 🔒 badge), so the
+    // modal keeps the full connection detail available but tucked away
+    // behind a click rather than always expanded.
     sections.push({
       title: "",
       icon: "",
       fields: [],
-      __rawHtml: privateEndpointConnectionsSection,
+      __rawHtml: `
+        <details class="cloud-arch-modal-section cloud-arch-modal-collapsible">
+          <summary class="cloud-arch-modal-collapsible-summary">
+            <span class="cloud-arch-modal-section-icon">🔗</span>
+            Private Link Connections
+            <span class="cloud-arch-modal-collapsible-hint">(click to expand / collapse)</span>
+          </summary>
+          <div class="cloud-arch-modal-collapsible-body">${privateEndpointConnectionsSection}</div>
+        </details>
+      `,
     });
   }
 

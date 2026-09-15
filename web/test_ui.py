@@ -2212,7 +2212,9 @@ class TestIngressDiagramGeneration:
         result = self._call(rows=rows)
         mermaid = result.get("mermaid", "")
         assert 'rg_app_worker_explicit -->|"HTTPS"| rg_data_explicitstore' not in mermaid, mermaid
-        assert '-->|"explicitstore-pe"| rg_data_explicitstore' in mermaid, mermaid
+        # Unresolved private endpoints (no known VNet/subnet source) are collapsed
+        # into the owning resource's node as a badge instead of a floating node/edge.
+        assert 'Private Endpoint' in mermaid, mermaid
 
     def test_listener_level_waf_overrides_disabled_gateway_waf(self):
         """Disabled gateway WAF policies should stay hidden when listeners carry their own WAFs."""
@@ -2504,7 +2506,7 @@ class TestIngressDiagramGeneration:
         ]
 
         mermaid = self._call(rows=rows, aks_route_rows=aks_route_rows).get("mermaid", "")
-        service_nid = "rg_aks_aks_service_production_shared_aks_uksouth_prod_network_1_account_products_account_identification_service_80"
+        service_nid = "rg_aks_aks_service_production_shared_aks_uksouth_prod_network_2_account_products_account_identification_service_80"
         assert service_nid in mermaid, mermaid
         assert any(
             "-->" in line and "aks_ingress" in line and service_nid in line
@@ -4752,7 +4754,7 @@ class TestIngressDiagramGeneration:
 
         assert "production-eventgrid-bridge.internal.car.uk 🔒" not in mermaid, mermaid
         assert "production-eventgrid-bridge.internal.car.uk</div>" in mermaid, mermaid
-        assert "rg_api_uk_core_production_api_uksouth__production_eventgrid_bridge_internal_car_uk" in mermaid, mermaid
+        assert "rg_api_main_api_uksouth__production_eventgrid_bridge_internal_car_uk" in mermaid, mermaid
         assert target.get("title") == "production-eventgrid-bridge.internal.car.uk", target
         assert target.get("resources", [{}])[0].get("name") == "main-api-uksouth::production-eventgrid-bridge.internal.car.uk", target
 
@@ -9250,6 +9252,7 @@ class TestCloudPosture:
 
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
+        fn_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/fn-one"
         conn.executescript(
             """
             CREATE TABLE subscriptions (
@@ -9277,6 +9280,35 @@ class TestCloudPosture:
                 last_synced TEXT,
                 status TEXT DEFAULT 'active',
                 is_restricted INTEGER DEFAULT 0
+            );
+            CREATE TABLE function_app_http_triggers (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                function_app_id TEXT,
+                function_app_name TEXT,
+                resource_group TEXT,
+                function_name TEXT,
+                route TEXT,
+                auth_level TEXT,
+                methods TEXT,
+                fqdn TEXT,
+                full_url TEXT,
+                is_public INTEGER DEFAULT 0,
+                last_synced TEXT
+            );
+            CREATE TABLE function_app_servicebus_triggers (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                function_app_id TEXT,
+                function_app_name TEXT,
+                resource_group TEXT,
+                function_name TEXT,
+                trigger_type TEXT,
+                entity_type TEXT,
+                entity_name TEXT,
+                subscription_name TEXT,
+                connection TEXT,
+                last_synced TEXT
             );
             """
         )
@@ -9445,6 +9477,35 @@ class TestCloudPosture:
                 firewall_policy_id TEXT,
                 subscription_id TEXT,
                 firewall_name TEXT
+            );
+            CREATE TABLE function_app_http_triggers (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                function_app_id TEXT,
+                function_app_name TEXT,
+                resource_group TEXT,
+                function_name TEXT,
+                route TEXT,
+                auth_level TEXT,
+                methods TEXT,
+                fqdn TEXT,
+                full_url TEXT,
+                is_public INTEGER DEFAULT 0,
+                last_synced TEXT
+            );
+            CREATE TABLE function_app_servicebus_triggers (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                function_app_id TEXT,
+                function_app_name TEXT,
+                resource_group TEXT,
+                function_name TEXT,
+                trigger_type TEXT,
+                entity_type TEXT,
+                entity_name TEXT,
+                subscription_name TEXT,
+                connection TEXT,
+                last_synced TEXT
             );
             """
         )
@@ -9686,6 +9747,7 @@ class TestCloudPosture:
         assert backend_node["data"]["parentNodeId"] == apim_id
 
     def test_api_cloud_architecture_surfaces_missing_assets_for_overview_mode(self, monkeypatch):
+        import json
         import os
         import sqlite3
         import sys
@@ -9786,33 +9848,33 @@ class TestCloudPosture:
                     None,
                 ),
             )
-            conn.execute(
-                """
-                INSERT INTO provisioned_assets (
-                    id, subscription_id, resource_group, name, type, location, sku,
-                    fqdn, is_public, status, pipeline_tag, first_detected, last_synced,
-                    raw_json, is_restricted, waf_mode
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/apim-shared",
-                    "sub-1",
-                    "rg-api",
-                    "apim-shared",
-                    "Microsoft.ApiManagement/service",
-                    "eastus",
-                    "Developer",
-                    "apim-shared.azure-api.net",
-                    1,
-                    "active",
-                    None,
-                    "2026-06-01T00:00:00Z",
-                    "2026-06-01T00:00:00Z",
-                    json.dumps({}),
-                    0,
-                    None,
-                ),
-            )
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku,
+                fqdn, is_public, status, pipeline_tag, first_detected, last_synced,
+                raw_json, is_restricted, waf_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "/subscriptions/sub-1/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/apim-shared",
+                "sub-1",
+                "rg-api",
+                "apim-shared",
+                "Microsoft.ApiManagement/service",
+                "eastus",
+                "Developer",
+                "apim-shared.azure-api.net",
+                1,
+                "active",
+                None,
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+                json.dumps({}),
+                0,
+                None,
+            ),
+        )
         conn.commit()
 
         monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
@@ -9822,8 +9884,8 @@ class TestCloudPosture:
         assert resp.status_code == 200, resp.get_data(as_text=True)
         data = resp.get_json()
         summary = data["summary"]
-        assert summary["resource_count"] == 4
-        assert summary["displayed_resource_count"] == 4
+        assert summary["resource_count"] == 5
+        assert summary["displayed_resource_count"] == 5
         assert summary["omitted_resource_count"] == 0
         assert summary["missing_asset_count"] == 0
         assert summary["missing_assets"] == []
@@ -10335,6 +10397,7 @@ class TestCloudPosture:
 
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
+        fn_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/fn-one"
         conn.executescript(
             """
             CREATE TABLE subscriptions (
@@ -10406,6 +10469,35 @@ class TestCloudPosture:
                 firewall_policy_id TEXT,
                 subscription_id TEXT,
                 firewall_name TEXT
+            );
+            CREATE TABLE function_app_http_triggers (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                function_app_id TEXT,
+                function_app_name TEXT,
+                resource_group TEXT,
+                function_name TEXT,
+                route TEXT,
+                auth_level TEXT,
+                methods TEXT,
+                fqdn TEXT,
+                full_url TEXT,
+                is_public INTEGER DEFAULT 0,
+                last_synced TEXT
+            );
+            CREATE TABLE function_app_servicebus_triggers (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                function_app_id TEXT,
+                function_app_name TEXT,
+                resource_group TEXT,
+                function_name TEXT,
+                trigger_type TEXT,
+                entity_type TEXT,
+                entity_name TEXT,
+                subscription_name TEXT,
+                connection TEXT,
+                last_synced TEXT
             );
             """
         )
@@ -10575,6 +10667,7 @@ class TestCloudPosture:
 
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
+        fn_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/fn-one"
         conn.executescript(
             """
             CREATE TABLE subscriptions (

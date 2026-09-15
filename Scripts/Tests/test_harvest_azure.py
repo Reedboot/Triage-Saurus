@@ -3518,6 +3518,7 @@ class TestKeyVaultHarvest:
             "properties": {
                 "vaultUri": "https://kv-one.vault.azure.net/",
                 "publicNetworkAccess": "Enabled",
+                "privateEndpointConnections": [],
                 "networkAcls": {
                     "defaultAction": "Deny",
                     "ipRules": [
@@ -3582,6 +3583,7 @@ class TestSqlServerHarvest:
             "properties": {
                 "publicNetworkAccess": "Enabled",
                 "fullyQualifiedDomainName": "production-sql-uksouth.database.windows.net",
+                "privateEndpointConnections": [],
             },
         }
         firewall_rules = [

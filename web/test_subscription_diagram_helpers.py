@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import sys
 
@@ -89,6 +90,83 @@ def test_data_factory_managed_private_endpoint_is_rendered_as_a_connection():
 
     assert f'{factory_nid} -->|"managed private endpoint"| {endpoint_nid}' in mermaid
     assert f'{endpoint_nid} -->|"private link"| {storage_nid}' in mermaid
+
+
+def test_private_endpoint_network_interface_is_rendered():
+    endpoint_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Network/privateEndpoints/storage-pe"
+    nic_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Network/networkInterfaces/storage-pe.nic"
+    storage_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/dataone"
+    rows = [
+        (
+            "storage-pe",
+            "Microsoft.Network/privateEndpoints",
+            "rg-data",
+            "",
+            0,
+            None,
+            endpoint_id,
+            0,
+            None,
+            0,
+            None,
+            None,
+            json.dumps({"_extra": {
+                "linked_resource_id": storage_id,
+                "nic_ids": [nic_id],
+            }}),
+            None,
+            None,
+        ),
+        (
+            "storage-pe.nic",
+            "Microsoft.Network/networkInterfaces",
+            "rg-data",
+            "",
+            0,
+            None,
+            nic_id,
+            0,
+            None,
+            0,
+            None,
+            None,
+            json.dumps({"_extra": {"subnet_ids": []}}),
+            None,
+            None,
+        ),
+        (
+            "dataone",
+            "Microsoft.Storage/storageAccounts",
+            "rg-data",
+            "dataone.blob.core.windows.net",
+            0,
+            None,
+            storage_id,
+            0,
+            None,
+            0,
+            None,
+            None,
+            "{}",
+            None,
+            None,
+        ),
+    ]
+
+    diagrams = build_subscription_diagrams_by_rg(
+        "Test Subscription",
+        "production",
+        rows,
+        sanitise_node_id=lambda value: value.replace("-", "_").replace("/", "_").replace(".", "_"),
+        friendly_type=lambda arm_type: arm_type.split("/")[-1],
+        get_icon_path=lambda arm_type: f"/icons/{arm_type}",
+        normalize_attack_paths=lambda raw_paths, reviewer=None: raw_paths,
+    )
+
+    mermaid = diagrams[0]["views"]["connectivity"]["mermaid"]
+    endpoint_nid = subscription_node_id({"name": "storage-pe", "rg": "rg-data"}, lambda value: value.replace("-", "_"))
+    nic_nid = subscription_node_id({"name": "storage-pe.nic", "rg": "rg-data"}, lambda value: value.replace("-", "_").replace(".", "_"))
+    assert f'{endpoint_nid} -->|"Network Interface"| {nic_nid}' in mermaid
 
 
 def test_subscription_assets_exclude_deployment_slots_from_diagram_nodes():
